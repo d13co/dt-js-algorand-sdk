@@ -74,6 +74,13 @@ export * from './types/statedelta.js';
 export * from './stateproof.js';
 export { UntypedValue } from './client/v2/untypedmodel.js';
 export * as modelsv2 from './client/v2/algod/models/types.js';
+export {
+  TimeTravelAlgodClient,
+  TimeTravelUnsupportedError,
+  VersionsOrder,
+  VersionsInclude,
+} from './client/v2/algod/timeTravel/index.js';
+export * as timeTravelModels from './client/v2/algod/timeTravel/models.js';
 export * as indexerModels from './client/v2/indexer/models/types.js';
 export {
   mnemonicToMasterDerivationKey,

@@ -95,9 +95,12 @@ export function isMissingVersionsRoute(err: unknown) {
   const { status, text } = describe(err);
   if (status === 404) return true;
   if (status !== 400) return false;
+  // Only the router's ID binding error: a node with time travel rejects a bad
+  // `next` with the same `parsing "...": invalid syntax` tail.
   return (
-    /parsing \\?"[^"\\]*\/versions\\?": invalid syntax/.test(text) ||
-    /versions require EnableTimeTravel/.test(text)
+    /Invalid format for parameter (?:asset-id|application-id): .*parsing \\?"[^"\\]*\/versions\\?": invalid syntax/.test(
+      text
+    ) || /versions require EnableTimeTravel/.test(text)
   );
 }
 

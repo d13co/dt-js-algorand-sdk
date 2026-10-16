@@ -9,6 +9,8 @@ import {
   TimeTravelAlgodClient,
   TimeTravelUnsupportedError,
   BoxVersion,
+  BoxChange,
+  BoxesVersion,
 } from '../src/client/v2/algod/timeTravel/index';
 
 type Call = { path: string; query: Query<string> };
@@ -269,6 +271,219 @@ describe('time travel', () => {
           .do(),
         (err: { status?: number }) =>
           !(err instanceof TimeTravelUnsupportedError) && err.status === 400
+      );
+    });
+  });
+
+  describe('getApplicationBoxesVersions', () => {
+    it('serializes the query and decodes a page', async () => {
+      // A descending page resumed from next=44000100 reports that round.
+      const stub = new StubClient([
+        ok({
+          round: 44000100,
+          versions: [
+            {
+              round: 44000090,
+              timestamp: 1760000201,
+              boxes: [
+                { name: 'YQ==', deleted: false, value: 'AAAAAAAAAAE=' },
+                { name: 'Yg==', deleted: true },
+              ],
+            },
+            {
+              round: 44000070,
+              timestamp: 1760000123,
+              // A zero-length box: its value is empty, not missing.
+              boxes: [{ name: 'Yw==', deleted: false, value: '' }],
+            },
+          ],
+          'next-token': '44000069',
+        }),
+      ]);
+      const res = await new TimeTravelAlgodClient(stub, '')
+        .getApplicationBoxesVersions(1234)
+        .minRound(0)
+        .maxRound(45000000)
+        .order('desc')
+        .limit(3)
+        .include('values')
+        .next('44000100')
+        .do();
+
+      assert.strictEqual(
+        stub.calls[0].path,
+        '/v2/applications/1234/boxes/versions'
+      );
+      assert.deepStrictEqual(stub.calls[0].query, {
+        'min-round': '0',
+        'max-round': '45000000',
+        order: 'desc',
+        limit: '3',
+        include: 'values',
+        next: '44000100',
+      });
+      assert.strictEqual(res.round, BigInt(44000100));
+      assert.strictEqual(res.nextToken, '44000069');
+      const bytes = (s: string) => new TextEncoder().encode(s);
+      assert.deepStrictEqual(res.versions, [
+        new BoxesVersion({
+          round: 44000090,
+          timestamp: 1760000201,
+          boxes: [
+            new BoxChange({
+              name: bytes('a'),
+              deleted: false,
+              value: 'AAAAAAAAAAE=',
+            }),
+            new BoxChange({ name: bytes('b'), deleted: true }),
+          ],
+        }),
+        new BoxesVersion({
+          round: 44000070,
+          timestamp: 1760000123,
+          boxes: [
+            new BoxChange({
+              name: bytes('c'),
+              deleted: false,
+              value: new Uint8Array(0),
+            }),
+          ],
+        }),
+      ]);
+      assert.strictEqual(res.versions[0].boxes[1].value, undefined);
+    });
+
+    it('leaves values out without include', async () => {
+      const stub = new StubClient([
+        ok({
+          round: 9,
+          versions: [
+            {
+              round: 2,
+              timestamp: 20,
+              boxes: [{ name: 'YQ==', deleted: false }],
+            },
+          ],
+        }),
+      ]);
+      const res = await new TimeTravelAlgodClient(stub, '')
+        .getApplicationBoxesVersions(1)
+        .do();
+
+      assert.strictEqual(stub.calls[0].query.include, undefined);
+      assert.strictEqual(res.versions[0].boxes[0].value, undefined);
+      assert.strictEqual(res.nextToken, undefined);
+    });
+
+    it('decodes an empty page', async () => {
+      const stub = new StubClient([ok({ round: 9, versions: [] })]);
+      const res = await new TimeTravelAlgodClient(stub, '')
+        .getApplicationBoxesVersions(1)
+        .do();
+
+      assert.deepStrictEqual(res.versions, []);
+      assert.strictEqual(res.round, BigInt(9));
+      assert.strictEqual(res.nextToken, undefined);
+    });
+
+    it('iterates across pages until there is no next-token', async () => {
+      const v = (round: number, box: string) => ({
+        round,
+        timestamp: round,
+        boxes: [{ name: box, deleted: false, value: 'AQ==' }],
+      });
+      const stub = new StubClient([
+        ok({
+          round: 9,
+          versions: [v(9, 'YQ=='), v(8, 'Yg==')],
+          'next-token': '7',
+        }),
+        // A short page is not the end.
+        ok({ round: 7, versions: [v(6, 'Yw==')], 'next-token': '5' }),
+        ok({ round: 5, versions: [v(2, 'ZA==')] }),
+      ]);
+      const request = new TimeTravelAlgodClient(stub, '')
+        .getApplicationBoxesVersions(1)
+        .minRound(1)
+        .maxRound(9)
+        .order('desc')
+        .limit(2)
+        .include('values');
+
+      const seen: Array<[bigint, string]> = [];
+      for await (const version of request.iterate()) {
+        for (const box of version.boxes) {
+          assert.deepStrictEqual(box.value, new Uint8Array([1]));
+          seen.push([version.round, new TextDecoder().decode(box.name)]);
+        }
+      }
+
+      assert.deepStrictEqual(seen, [
+        [BigInt(9), 'a'],
+        [BigInt(8), 'b'],
+        [BigInt(6), 'c'],
+        [BigInt(2), 'd'],
+      ]);
+      assert.deepStrictEqual(
+        stub.calls.map((c) => c.query),
+        [undefined, '7', '5'].map((next) => ({
+          'min-round': '1',
+          'max-round': '9',
+          order: 'desc',
+          limit: '2',
+          include: 'values',
+          ...(next === undefined ? {} : { next }),
+        }))
+      );
+      // The builder itself is untouched.
+      assert.strictEqual(request.query.next, undefined);
+    });
+
+    it("recognizes stock algod's 400 should it route the path as an ID", async () => {
+      const stub = new StubClient([
+        badRequest(
+          'Invalid format for parameter application-id: error binding string parameter: strconv.ParseUint: parsing "1/boxes/versions": invalid syntax'
+        ),
+      ]);
+      await assert.rejects(
+        new TimeTravelAlgodClient(stub, '').getApplicationBoxesVersions(1).do(),
+        TimeTravelUnsupportedError
+      );
+    });
+
+    it('passes a 400 for a bad next token through', async () => {
+      // The same "parsing ...: invalid syntax" tail as stock algod's ID error.
+      const stub = new StubClient([
+        badRequest(
+          'Unable to parse next token: strconv.ParseUint: parsing "x/versions": invalid syntax'
+        ),
+      ]);
+      await assert.rejects(
+        new TimeTravelAlgodClient(stub, '')
+          .getApplicationBoxesVersions(1)
+          .next('x/versions')
+          .do(),
+        (err: { status?: number }) =>
+          !(err instanceof TimeTravelUnsupportedError) && err.status === 400
+      );
+    });
+
+    it('turns a 404 into TimeTravelUnsupportedError', async () => {
+      const stub = new StubClient([status(404)]);
+      await assert.rejects(
+        new TimeTravelAlgodClient(stub, '').getApplicationBoxesVersions(1).do(),
+        TimeTravelUnsupportedError
+      );
+    });
+
+    it('passes a 503 for an incomplete box index through', async () => {
+      const stub = new StubClient([status(503)]);
+      await assert.rejects(
+        new TimeTravelAlgodClient(stub, '').getApplicationBoxesVersions(1).do(),
+        (err: { status?: number }) =>
+          !(err instanceof TimeTravelUnsupportedError) &&
+          err.status === 503 &&
+          /nope/.test(String((err as { message?: string }).message))
       );
     });
   });

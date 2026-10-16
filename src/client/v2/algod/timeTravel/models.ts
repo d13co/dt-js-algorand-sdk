@@ -208,6 +208,259 @@ export class BoxVersionsResponse implements Encodable {
 }
 
 /**
+ * A change of a box.
+ */
+export class BoxChange implements Encodable {
+  private static encodingSchemaValue: Schema | undefined;
+
+  static get encodingSchema(): Schema {
+    if (!this.encodingSchemaValue) {
+      this.encodingSchemaValue = new NamedMapSchema([]);
+      (this.encodingSchemaValue as NamedMapSchema).pushEntries(
+        { key: 'name', valueSchema: new ByteArraySchema(), omitEmpty: true },
+        { key: 'deleted', valueSchema: new BooleanSchema(), omitEmpty: true },
+        {
+          key: 'value',
+          valueSchema: new OptionalSchema(new ByteArraySchema()),
+          omitEmpty: true,
+        }
+      );
+    }
+    return this.encodingSchemaValue;
+  }
+
+  /**
+   * The box name.
+   */
+  public name: Uint8Array;
+
+  /**
+   * Whether the change is the deletion of the box.
+   */
+  public deleted: boolean;
+
+  /**
+   * With `include=values`, the new box value. Absent on deletions.
+   */
+  public value?: Uint8Array;
+
+  /**
+   * Creates a new `BoxChange` object.
+   * @param name - The box name.
+   * @param deleted - Whether the change is the deletion of the box.
+   * @param value - With `include=values`, the new box value. Absent on deletions.
+   */
+  constructor({
+    name,
+    deleted,
+    value,
+  }: {
+    name: string | Uint8Array;
+    deleted: boolean;
+    value?: string | Uint8Array;
+  }) {
+    this.name = typeof name === 'string' ? base64ToBytes(name) : name;
+    this.deleted = deleted;
+    this.value = typeof value === 'string' ? base64ToBytes(value) : value;
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  getEncodingSchema(): Schema {
+    return BoxChange.encodingSchema;
+  }
+
+  toEncodingData(): Map<string, unknown> {
+    return new Map<string, unknown>([
+      ['name', this.name],
+      ['deleted', this.deleted],
+      ['value', this.value],
+    ]);
+  }
+
+  static fromEncodingData(data: unknown): BoxChange {
+    if (!(data instanceof Map)) {
+      throw new Error(`Invalid decoded BoxChange: ${data}`);
+    }
+    return new BoxChange({
+      name: data.get('name'),
+      deleted: data.get('deleted'),
+      value: data.get('value'),
+    });
+  }
+}
+
+/**
+ * The changes of an application's boxes in a round.
+ */
+export class BoxesVersion implements Encodable {
+  private static encodingSchemaValue: Schema | undefined;
+
+  static get encodingSchema(): Schema {
+    if (!this.encodingSchemaValue) {
+      this.encodingSchemaValue = new NamedMapSchema([]);
+      (this.encodingSchemaValue as NamedMapSchema).pushEntries(
+        { key: 'round', valueSchema: new Uint64Schema(), omitEmpty: true },
+        { key: 'timestamp', valueSchema: new Uint64Schema(), omitEmpty: true },
+        {
+          key: 'boxes',
+          valueSchema: new ArraySchema(BoxChange.encodingSchema),
+          omitEmpty: true,
+        }
+      );
+    }
+    return this.encodingSchemaValue;
+  }
+
+  /**
+   * The round of the version.
+   */
+  public round: bigint;
+
+  /**
+   * The timestamp of the version's block, in seconds since the epoch.
+   */
+  public timestamp: number;
+
+  /**
+   * The boxes that changed, in name order.
+   */
+  public boxes: BoxChange[];
+
+  /**
+   * Creates a new `BoxesVersion` object.
+   * @param round - The round of the version.
+   * @param timestamp - The timestamp of the version's block, in seconds since the epoch.
+   * @param boxes - The boxes that changed, in name order.
+   */
+  constructor({
+    round,
+    timestamp,
+    boxes,
+  }: {
+    round: number | bigint;
+    timestamp: number | bigint;
+    boxes: BoxChange[];
+  }) {
+    this.round = ensureBigInt(round);
+    this.timestamp = ensureSafeInteger(timestamp);
+    this.boxes = boxes;
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  getEncodingSchema(): Schema {
+    return BoxesVersion.encodingSchema;
+  }
+
+  toEncodingData(): Map<string, unknown> {
+    return new Map<string, unknown>([
+      ['round', this.round],
+      ['timestamp', this.timestamp],
+      ['boxes', this.boxes.map((b) => b.toEncodingData())],
+    ]);
+  }
+
+  static fromEncodingData(data: unknown): BoxesVersion {
+    if (!(data instanceof Map)) {
+      throw new Error(`Invalid decoded BoxesVersion: ${data}`);
+    }
+    return new BoxesVersion({
+      round: data.get('round'),
+      timestamp: data.get('timestamp'),
+      boxes: (data.get('boxes') ?? []).map((b: unknown) =>
+        BoxChange.fromEncodingData(b)
+      ),
+    });
+  }
+}
+
+/**
+ * Changes of an application's boxes.
+ */
+export class BoxesVersionsResponse implements Encodable {
+  private static encodingSchemaValue: Schema | undefined;
+
+  static get encodingSchema(): Schema {
+    if (!this.encodingSchemaValue) {
+      this.encodingSchemaValue = new NamedMapSchema([]);
+      (this.encodingSchemaValue as NamedMapSchema).pushEntries(
+        { key: 'round', valueSchema: new Uint64Schema(), omitEmpty: true },
+        {
+          key: 'versions',
+          valueSchema: new ArraySchema(BoxesVersion.encodingSchema),
+          omitEmpty: true,
+        },
+        {
+          key: 'next-token',
+          valueSchema: new OptionalSchema(new StringSchema()),
+          omitEmpty: true,
+        }
+      );
+    }
+    return this.encodingSchemaValue;
+  }
+
+  /**
+   * The last round of the range: `max-round`, or the latest round. On a
+   * descending page resumed from `next`, the round in the token.
+   */
+  public round: bigint;
+
+  public versions: BoxesVersion[];
+
+  /**
+   * Present if and only if more versions remain: provide it as the `next`
+   * parameter to get them.
+   */
+  public nextToken?: string;
+
+  /**
+   * Creates a new `BoxesVersionsResponse` object.
+   * @param round - The last round of the range: `max-round`, or the latest round.
+   * @param versions -
+   * @param nextToken - Present if and only if more versions remain.
+   */
+  constructor({
+    round,
+    versions,
+    nextToken,
+  }: {
+    round: number | bigint;
+    versions: BoxesVersion[];
+    nextToken?: string;
+  }) {
+    this.round = ensureBigInt(round);
+    this.versions = versions;
+    this.nextToken = nextToken;
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  getEncodingSchema(): Schema {
+    return BoxesVersionsResponse.encodingSchema;
+  }
+
+  toEncodingData(): Map<string, unknown> {
+    return new Map<string, unknown>([
+      ['round', this.round],
+      ['versions', this.versions.map((v) => v.toEncodingData())],
+      ['next-token', this.nextToken],
+    ]);
+  }
+
+  static fromEncodingData(data: unknown): BoxesVersionsResponse {
+    if (!(data instanceof Map)) {
+      throw new Error(`Invalid decoded BoxesVersionsResponse: ${data}`);
+    }
+    return new BoxesVersionsResponse({
+      round: data.get('round'),
+      versions: (data.get('versions') ?? []).map((v: unknown) =>
+        BoxesVersion.fromEncodingData(v)
+      ),
+      nextToken: data.get('next-token'),
+    });
+  }
+}
+
+/**
  * A version of an asset's parameters.
  */
 export class AssetVersion implements Encodable {

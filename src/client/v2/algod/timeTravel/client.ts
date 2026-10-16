@@ -16,6 +16,7 @@ import GetApplicationVersions from './getApplicationVersions.js';
 import GetApplicationBoxByNameAt from './getApplicationBoxByNameAt.js';
 import GetApplicationBoxesAt from './getApplicationBoxesAt.js';
 import GetApplicationBoxVersions from './getApplicationBoxVersions.js';
+import GetApplicationBoxesVersions from './getApplicationBoxesVersions.js';
 import { TimeTravelUnsupportedError } from './errors.js';
 
 /**
@@ -210,6 +211,34 @@ export class TimeTravelAlgodClient extends AlgodClient {
    */
   getApplicationBoxVersions(index: number | bigint, boxName: Uint8Array) {
     return new GetApplicationBoxVersions(this.c, index, boxName);
+  }
+
+  /**
+   * Given an application ID, list the rounds at which any of its boxes was
+   * created, written or deleted, with the boxes that changed in each.
+   *
+   * `supportsTimeTravel()` probes the single-box versions route, so a
+   * time-travel node built before this endpoint passes it, then answers this
+   * one with a 404, thrown as a {@link TimeTravelUnsupportedError}.
+   *
+   * #### Example
+   * ```typescript
+   * const res = await algodClient
+   *   .getApplicationBoxesVersions(1234)
+   *   .order('desc')
+   *   .limit(10)
+   *   .do();
+   * for (const version of res.versions) {
+   *   const names = version.boxes.map((b) => new TextDecoder().decode(b.name));
+   *   console.log(version.round, names);
+   * }
+   * ```
+   *
+   * @param index - The application ID to look up.
+   * @category GET
+   */
+  getApplicationBoxesVersions(index: number | bigint) {
+    return new GetApplicationBoxesVersions(this.c, index);
   }
 
   /**

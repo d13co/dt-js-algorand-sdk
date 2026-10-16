@@ -79,6 +79,7 @@ export {
   TimeTravelUnsupportedError,
   VersionsOrder,
   VersionsInclude,
+  AccountVersionsExclude,
 } from './client/v2/algod/timeTravel/index.js';
 export * as timeTravelModels from './client/v2/algod/timeTravel/models.js';
 export * as indexerModels from './client/v2/indexer/models/types.js';

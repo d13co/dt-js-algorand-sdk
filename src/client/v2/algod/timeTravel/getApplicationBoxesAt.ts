@@ -2,7 +2,7 @@ import { HTTPClientResponse } from '../../../client.js';
 import { ensureBigInt } from '../../../../utils/utils.js';
 import GetApplicationBoxes from '../getApplicationBoxes.js';
 import { BoxesResponse } from '../models/types.js';
-import { checkRound } from './errors.js';
+import { checkRound, readAtRound } from './errors.js';
 
 /**
  * {@link GetApplicationBoxes} whose `round` works at any past round on a
@@ -10,7 +10,7 @@ import { checkRound } from './errors.js';
  *
  * Without time travel, algod keeps only its last few rounds (`MaxAcctLookback`,
  * default 4) and answers 400 `given round is no longer available` for older
- * ones.
+ * ones, which is thrown as a {@link TimeTravelUnsupportedError}.
  */
 export default class GetApplicationBoxesAt extends GetApplicationBoxes {
   private requestedRound?: bigint;
@@ -49,7 +49,32 @@ export default class GetApplicationBoxesAt extends GetApplicationBoxes {
 
   prepare(response: HTTPClientResponse): BoxesResponse {
     const boxes = super.prepare(response);
-    checkRound(this.requestedRound, boxes.round);
+    checkRound(this.requestedRound, boxes.round, response);
     return boxes;
+  }
+
+  protected executeRequest(
+    headers?: Record<string, string>,
+    customOptions?: Record<string, unknown>
+  ): Promise<HTTPClientResponse> {
+    return readAtRound(
+      this.requestedRound,
+      super.executeRequest(headers, customOptions)
+    );
+  }
+
+  /**
+   * Execute the request, returning the response body as received. With
+   * `round`, the response is also decoded to check its round.
+   * @param headers - Additional headers to send in the request. Optional.
+   * @param customOptions - Additional options to pass to the underlying BaseHTTPClient. Optional.
+   */
+  async doRaw(
+    headers?: Record<string, string>,
+    customOptions?: Record<string, unknown>
+  ): Promise<Uint8Array> {
+    const res = await this.executeRequest(headers, customOptions);
+    if (this.requestedRound !== undefined) this.prepare(res);
+    return res.body;
   }
 }

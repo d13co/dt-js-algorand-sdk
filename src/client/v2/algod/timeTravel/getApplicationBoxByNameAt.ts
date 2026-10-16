@@ -2,7 +2,7 @@ import { HTTPClientResponse } from '../../../client.js';
 import { ensureBigInt } from '../../../../utils/utils.js';
 import GetApplicationBoxByName from '../getApplicationBoxByName.js';
 import { Box } from '../models/types.js';
-import { checkRound } from './errors.js';
+import { checkRound, readAtRound } from './errors.js';
 
 /**
  * {@link GetApplicationBoxByName} with `round`: read the box as it was at the
@@ -41,7 +41,32 @@ export default class GetApplicationBoxByNameAt extends GetApplicationBoxByName {
 
   prepare(response: HTTPClientResponse): Box {
     const box = super.prepare(response);
-    checkRound(this.requestedRound, box.round);
+    checkRound(this.requestedRound, box.round, response);
     return box;
+  }
+
+  protected executeRequest(
+    headers?: Record<string, string>,
+    customOptions?: Record<string, unknown>
+  ): Promise<HTTPClientResponse> {
+    return readAtRound(
+      this.requestedRound,
+      super.executeRequest(headers, customOptions)
+    );
+  }
+
+  /**
+   * Execute the request, returning the response body as received. With
+   * `round`, the response is also decoded to check its round.
+   * @param headers - Additional headers to send in the request. Optional.
+   * @param customOptions - Additional options to pass to the underlying BaseHTTPClient. Optional.
+   */
+  async doRaw(
+    headers?: Record<string, string>,
+    customOptions?: Record<string, unknown>
+  ): Promise<Uint8Array> {
+    const res = await this.executeRequest(headers, customOptions);
+    if (this.requestedRound !== undefined) this.prepare(res);
+    return res.body;
   }
 }

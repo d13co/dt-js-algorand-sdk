@@ -2,7 +2,10 @@ import JSONRequest from '../../jsonrequest.js';
 import { HTTPClientResponse } from '../../../client.js';
 import { Query } from '../../../baseHTTPClient.js';
 import { ensureBigInt } from '../../../../utils/utils.js';
-import { isNotFound, TimeTravelUnsupportedError } from './errors.js';
+import {
+  isMissingVersionsRoute,
+  TimeTravelUnsupportedError,
+} from './errors.js';
 
 export type VersionsOrder = 'asc' | 'desc';
 export type VersionsInclude = 'values';
@@ -12,10 +15,10 @@ export type VersionsInclude = 'values';
  * the rounds at which an object changed over an inclusive round range, a page
  * at a time.
  *
- * A 404 means the node has no time travel (the routes are only registered with
- * `EnableTimeTravel`), and is thrown as a {@link TimeTravelUnsupportedError}.
- * The endpoints never 404 otherwise: an object that never existed in the range
- * has no versions.
+ * On a node without time travel the routes don't exist (they are only
+ * registered with `EnableTimeTravel`), which is thrown as a
+ * {@link TimeTravelUnsupportedError} with the HTTP error as its `cause`. The endpoints never 404 otherwise: an
+ * object that never existed in the range has no versions.
  */
 export default abstract class VersionsRequest<
   Entry,
@@ -68,7 +71,8 @@ export default abstract class VersionsRequest<
    * @category query
    */
   limit(limit: number) {
-    this.query.limit = limit;
+    // A string, so that 0 is sent (and rejected) rather than dropped.
+    this.query.limit = limit.toString();
     return this;
   }
 
@@ -134,7 +138,7 @@ export default abstract class VersionsRequest<
       const res = await this.getPage({ ...query }, headers, customOptions);
       const page = this.prepare(res);
       yield* page.versions;
-      if (page.nextToken === undefined) return;
+      if (!page.nextToken) return;
       query.next = page.nextToken;
     }
   }
@@ -152,9 +156,10 @@ export default abstract class VersionsRequest<
         customOptions,
       });
     } catch (err) {
-      if (isNotFound(err)) {
+      if (isMissingVersionsRoute(err)) {
         throw new TimeTravelUnsupportedError(
-          `${this.path()} returned 404: the node does not have time travel (EnableTimeTravel)`
+          `${this.path()} does not exist: the node does not have time travel (EnableTimeTravel)`,
+          { cause: err }
         );
       }
       throw err;

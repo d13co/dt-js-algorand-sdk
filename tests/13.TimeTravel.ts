@@ -11,35 +11,54 @@ import {
   BoxVersion,
   BoxChange,
   BoxesVersion,
+  SimulateRoundResult,
+  TimeTravelSimulateRequest,
+  TimeTravelSimulateResponse,
+  TimeTravelSimulationEvalOverrides,
 } from '../src/client/v2/algod/timeTravel/index';
+import {
+  ApplicationInitialStates,
+  PendingTransactionResponse,
+  SimulateRequest,
+  SimulateInitialStates,
+  SimulateRequestTransactionGroup,
+  SimulateResponse,
+  SimulateTraceConfig,
+  SimulateTransactionGroupResult,
+  SimulateTransactionResult,
+  SimulationEvalOverrides,
+} from '../src/client/v2/algod/models/types';
+import { NamedMapSchema } from '../src/encoding/schema/index';
+import { decodeMsgpack, encodeMsgpack } from '../src/encoding/encoding';
+import { SignedTransaction } from '../src/signedTransaction';
+import { makePaymentTxnWithSuggestedParamsFromObject } from '../src/makeTxn';
+import { AtomicTransactionComposer } from '../src/composer';
+import { makeEmptyTransactionSigner } from '../src/signer';
 
-type Call = { path: string; query: Query<string> };
+type Call = { path: string; query: Query<string>; body?: Uint8Array };
+
+/** A stub answer: a JSON body, or raw bytes such as msgpack. */
+type Answer = { status: number; json?: unknown; body?: Uint8Array };
 
 /**
- * A BaseHTTPClient that answers each GET with the next queued handler.
+ * A BaseHTTPClient that answers each request with the next queued handler.
  */
 class StubClient implements BaseHTTPClient {
   calls: Call[] = [];
 
-  private handlers: Array<(call: Call) => { status: number; json: unknown }>;
+  private handlers: Array<(call: Call) => Answer>;
 
-  constructor(
-    handlers: Array<(call: Call) => { status: number; json: unknown }>
-  ) {
+  constructor(handlers: Array<(call: Call) => Answer>) {
     this.handlers = handlers;
   }
 
-  async get(
-    path: string,
-    query?: Query<string>
-  ): Promise<BaseHTTPClientResponse> {
-    const call = { path, query: { ...(query ?? {}) } };
+  private async answer(call: Call): Promise<BaseHTTPClientResponse> {
     this.calls.push(call);
     const handler = this.handlers.shift();
-    if (!handler) throw new Error(`unexpected request ${path}`);
-    const { status, json } = handler(call);
+    if (!handler) throw new Error(`unexpected request ${call.path}`);
+    const { status, json, body } = handler(call);
     const response = {
-      body: new TextEncoder().encode(JSON.stringify(json)),
+      body: body ?? new TextEncoder().encode(JSON.stringify(json)),
       status,
       headers: {},
     };
@@ -56,9 +75,19 @@ class StubClient implements BaseHTTPClient {
     return response;
   }
 
-  // eslint-disable-next-line class-methods-use-this
-  post(): Promise<BaseHTTPClientResponse> {
-    throw new Error('not implemented');
+  async get(
+    path: string,
+    query?: Query<string>
+  ): Promise<BaseHTTPClientResponse> {
+    return this.answer({ path, query: { ...(query ?? {}) } });
+  }
+
+  async post(
+    path: string,
+    data: Uint8Array,
+    query?: Query<string>
+  ): Promise<BaseHTTPClientResponse> {
+    return this.answer({ path, query: { ...(query ?? {}) }, body: data });
   }
 
   // eslint-disable-next-line class-methods-use-this
@@ -963,6 +992,562 @@ describe('time travel', () => {
         [true, true]
       );
       assert.strictEqual(stub.calls.length, 1);
+    });
+  });
+  describe('simulate', () => {
+    const sender = 'RETICA7ZSQTWPWFB7KTF4CPHJDPRXTPQYIMY6DOUQ72I2JD3T5RRDXTUSQ';
+    const payment = (amount: number) =>
+      makePaymentTxnWithSuggestedParamsFromObject({
+        sender,
+        receiver: sender,
+        amount,
+        suggestedParams: {
+          firstValid: 1,
+          lastValid: 1000,
+          fee: 1000,
+          flatFee: true,
+          minFee: 1000,
+          genesisHash: new Uint8Array(32),
+          genesisID: '',
+        },
+      });
+    const stxn = (amount: number) =>
+      new SignedTransaction({ txn: payment(amount) });
+    const group = (...amounts: number[]) =>
+      new SimulateRequestTransactionGroup({ txns: amounts.map(stxn) });
+    const groupResult = (txn: SignedTransaction, failureMessage?: string) =>
+      new SimulateTransactionGroupResult({
+        txnResults: [
+          new SimulateTransactionResult({
+            txnResult: new PendingTransactionResponse({ txn, poolError: '' }),
+          }),
+        ],
+        failureMessage,
+        failedAt: failureMessage ? [0] : undefined,
+      });
+    const msgpack = (response: SimulateResponse) => () => ({
+      status: 200,
+      body: encodeMsgpack(response),
+    });
+    const sent = (stub: StubClient, i = 0) =>
+      decodeMsgpack(stub.calls[i].body!, TimeTravelSimulateRequest);
+
+    it('posts several groups and decodes one result per group', async () => {
+      const response = new TimeTravelSimulateResponse({
+        lastRound: 10,
+        version: 2,
+        txnGroups: [groupResult(stxn(1)), groupResult(stxn(2), 'overspend')],
+        evalOverrides: new TimeTravelSimulationEvalOverrides({
+          allowEmptySignatures: true,
+          parallelGroups: true,
+        }),
+      });
+      const stub = new StubClient([msgpack(response)]);
+      const res = await new TimeTravelAlgodClient(stub, '')
+        .simulateTransactions(
+          new SimulateRequest({
+            txnGroups: [group(1), group(2, 3)],
+            allowEmptySignatures: true,
+          })
+        )
+        .parallelGroups()
+        .do();
+
+      assert.strictEqual(stub.calls[0].path, '/v2/transactions/simulate');
+      assert.strictEqual(stub.calls[0].query.format, 'msgpack');
+      const req = sent(stub);
+      assert.deepStrictEqual(
+        req.txnGroups.map((g) => g.txns.map((t) => t.txn.payment!.amount)),
+        [[BigInt(1)], [BigInt(2), BigInt(3)]]
+      );
+      assert.strictEqual(req.parallelGroups, true);
+      assert.strictEqual(req.allowEmptySignatures, true);
+
+      assert.ok(res instanceof TimeTravelSimulateResponse);
+      assert.strictEqual(res.txnGroups.length, 2);
+      assert.strictEqual(res.txnGroups[0].failureMessage, undefined);
+      assert.strictEqual(res.txnGroups[1].failureMessage, 'overspend');
+      assert.deepStrictEqual(res.txnGroups[1].failedAt, [0]);
+      assert.ok(res.evalOverrides instanceof TimeTravelSimulationEvalOverrides);
+      assert.strictEqual(res.evalOverrides!.parallelGroups, true);
+      assert.strictEqual(res.evalOverrides!.allowEmptySignatures, true);
+    });
+
+    it('needs the fork models to see parallel-groups in the response', () => {
+      const bytes = encodeMsgpack(
+        new TimeTravelSimulateResponse({
+          lastRound: 1,
+          version: 2,
+          txnGroups: [],
+          evalOverrides: new TimeTravelSimulationEvalOverrides({
+            parallelGroups: true,
+          }),
+        })
+      );
+      // The stock model drops the key it does not know.
+      const stock = decodeMsgpack(bytes, SimulateResponse);
+      assert.ok(stock.evalOverrides);
+      assert.ok(!('parallelGroups' in stock.evalOverrides!));
+      assert.strictEqual(
+        decodeMsgpack(bytes, TimeTravelSimulateResponse).evalOverrides!
+          .parallelGroups,
+        true
+      );
+    });
+
+    it('decodes a stock response', async () => {
+      const response = new SimulateResponse({
+        lastRound: 10,
+        version: 2,
+        txnGroups: [groupResult(stxn(1))],
+      });
+      const stub = new StubClient([msgpack(response)]);
+      const res = await new TimeTravelAlgodClient(stub, '')
+        .simulateTransactions(new SimulateRequest({ txnGroups: [group(1)] }))
+        .do();
+      assert.strictEqual(res.lastRound, BigInt(10));
+      assert.strictEqual(res.txnGroups.length, 1);
+      assert.strictEqual(res.evalOverrides, undefined);
+    });
+
+    it('sends a plain request unchanged, without parallel-groups', async () => {
+      const request = new SimulateRequest({
+        txnGroups: [group(1)],
+        allowEmptySignatures: true,
+        allowMoreLogging: true,
+        allowUnnamedResources: true,
+        execTraceConfig: new SimulateTraceConfig({
+          enable: true,
+          stackChange: true,
+        }),
+        extraOpcodeBudget: 700,
+        fixSigners: true,
+        round: 42,
+      });
+      const stub = new StubClient([
+        msgpack(
+          new SimulateResponse({ lastRound: 42, version: 2, txnGroups: [] })
+        ),
+      ]);
+      await new TimeTravelAlgodClient(stub, '')
+        .simulateTransactions(request)
+        .parallelGroups(false)
+        .do();
+      // Byte-identical to what AlgodClient sends.
+      assert.deepStrictEqual(stub.calls[0].body, encodeMsgpack(request));
+    });
+
+    it('copies every field of the generated models', () => {
+      // The fork models copy the generated fields one by one. A field added
+      // by regenerating models/types.ts must be added to them too.
+      const keys = (schema: unknown) =>
+        (schema as NamedMapSchema).getEntries().map((e) => e.key);
+      assert.deepStrictEqual(keys(SimulateRequest.encodingSchema), [
+        'txn-groups',
+        'allow-empty-signatures',
+        'allow-more-logging',
+        'allow-unnamed-resources',
+        'exec-trace-config',
+        'extra-opcode-budget',
+        'fix-signers',
+        'round',
+      ]);
+      assert.deepStrictEqual(keys(SimulationEvalOverrides.encodingSchema), [
+        'allow-empty-signatures',
+        'allow-unnamed-resources',
+        'extra-opcode-budget',
+        'fix-signers',
+        'max-log-calls',
+        'max-log-size',
+      ]);
+    });
+
+    it('takes the request as it was when the call was made', async () => {
+      const stub = new StubClient([
+        msgpack(
+          new SimulateResponse({ lastRound: 1, version: 2, txnGroups: [] })
+        ),
+      ]);
+      const request = new SimulateRequest({ txnGroups: [group(1)] });
+      const call = new TimeTravelAlgodClient(stub, '').simulateTransactions(
+        request
+      );
+      request.txnGroups.push(group(2));
+      request.allowEmptySignatures = true;
+      await call.do();
+      assert.strictEqual(sent(stub).txnGroups.length, 1);
+      assert.strictEqual(sent(stub).allowEmptySignatures, undefined);
+    });
+
+    it('keeps parallelGroups set on a TimeTravelSimulateRequest', async () => {
+      const stub = new StubClient([
+        msgpack(
+          new SimulateResponse({ lastRound: 1, version: 2, txnGroups: [] })
+        ),
+      ]);
+      await new TimeTravelAlgodClient(stub, '')
+        .simulateTransactions(
+          new TimeTravelSimulateRequest({
+            txnGroups: [group(1), group(2)],
+            parallelGroups: true,
+          })
+        )
+        .do();
+      assert.strictEqual(sent(stub).parallelGroups, true);
+    });
+
+    it('takes several groups of raw transactions', async () => {
+      const raw = (amount: number) => encodeMsgpack(stxn(amount));
+      const stub = new StubClient([
+        msgpack(
+          new SimulateResponse({ lastRound: 1, version: 2, txnGroups: [] })
+        ),
+        msgpack(
+          new SimulateResponse({ lastRound: 1, version: 2, txnGroups: [] })
+        ),
+        msgpack(
+          new SimulateResponse({ lastRound: 1, version: 2, txnGroups: [] })
+        ),
+      ]);
+      const client = new TimeTravelAlgodClient(stub, '');
+      await client.simulateRawTransactions([[raw(1)], [raw(2), raw(3)]]).do();
+      await client.simulateRawTransactions([raw(4), raw(5)]).do();
+      await client.simulateRawTransactions(raw(6)).do();
+      const amounts = (i: number) =>
+        sent(stub, i).txnGroups.map((g) =>
+          g.txns.map((t) => Number(t.txn.payment!.amount))
+        );
+      assert.deepStrictEqual(amounts(0), [[1], [2, 3]]);
+      assert.deepStrictEqual(amounts(1), [[4, 5]]);
+      assert.deepStrictEqual(amounts(2), [[6]]);
+    });
+
+    // What stock algod answers, from its handler's decode and simulator.
+    const stockOneGroup = badRequest('expected 1 transaction group, got 2');
+    const stockUnknownField = badRequest(
+      'failed to decode object: json decode error [pos 1]: only encoded map or array can be decoded into a struct'
+    );
+    const isUnsupported = (err: unknown) =>
+      err instanceof TimeTravelUnsupportedError &&
+      (err.cause as { status?: number }).status === 400;
+    const isPlain400 = (err: unknown) =>
+      !(err instanceof TimeTravelUnsupportedError) &&
+      (err as { status?: number }).status === 400;
+
+    it("reports stock algod's one-group limit as unsupported", async () => {
+      const stub = new StubClient([stockOneGroup]);
+      await assert.rejects(
+        new TimeTravelAlgodClient(stub, '')
+          .simulateTransactions(
+            new SimulateRequest({ txnGroups: [group(1), group(2)] })
+          )
+          .do(),
+        (err: unknown) =>
+          isUnsupported(err) &&
+          /only one transaction group per request, and this request has 2/.test(
+            (err as Error).message
+          )
+      );
+    });
+
+    it("reports stock algod's rejection of parallel-groups as unsupported", async () => {
+      const stub = new StubClient([stockUnknownField]);
+      await assert.rejects(
+        new TimeTravelAlgodClient(stub, '')
+          .simulateTransactions(new SimulateRequest({ txnGroups: [group(1)] }))
+          .parallelGroups()
+          .do(),
+        (err: unknown) =>
+          isUnsupported(err) && /parallel-groups/.test((err as Error).message)
+      );
+    });
+
+    it('passes 400s through when the request uses no fork feature', async () => {
+      const stub = new StubClient([
+        stockOneGroup,
+        stockUnknownField,
+        stockUnknownField,
+      ]);
+      const client = new TimeTravelAlgodClient(stub, '');
+      const single = () =>
+        client
+          .simulateTransactions(new SimulateRequest({ txnGroups: [group(1)] }))
+          .do();
+      await assert.rejects(single(), isPlain400);
+      await assert.rejects(single(), isPlain400);
+      // Several groups use no fork field, so a decode failure is not about one.
+      await assert.rejects(
+        client
+          .simulateTransactions(
+            new SimulateRequest({ txnGroups: [group(1), group(2)] })
+          )
+          .do(),
+        isPlain400
+      );
+    });
+
+    it("passes the fork's own 400s through", async () => {
+      const stub = new StubClient([
+        badRequest('too many transaction groups: got 20, the limit is 16'),
+        badRequest('FixSigners requires AllowEmptySignatures to be enabled'),
+      ]);
+      const client = new TimeTravelAlgodClient(stub, '');
+      await assert.rejects(
+        client
+          .simulateTransactions(
+            new SimulateRequest({ txnGroups: [group(1), group(2)] })
+          )
+          .parallelGroups()
+          .do(),
+        isPlain400
+      );
+      await assert.rejects(
+        client
+          .simulateTransactions(
+            new SimulateRequest({
+              txnGroups: [group(1), group(2)],
+              fixSigners: true,
+            })
+          )
+          .parallelGroups()
+          .do(),
+        isPlain400
+      );
+    });
+
+    describe('rounds', () => {
+      const roundsResponse = (...results: SimulateRoundResult[]) =>
+        new TimeTravelSimulateResponse({
+          lastRound: 0,
+          version: 2,
+          txnGroups: [],
+          roundResults: results,
+        });
+      const at = (round: number, ...failures: Array<string | undefined>) =>
+        new SimulateRoundResult({
+          lastRound: round,
+          txnGroups: failures.map((f) => groupResult(stxn(1), f)),
+          initialStates: new SimulateInitialStates({
+            appInitialStates: [new ApplicationInitialStates({ id: 9 })],
+          }),
+        });
+      const failedAt = (round: number, error: string) =>
+        new SimulateRoundResult({ lastRound: round, txnGroups: [], error });
+      const simulateAt = (stub: StubClient, rounds: number[]) =>
+        new TimeTravelAlgodClient(stub, '')
+          .simulateTransactions(
+            new SimulateRequest({
+              txnGroups: [group(1), group(2)],
+              allowEmptySignatures: true,
+            })
+          )
+          .rounds(rounds);
+
+      it('sends rounds and decodes one result per entry', async () => {
+        const stub = new StubClient([
+          msgpack(
+            roundsResponse(
+              at(100, undefined, 'overspend'),
+              failedAt(999999999, 'round 999999999 is not available'),
+              at(120, undefined, undefined)
+            )
+          ),
+        ]);
+        const res = await simulateAt(stub, [100, 999999999, 0]).do();
+
+        assert.deepStrictEqual(sent(stub).rounds, [
+          BigInt(100),
+          BigInt(999999999),
+          BigInt(0),
+        ]);
+        assert.strictEqual(sent(stub).round, undefined);
+        assert.strictEqual(res.lastRound, BigInt(0));
+        assert.deepStrictEqual(res.txnGroups, []);
+        const results = res.roundResults!;
+        assert.ok(results.every((r) => r instanceof SimulateRoundResult));
+        assert.deepStrictEqual(
+          results.map((r) => r.lastRound),
+          [BigInt(100), BigInt(999999999), BigInt(120)]
+        );
+        assert.deepStrictEqual(
+          results[0].txnGroups.map((g) => g.failureMessage),
+          [undefined, 'overspend']
+        );
+        assert.strictEqual(
+          results[0].initialStates!.appInitialStates![0].id,
+          BigInt(9)
+        );
+        assert.strictEqual(results[0].error, undefined);
+        assert.strictEqual(
+          results[1].error,
+          'round 999999999 is not available'
+        );
+        assert.deepStrictEqual(results[1].txnGroups, []);
+        assert.strictEqual(results[1].initialStates, undefined);
+        assert.strictEqual(results[2].txnGroups.length, 2);
+      });
+
+      it('keeps duplicate and 0 entries, in request order', async () => {
+        const stub = new StubClient([
+          msgpack(roundsResponse(at(5, undefined), at(5, undefined), at(5))),
+        ]);
+        const res = await simulateAt(stub, [5, 5, 0]).do();
+        assert.deepStrictEqual(sent(stub).rounds, [
+          BigInt(5),
+          BigInt(5),
+          BigInt(0),
+        ]);
+        assert.strictEqual(res.roundResults!.length, 3);
+      });
+
+      it('sends no rounds for an empty list', async () => {
+        const request = new SimulateRequest({ txnGroups: [group(1)] });
+        const stub = new StubClient([
+          msgpack(
+            new SimulateResponse({ lastRound: 9, version: 2, txnGroups: [] })
+          ),
+        ]);
+        const res = await new TimeTravelAlgodClient(stub, '')
+          .simulateTransactions(request)
+          .rounds([])
+          .do();
+        assert.deepStrictEqual(stub.calls[0].body, encodeMsgpack(request));
+        assert.strictEqual(res.roundResults, undefined);
+      });
+
+      it('takes rounds set on a TimeTravelSimulateRequest', async () => {
+        const stub = new StubClient([msgpack(roundsResponse(at(7)))]);
+        const res = await new TimeTravelAlgodClient(stub, '')
+          .simulateTransactions(
+            new TimeTravelSimulateRequest({
+              txnGroups: [group(1)],
+              rounds: [7],
+              round: 0,
+            })
+          )
+          .do();
+        assert.deepStrictEqual(sent(stub).rounds, [BigInt(7)]);
+        assert.strictEqual(res.roundResults![0].lastRound, BigInt(7));
+      });
+
+      it('refuses round together with rounds before sending', async () => {
+        const stub = new StubClient([]);
+        await assert.rejects(
+          new TimeTravelAlgodClient(stub, '')
+            .simulateTransactions(
+              new SimulateRequest({ txnGroups: [group(1)], round: 3 })
+            )
+            .rounds([4])
+            .do(),
+          /Cannot simulate at round 3 and at rounds/
+        );
+        assert.strictEqual(stub.calls.length, 0);
+      });
+
+      it('checks there is one result per entry', async () => {
+        const stub = new StubClient([
+          msgpack(
+            new SimulateResponse({ lastRound: 5, version: 2, txnGroups: [] })
+          ),
+          msgpack(roundsResponse(at(5))),
+        ]);
+        await assert.rejects(
+          simulateAt(stub, [5, 6]).do(),
+          (err: unknown) =>
+            err instanceof TimeTravelUnsupportedError &&
+            /no round-results/.test(err.message)
+        );
+        await assert.rejects(
+          simulateAt(stub, [5, 6]).do(),
+          (err: unknown) =>
+            err instanceof TimeTravelUnsupportedError &&
+            /answered with 1 round results/.test(err.message)
+        );
+      });
+
+      it('checks each result is for the round asked for', async () => {
+        const stub = new StubClient([
+          msgpack(roundsResponse(at(5), at(7))),
+          msgpack(roundsResponse(at(5), at(8))),
+        ]);
+        await assert.rejects(
+          simulateAt(stub, [5, 6]).do(),
+          (err: unknown) =>
+            err instanceof TimeTravelUnsupportedError &&
+            err.requestedRound === BigInt(6) &&
+            err.returnedRound === BigInt(7)
+        );
+        // A 0 entry accepts whatever round the node resolved it to.
+        const res = await simulateAt(stub, [5, 0]).do();
+        assert.strictEqual(res.roundResults![1].lastRound, BigInt(8));
+      });
+
+      it('checks the round results in doRaw, and returns the body', async () => {
+        const good = encodeMsgpack(roundsResponse(at(5)));
+        const stub = new StubClient([
+          () => ({ status: 200, body: good }),
+          msgpack(roundsResponse(at(6))),
+        ]);
+        assert.deepStrictEqual(await simulateAt(stub, [5]).doRaw(), good);
+        await assert.rejects(
+          simulateAt(stub, [5]).doRaw(),
+          TimeTravelUnsupportedError
+        );
+      });
+
+      it("reports stock algod's rejection of rounds as unsupported", async () => {
+        const stub = new StubClient([stockUnknownField]);
+        await assert.rejects(
+          new TimeTravelAlgodClient(stub, '')
+            .simulateTransactions(
+              new SimulateRequest({ txnGroups: [group(1)] })
+            )
+            .rounds([5])
+            .do(),
+          (err: unknown) =>
+            isUnsupported(err) && /rounds/.test((err as Error).message)
+        );
+      });
+
+      it("passes the fork's rounds 400s through", async () => {
+        const stub = new StubClient([
+          badRequest('too many rounds: got 20, the limit is 16'),
+          badRequest(
+            'rounds is disabled on this node (MaxAPISimulateRounds is 0)'
+          ),
+        ]);
+        await assert.rejects(simulateAt(stub, [1]).do(), isPlain400);
+        await assert.rejects(simulateAt(stub, [1]).do(), isPlain400);
+      });
+    });
+
+    it('works under AtomicTransactionComposer.simulate', async () => {
+      const stub = new StubClient([
+        (call) => {
+          const req = decodeMsgpack(call.body!, TimeTravelSimulateRequest);
+          return {
+            status: 200,
+            body: encodeMsgpack(
+              new SimulateResponse({
+                lastRound: 1,
+                version: 2,
+                txnGroups: [groupResult(req.txnGroups[0].txns[0])],
+              })
+            ),
+          };
+        },
+      ]);
+      const atc = new AtomicTransactionComposer();
+      atc.addTransaction({
+        txn: payment(1),
+        signer: makeEmptyTransactionSigner(),
+      });
+      const { simulateResponse } = await atc.simulate(
+        new TimeTravelAlgodClient(stub, ''),
+        new SimulateRequest({ txnGroups: [], allowEmptySignatures: true })
+      );
+      assert.ok(simulateResponse instanceof TimeTravelSimulateResponse);
+      assert.strictEqual(sent(stub).txnGroups.length, 1);
     });
   });
 });

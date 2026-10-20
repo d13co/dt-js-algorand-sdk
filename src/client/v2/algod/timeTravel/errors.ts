@@ -4,9 +4,11 @@ import IntDecoding from '../../../../types/intDecoding.js';
 
 /**
  * Thrown when a node cannot answer a time-travel request: it has no
- * `/versions` endpoints, it rejected a past round, or it answered a read for a
+ * `/versions` endpoints, it rejected a past round, it answered a read for a
  * round other than the one asked for, which is what stock algod does when it
- * ignores `round`.
+ * ignores `round`, or it rejected the fork's simulate features (several
+ * transaction groups, `parallel-groups`, `rounds`) or answered `rounds`
+ * without one result per listed round.
  */
 export class TimeTravelUnsupportedError extends Error {
   /** The round that was asked for, when the error comes from a round check. */
@@ -137,6 +139,71 @@ export async function readAtRound(
       throw new TimeTravelUnsupportedError(
         `The node cannot read round ${requested}; it does not support reads at past rounds`,
         { requestedRound: requested, cause: err }
+      );
+    }
+    throw err;
+  }
+}
+
+/** The fork features a simulate request uses. */
+export interface SimulateFeatures {
+  /** How many transaction groups it holds. */
+  groups: number;
+  /** The names of the fork fields it sets, such as `parallel-groups`. */
+  fields: string[];
+}
+
+/**
+ * Why a node that rejected a simulate request does not have the fork features
+ * the request uses, or undefined if the error is about something else:
+ * - stock algod simulates only one group, and says
+ *   `expected 1 transaction group, got N`;
+ * - stock algod decodes the body strictly, so a field it does not know is a
+ *   400. It then retries the body as JSON and reports that failure, not the
+ *   unknown field:
+ *   `only encoded map or array can be decoded into a struct`.
+ *   The SDK always sends well-formed msgpack, so that failure on a request
+ *   with fork fields most likely means the node does not know them (an older
+ *   fork node that knows only some of them answers the same way).
+ */
+export function simulateUnsupportedReason(
+  err: unknown,
+  { groups, fields }: SimulateFeatures
+) {
+  const { status, text } = describe(err);
+  if (status !== 400) return undefined;
+  if (groups > 1 && /expected 1 transaction group, got/.test(text)) {
+    return `it simulates only one transaction group per request, and this request has ${groups}`;
+  }
+  if (
+    fields.length > 0 &&
+    /only encoded map or array can be decoded into a struct|no matching struct field/.test(
+      text
+    )
+  ) {
+    return `it could not decode the request, which sets ${fields.join(', ')}; it probably does not know them`;
+  }
+  return undefined;
+}
+
+/**
+ * Runs a simulate request, turning a rejection of the fork features it uses
+ * into a {@link TimeTravelUnsupportedError}.
+ * @param features - What the request uses.
+ * @param request - The request.
+ */
+export async function simulateWithFeatures(
+  features: SimulateFeatures,
+  request: Promise<HTTPClientResponse>
+) {
+  try {
+    return await request;
+  } catch (err) {
+    const reason = simulateUnsupportedReason(err, features);
+    if (reason !== undefined) {
+      throw new TimeTravelUnsupportedError(
+        `The node does not support this simulate request: ${reason}`,
+        { cause: err }
       );
     }
     throw err;

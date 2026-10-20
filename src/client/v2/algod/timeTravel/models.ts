@@ -6,7 +6,11 @@
  */
 
 /* eslint-disable no-use-before-define */
-import { ensureBigInt, ensureSafeInteger } from '../../../../utils/utils.js';
+import {
+  ensureBigInt,
+  ensureSafeInteger,
+  ensureUint64,
+} from '../../../../utils/utils.js';
 import { Encodable, Schema } from '../../../../encoding/encoding.js';
 import {
   NamedMapSchema,
@@ -16,6 +20,7 @@ import {
   BooleanSchema,
   ByteArraySchema,
   OptionalSchema,
+  NamedMapEntry,
 } from '../../../../encoding/schema/index.js';
 import { base64ToBytes } from '../../../../encoding/binarydata.js';
 import {
@@ -24,6 +29,13 @@ import {
   ApplicationLocalState,
   Asset,
   AssetHolding,
+  SimulateRequest,
+  SimulateInitialStates,
+  SimulateRequestTransactionGroup,
+  SimulateResponse,
+  SimulateTransactionGroupResult,
+  SimulateTraceConfig,
+  SimulationEvalOverrides,
 } from '../models/types.js';
 
 /**
@@ -1565,6 +1577,453 @@ export class AccountVersionsResponse implements Encodable {
         AccountVersion.fromEncodingData(v)
       ),
       nextToken: data.get('next-token'),
+    });
+  }
+}
+
+/**
+ * The entries of a generated model's schema, to build a fork model's schema
+ * from.
+ */
+function entriesOf(schema: Schema): NamedMapEntry[] {
+  return (schema as NamedMapSchema).getEntries();
+}
+
+/**
+ * A {@link SimulateRequest} with the fork's simulate fields.
+ *
+ * `txnGroups` may hold several groups, up to the node's `MaxAPISimulateGroups`
+ * (default 16). By default they run in order as consecutive groups of one
+ * simulated block: each group sees the effects of the groups before it, a
+ * transaction or lease used by an earlier group is a duplicate, and the groups
+ * share the block's byte limit. A group that fails is rolled back and the
+ * later groups still run, except after a failed post-evaluation check
+ * (placeholder PQ signatures with `fixSigners`) or a corrupted evaluator:
+ * every later group is then reported as not simulated. With `parallelGroups`,
+ * every group is simulated alone against the state at the start round.
+ */
+export class TimeTravelSimulateRequest extends SimulateRequest {
+  private static ttEncodingSchemaValue: Schema | undefined;
+
+  static get encodingSchema(): Schema {
+    if (!this.ttEncodingSchemaValue) {
+      this.ttEncodingSchemaValue = new NamedMapSchema([
+        ...entriesOf(SimulateRequest.encodingSchema),
+        {
+          key: 'parallel-groups',
+          valueSchema: new OptionalSchema(new BooleanSchema()),
+          omitEmpty: true,
+        },
+        {
+          key: 'rounds',
+          valueSchema: new OptionalSchema(new ArraySchema(new Uint64Schema())),
+          omitEmpty: true,
+        },
+      ]);
+    }
+    return this.ttEncodingSchemaValue;
+  }
+
+  /**
+   * If true, every transaction group is simulated alone against the state at
+   * the start round, concurrently, instead of as consecutive groups of one
+   * block. Groups then do not see each other's effects, duplicate transactions
+   * and leases are not detected across groups, and several groups may create
+   * the same app or asset ID.
+   */
+  public parallelGroups?: boolean;
+
+  /**
+   * If not empty, the request is simulated once per listed round, each entry
+   * meaning what `round` means (0 is the latest round), and the results are in
+   * the response's `roundResults`, one per entry in this order. Cannot be
+   * combined with a non-zero `round`. The node's `MaxAPISimulateRounds`
+   * (default 16) limits how many entries, duplicates included.
+   */
+  public rounds?: bigint[];
+
+  /**
+   * Creates a new `TimeTravelSimulateRequest` object.
+   * @param parallelGroups - If true, every transaction group is simulated alone
+   * against the state at the start round, concurrently.
+   * @param rounds - If not empty, simulate the request once per listed round.
+   * The other parameters are those of {@link SimulateRequest}.
+   */
+  constructor({
+    parallelGroups,
+    rounds,
+    ...rest
+  }: ConstructorParameters<typeof SimulateRequest>[0] & {
+    parallelGroups?: boolean;
+    rounds?: (number | bigint)[];
+  }) {
+    super(rest);
+    this.parallelGroups = parallelGroups;
+    this.rounds =
+      typeof rounds === 'undefined' ? undefined : rounds.map(ensureUint64);
+  }
+
+  /**
+   * A copy of a {@link SimulateRequest}, keeping the fork fields if it has
+   * them.
+   */
+  static from(request: SimulateRequest): TimeTravelSimulateRequest {
+    return new TimeTravelSimulateRequest({
+      txnGroups: [...request.txnGroups],
+      allowEmptySignatures: request.allowEmptySignatures,
+      allowMoreLogging: request.allowMoreLogging,
+      allowUnnamedResources: request.allowUnnamedResources,
+      execTraceConfig: request.execTraceConfig,
+      extraOpcodeBudget: request.extraOpcodeBudget,
+      fixSigners: request.fixSigners,
+      round: request.round,
+      ...(request instanceof TimeTravelSimulateRequest
+        ? { parallelGroups: request.parallelGroups, rounds: request.rounds }
+        : {}),
+    });
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  getEncodingSchema(): Schema {
+    return TimeTravelSimulateRequest.encodingSchema;
+  }
+
+  toEncodingData(): Map<string, unknown> {
+    const data = super.toEncodingData();
+    data.set('parallel-groups', this.parallelGroups);
+    data.set('rounds', this.rounds);
+    return data;
+  }
+
+  static fromEncodingData(data: unknown): TimeTravelSimulateRequest {
+    if (!(data instanceof Map)) {
+      throw new Error(`Invalid decoded TimeTravelSimulateRequest: ${data}`);
+    }
+    return new TimeTravelSimulateRequest({
+      txnGroups: (data.get('txn-groups') ?? []).map((v: unknown) =>
+        SimulateRequestTransactionGroup.fromEncodingData(v)
+      ),
+      allowEmptySignatures: data.get('allow-empty-signatures'),
+      allowMoreLogging: data.get('allow-more-logging'),
+      allowUnnamedResources: data.get('allow-unnamed-resources'),
+      execTraceConfig:
+        typeof data.get('exec-trace-config') !== 'undefined'
+          ? SimulateTraceConfig.fromEncodingData(data.get('exec-trace-config'))
+          : undefined,
+      extraOpcodeBudget: data.get('extra-opcode-budget'),
+      fixSigners: data.get('fix-signers'),
+      round: data.get('round'),
+      parallelGroups: data.get('parallel-groups'),
+      rounds: data.get('rounds'),
+    });
+  }
+}
+
+/**
+ * A {@link SimulationEvalOverrides} with the fork's simulate fields.
+ */
+export class TimeTravelSimulationEvalOverrides extends SimulationEvalOverrides {
+  private static ttEncodingSchemaValue: Schema | undefined;
+
+  static get encodingSchema(): Schema {
+    if (!this.ttEncodingSchemaValue) {
+      this.ttEncodingSchemaValue = new NamedMapSchema([
+        ...entriesOf(SimulationEvalOverrides.encodingSchema),
+        {
+          key: 'parallel-groups',
+          valueSchema: new OptionalSchema(new BooleanSchema()),
+          omitEmpty: true,
+        },
+      ]);
+    }
+    return this.ttEncodingSchemaValue;
+  }
+
+  /**
+   * If true, every transaction group was simulated alone against the state at
+   * the start round, instead of as consecutive groups of one block.
+   */
+  public parallelGroups?: boolean;
+
+  /**
+   * Creates a new `TimeTravelSimulationEvalOverrides` object.
+   * @param parallelGroups - If true, every transaction group was simulated
+   * alone against the state at the start round.
+   * The other parameters are those of {@link SimulationEvalOverrides}.
+   */
+  constructor({
+    parallelGroups,
+    ...rest
+  }: ConstructorParameters<typeof SimulationEvalOverrides>[0] & {
+    parallelGroups?: boolean;
+  }) {
+    super(rest);
+    this.parallelGroups = parallelGroups;
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  getEncodingSchema(): Schema {
+    return TimeTravelSimulationEvalOverrides.encodingSchema;
+  }
+
+  toEncodingData(): Map<string, unknown> {
+    const data = super.toEncodingData();
+    data.set('parallel-groups', this.parallelGroups);
+    return data;
+  }
+
+  static fromEncodingData(data: unknown): TimeTravelSimulationEvalOverrides {
+    if (!(data instanceof Map)) {
+      throw new Error(
+        `Invalid decoded TimeTravelSimulationEvalOverrides: ${data}`
+      );
+    }
+    return new TimeTravelSimulationEvalOverrides({
+      allowEmptySignatures: data.get('allow-empty-signatures'),
+      allowUnnamedResources: data.get('allow-unnamed-resources'),
+      extraOpcodeBudget: data.get('extra-opcode-budget'),
+      fixSigners: data.get('fix-signers'),
+      maxLogCalls: data.get('max-log-calls'),
+      maxLogSize: data.get('max-log-size'),
+      parallelGroups: data.get('parallel-groups'),
+    });
+  }
+}
+
+/**
+ * The simulation result for one entry of a request's `rounds`.
+ */
+export class SimulateRoundResult implements Encodable {
+  private static encodingSchemaValue: Schema | undefined;
+
+  static get encodingSchema(): Schema {
+    if (!this.encodingSchemaValue) {
+      this.encodingSchemaValue = new NamedMapSchema([]);
+      (this.encodingSchemaValue as NamedMapSchema).pushEntries(
+        { key: 'last-round', valueSchema: new Uint64Schema(), omitEmpty: true },
+        {
+          key: 'txn-groups',
+          valueSchema: new ArraySchema(
+            SimulateTransactionGroupResult.encodingSchema
+          ),
+          omitEmpty: true,
+        },
+        {
+          key: 'initial-states',
+          valueSchema: new OptionalSchema(SimulateInitialStates.encodingSchema),
+          omitEmpty: true,
+        },
+        {
+          key: 'error',
+          valueSchema: new OptionalSchema(new StringSchema()),
+          omitEmpty: true,
+        }
+      );
+    }
+    return this.encodingSchemaValue;
+  }
+
+  /**
+   * The round immediately preceding this simulation: the requested round,
+   * with 0 resolved to the latest round.
+   */
+  public lastRound: bigint;
+
+  /**
+   * A result object for each transaction group that was simulated at this
+   * round. Empty when `error` is set.
+   */
+  public txnGroups: SimulateTransactionGroupResult[];
+
+  /**
+   * Initial states of resources that were accessed during simulation at this
+   * round.
+   */
+  public initialStates?: SimulateInitialStates;
+
+  /**
+   * If set, the request could not be simulated at this round (the round is not
+   * available, or a group is invalid under that round's protocol), and why.
+   */
+  public error?: string;
+
+  /**
+   * Creates a new `SimulateRoundResult` object.
+   * @param lastRound - The round immediately preceding this simulation.
+   * @param txnGroups - A result object for each transaction group that was
+   * simulated at this round.
+   * @param initialStates - Initial states of resources that were accessed
+   * during simulation at this round.
+   * @param error - If set, the request could not be simulated at this round,
+   * and why.
+   */
+  constructor({
+    lastRound,
+    txnGroups,
+    initialStates,
+    error,
+  }: {
+    lastRound: number | bigint;
+    txnGroups: SimulateTransactionGroupResult[];
+    initialStates?: SimulateInitialStates;
+    error?: string;
+  }) {
+    this.lastRound = ensureBigInt(lastRound);
+    this.txnGroups = txnGroups;
+    this.initialStates = initialStates;
+    this.error = error;
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  getEncodingSchema(): Schema {
+    return SimulateRoundResult.encodingSchema;
+  }
+
+  toEncodingData(): Map<string, unknown> {
+    return new Map<string, unknown>([
+      ['last-round', this.lastRound],
+      ['txn-groups', this.txnGroups.map((v) => v.toEncodingData())],
+      [
+        'initial-states',
+        typeof this.initialStates !== 'undefined'
+          ? this.initialStates.toEncodingData()
+          : undefined,
+      ],
+      ['error', this.error],
+    ]);
+  }
+
+  static fromEncodingData(data: unknown): SimulateRoundResult {
+    if (!(data instanceof Map)) {
+      throw new Error(`Invalid decoded SimulateRoundResult: ${data}`);
+    }
+    return new SimulateRoundResult({
+      lastRound: data.get('last-round'),
+      txnGroups: (data.get('txn-groups') ?? []).map((v: unknown) =>
+        SimulateTransactionGroupResult.fromEncodingData(v)
+      ),
+      initialStates:
+        typeof data.get('initial-states') !== 'undefined'
+          ? SimulateInitialStates.fromEncodingData(data.get('initial-states'))
+          : undefined,
+      error: data.get('error'),
+    });
+  }
+}
+
+/**
+ * A {@link SimulateResponse} with the fork's simulate fields.
+ *
+ * `txnGroups` has one result per requested group, in request order. Each
+ * group's failure is in its own `failureMessage` / `failedAt` (0-based).
+ * `initialStates` holds the state before the first group, recorded the first
+ * time any group accessed it, and leaves out apps created during the
+ * simulation.
+ *
+ * When the request listed `rounds`, the results are in `roundResults`, one per
+ * entry in request order, while the top-level `lastRound` is 0 and `txnGroups`
+ * is empty. `version`, `evalOverrides` and `execTraceConfig` then come from
+ * the first entry that was simulated, or from the request when no round could
+ * be simulated.
+ */
+export class TimeTravelSimulateResponse extends SimulateResponse {
+  private static ttEncodingSchemaValue: Schema | undefined;
+
+  static get encodingSchema(): Schema {
+    if (!this.ttEncodingSchemaValue) {
+      this.ttEncodingSchemaValue = new NamedMapSchema(
+        entriesOf(SimulateResponse.encodingSchema).map((entry) =>
+          entry.key === 'eval-overrides'
+            ? {
+                ...entry,
+                valueSchema: new OptionalSchema(
+                  TimeTravelSimulationEvalOverrides.encodingSchema
+                ),
+              }
+            : entry
+        )
+      );
+      (this.ttEncodingSchemaValue as NamedMapSchema).pushEntries({
+        key: 'round-results',
+        valueSchema: new OptionalSchema(
+          new ArraySchema(SimulateRoundResult.encodingSchema)
+        ),
+        omitEmpty: true,
+      });
+    }
+    return this.ttEncodingSchemaValue;
+  }
+
+  /**
+   * The parameters and limits overridden during simulation, including
+   * `parallelGroups`.
+   */
+  public evalOverrides?: TimeTravelSimulationEvalOverrides;
+
+  /**
+   * Present when the request listed `rounds`: one result per entry, in the
+   * same order.
+   */
+  public roundResults?: SimulateRoundResult[];
+
+  /**
+   * Creates a new `TimeTravelSimulateResponse` object. The parameters are
+   * those of {@link SimulateResponse}, with the fork's eval overrides.
+   * @param roundResults - With `rounds`, one result per entry.
+   */
+  constructor(
+    args: Omit<
+      ConstructorParameters<typeof SimulateResponse>[0],
+      'evalOverrides'
+    > & {
+      evalOverrides?: TimeTravelSimulationEvalOverrides;
+      roundResults?: SimulateRoundResult[];
+    }
+  ) {
+    super(args);
+    this.evalOverrides = args.evalOverrides;
+    this.roundResults = args.roundResults;
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  getEncodingSchema(): Schema {
+    return TimeTravelSimulateResponse.encodingSchema;
+  }
+
+  toEncodingData(): Map<string, unknown> {
+    const data = super.toEncodingData();
+    data.set(
+      'round-results',
+      typeof this.roundResults !== 'undefined'
+        ? this.roundResults.map((v) => v.toEncodingData())
+        : undefined
+    );
+    return data;
+  }
+
+  static fromEncodingData(data: unknown): TimeTravelSimulateResponse {
+    if (!(data instanceof Map)) {
+      throw new Error(`Invalid decoded TimeTravelSimulateResponse: ${data}`);
+    }
+    const base = SimulateResponse.fromEncodingData(data);
+    return new TimeTravelSimulateResponse({
+      lastRound: base.lastRound,
+      txnGroups: base.txnGroups,
+      version: base.version,
+      execTraceConfig: base.execTraceConfig,
+      initialStates: base.initialStates,
+      evalOverrides:
+        typeof data.get('eval-overrides') !== 'undefined'
+          ? TimeTravelSimulationEvalOverrides.fromEncodingData(
+              data.get('eval-overrides')
+            )
+          : undefined,
+      roundResults:
+        typeof data.get('round-results') !== 'undefined'
+          ? data
+              .get('round-results')
+              .map((v: unknown) => SimulateRoundResult.fromEncodingData(v))
+          : undefined,
     });
   }
 }

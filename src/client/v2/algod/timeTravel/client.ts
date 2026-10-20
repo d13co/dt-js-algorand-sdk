@@ -17,7 +17,14 @@ import GetApplicationBoxByNameAt from './getApplicationBoxByNameAt.js';
 import GetApplicationBoxesAt from './getApplicationBoxesAt.js';
 import GetApplicationBoxVersions from './getApplicationBoxVersions.js';
 import GetApplicationBoxesVersions from './getApplicationBoxesVersions.js';
+import SimulateTransactionsAt from './simulateTransactionsAt.js';
 import { TimeTravelUnsupportedError } from './errors.js';
+import {
+  SimulateRequest,
+  SimulateRequestTransactionGroup,
+} from '../models/types.js';
+import { SignedTransaction } from '../../../../signedTransaction.js';
+import { decodeMsgpack } from '../../../../encoding/encoding.js';
 
 /**
  * An {@link AlgodClient} for a time-travel algod (`EnableTimeTravel: true`),
@@ -313,6 +320,113 @@ export class TimeTravelAlgodClient extends AlgodClient {
     index: number | bigint
   ) {
     return new AccountApplicationVersions(this.c, account, index);
+  }
+
+  /**
+   * Simulate transactions, with the fork's simulate features on top of
+   * {@link AlgodClient.simulateTransactions}:
+   *
+   * - `txnGroups` may hold several groups, up to the node's
+   *   `MaxAPISimulateGroups` (default 16). By default they run in order as
+   *   consecutive groups of one simulated block: each group sees the effects
+   *   of the groups before it, a transaction or lease used by an earlier group
+   *   is a duplicate, and the groups share the block's byte limit, so a group
+   *   that does not fit fails while a smaller later group may still fit. A
+   *   group that fails is rolled back and the later groups still run, except
+   *   after a failed post-evaluation check (placeholder PQ signatures with
+   *   `fixSigners`) or a corrupted evaluator: every later group is then
+   *   reported as not simulated. Each group's failure is in its own
+   *   `failureMessage` / `failedAt` (0-based). `extraOpcodeBudget` applies to
+   *   each group.
+   * - With `.parallelGroups()` (or `parallelGroups` on a
+   *   {@link TimeTravelSimulateRequest}), every group is simulated alone
+   *   against the state at the start round, concurrently.
+   * - With `.rounds([...])` (or `rounds` on a
+   *   {@link TimeTravelSimulateRequest}), the request is simulated once per
+   *   listed round (0 is the latest), and the results are in `roundResults`,
+   *   one per entry in request order. A round that cannot be simulated has an
+   *   `error` in its entry instead of failing the request. The top-level
+   *   `lastRound` is then 0 and `txnGroups` is empty. With a time-travel node
+   *   (`EnableTimeTravel`) any round since genesis can be listed; otherwise
+   *   only the node's last few rounds. `AtomicTransactionComposer.simulate`
+   *   reads the top-level `txnGroups`, so use the client directly for this.
+   *
+   * The node may also raise the limits on unnamed resources
+   * (`allowUnnamedResources`) with its `SimulateResourceLimitMultiplier`
+   * setting. The resources it then reports may not fit in a group that can be
+   * submitted.
+   *
+   * A stock node's rejection of several groups, `parallelGroups` or `rounds`
+   * is thrown as a {@link TimeTravelUnsupportedError}, as is a response
+   * without one round result per listed round, each for the round asked for.
+   *
+   * #### Example
+   * ```typescript
+   * const request = new algosdk.timeTravelModels.TimeTravelSimulateRequest({
+   *   txnGroups: [fundGroup, spendGroup].map(
+   *     (txns) => new algosdk.modelsv2.SimulateRequestTransactionGroup({ txns })
+   *   ),
+   *   allowEmptySignatures: true,
+   * });
+   * const res = await algodClient.simulateTransactions(request).do();
+   * res.txnGroups.forEach((g, i) => console.log(i, g.failureMessage ?? 'ok'));
+   *
+   * // The same groups at three rounds.
+   * const atRounds = await algodClient
+   *   .simulateTransactions(request)
+   *   .rounds([45000000, 46000000, 0])
+   *   .do();
+   * for (const r of atRounds.roundResults!) {
+   *   console.log(r.lastRound, r.error ?? r.txnGroups[1].failureMessage ?? 'ok');
+   * }
+   * ```
+   *
+   * @param request - The simulate request. A {@link TimeTravelSimulateRequest}
+   * can set the fork's fields.
+   * @category POST
+   */
+  simulateTransactions(request: SimulateRequest) {
+    return new SimulateTransactionsAt(this.c, request);
+  }
+
+  /**
+   * Simulate signed transactions given as msgpack bytes. Several groups can be
+   * passed as an array of arrays, one array per group; see
+   * {@link TimeTravelAlgodClient.simulateTransactions} for how they run.
+   *
+   * #### Example
+   * ```typescript
+   * const res = await algodClient
+   *   // Each group is a Uint8Array[] of encoded signed transactions.
+   *   .simulateRawTransactions([group1Txns, group2Txns])
+   *   .parallelGroups()
+   *   .do();
+   * ```
+   *
+   * @param stxOrStxs - One signed transaction, one group, or several groups.
+   * @category POST
+   */
+  simulateRawTransactions(
+    stxOrStxs: Uint8Array | Uint8Array[] | Uint8Array[][]
+  ) {
+    let groups: Uint8Array[][];
+    if (!Array.isArray(stxOrStxs)) {
+      groups = [[stxOrStxs]];
+    } else if (stxOrStxs.length > 0 && Array.isArray(stxOrStxs[0])) {
+      groups = stxOrStxs as Uint8Array[][];
+    } else {
+      groups = [stxOrStxs as Uint8Array[]];
+    }
+    return this.simulateTransactions(
+      new SimulateRequest({
+        txnGroups: groups.map(
+          (group) =>
+            new SimulateRequestTransactionGroup({
+              txns: group.map((stxn) => decodeMsgpack(stxn, SignedTransaction)),
+            })
+        ),
+      })
+    );
   }
 
   /**

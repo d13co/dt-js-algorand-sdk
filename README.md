@@ -93,14 +93,20 @@ import algosdk from 'algosdk';
 // Reuses the server, token and headers of an existing client.
 const algod = algosdk.DTAlgodClient.from(algorand.client.algod);
 
+// The node's limits: groups and rounds per request (cached per client).
+const { maxTxnGroups, maxRounds } = await algod.simulateLimits();
+
 // Every round of one request must lie in its transactions' validity window.
-const { windows, positions } = algosdk.packSimulateRounds(rounds);
+// maxRounds is 0 on a node without rounds: see the note on stock algod below.
+const { windows, positions } = algosdk.packSimulateRounds(rounds, {
+  maxRounds,
+});
 const responses = await Promise.all(
   windows.map((w) =>
     algod
       .simulateTransactions(
         algosdk.dtModels.DTSimulateRequest.fromTransactions(
-          buildGroups(w.firstValid, w.lastValid), // Transaction[][], up to 16 groups
+          buildGroups(w.firstValid, w.lastValid), // Transaction[][], up to maxTxnGroups
           { allowUnnamedResources: true, parallelGroups: true }
         )
       )
@@ -144,7 +150,7 @@ for (const r of res.roundResults!) {
 
 The rewritten transactions get new IDs: match results by group index, not transaction ID, and give transactions that differ only by their window distinct notes.
 
-A node without these features answers with a `DTUnsupportedError`: catch it once and fall back to one group per simulate request. Code that may run on stock algosdk can find the client at runtime and check `DTAlgodClient.features` (for example `'group-results'`) before using it.
+`simulateLimits()` reads the node's limits from `GET /v2/transactions/simulate/limits`: `maxTxnGroups`, `maxRounds` (0 when `rounds` is off), `maxExtraOpcodeBudget` (per group), `resourceLimitMultiplier`, `timeTravel` and `developerApi`. A node without the endpoint (stock algod, or an older fork build) gets stock algod's limits instead, with `reported` false: one group per request and no `rounds`, so send one request per round with `round` set. `timeTravel` and `developerApi` are then unknown, so don't gate on them unless `reported` is true. A node without these features answers with a `DTUnsupportedError`: catch it once and fall back to one group per simulate request. Code that may run on stock algosdk can find the client at runtime and check `DTAlgodClient.features` (for example `'group-results'`) before using it.
 
 ## SDK Development
 

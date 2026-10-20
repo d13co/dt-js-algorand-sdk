@@ -2694,3 +2694,187 @@ export class DTSimulateResponse extends SimulateResponse {
     });
   }
 }
+
+/**
+ * The limits a node places on simulate requests, and the simulate features it
+ * allows (`GET /v2/transactions/simulate/limits`, tag `dtalgorand`). The values
+ * are the ones the node applies, after it clamps its configuration.
+ */
+export class SimulateLimitsResponse implements Encodable {
+  private static encodingSchemaValue: Schema | undefined;
+
+  static get encodingSchema(): Schema {
+    if (!this.encodingSchemaValue) {
+      this.encodingSchemaValue = new NamedMapSchema([]);
+      (this.encodingSchemaValue as NamedMapSchema).pushEntries(
+        {
+          key: 'max-txn-groups',
+          valueSchema: new Uint64Schema(),
+          omitEmpty: false,
+        },
+        {
+          key: 'max-rounds',
+          valueSchema: new Uint64Schema(),
+          omitEmpty: false,
+        },
+        {
+          key: 'max-extra-opcode-budget',
+          valueSchema: new Uint64Schema(),
+          omitEmpty: false,
+        },
+        {
+          key: 'resource-limit-multiplier',
+          valueSchema: new Uint64Schema(),
+          omitEmpty: false,
+        },
+        {
+          key: 'time-travel',
+          valueSchema: new BooleanSchema(),
+          omitEmpty: false,
+        },
+        {
+          key: 'developer-api',
+          valueSchema: new BooleanSchema(),
+          omitEmpty: false,
+        }
+      );
+    }
+    return this.encodingSchemaValue;
+  }
+
+  /**
+   * The limits of stock algod, which has no limits endpoint: one transaction
+   * group per request, no `rounds`, 320,000 extra opcode budget and the
+   * consensus limits on unnamed resources. `reported` is false: `timeTravel`
+   * and `developerApi` are unknown and set to false, so do not gate on them.
+   * A stock algod with its own `EnableDeveloperAPI` (LocalNet has it) does
+   * allow `execTraceConfig`.
+   */
+  static stock(): SimulateLimitsResponse {
+    return new SimulateLimitsResponse({
+      maxTxnGroups: 1,
+      maxRounds: 0,
+      maxExtraOpcodeBudget: 320000,
+      resourceLimitMultiplier: 1,
+      timeTravel: false,
+      developerApi: false,
+      reported: false,
+    });
+  }
+
+  /**
+   * The most transaction groups a request may hold (node config
+   * `MaxAPISimulateGroups`).
+   */
+  public maxTxnGroups: number;
+
+  /**
+   * The most entries a request may list in `rounds`, duplicates included. 0
+   * means `rounds` is disabled (node config `MaxAPISimulateRounds`).
+   */
+  public maxRounds: number;
+
+  /**
+   * The most `extraOpcodeBudget` a request may ask for. Each top-level
+   * transaction group of the request gets it (node config
+   * `MaxAPISimulateExtraOpcodeBudget`).
+   */
+  public maxExtraOpcodeBudget: number;
+
+  /**
+   * The factor applied to the consensus limits on unnamed resources with
+   * `allowUnnamedResources`. 1 means the consensus limits; above 1, the
+   * reported unnamed resources may not fit in a group that can be submitted
+   * (node config `SimulateResourceLimitMultiplier`).
+   */
+  public resourceLimitMultiplier: number;
+
+  /**
+   * Whether `round` and `rounds` may name any round since genesis, not only
+   * the node's last few rounds (node config `EnableTimeTravel`).
+   */
+  public timeTravel: boolean;
+
+  /**
+   * Whether requests may set `execTraceConfig` and the protocol `future`
+   * (node config `EnableDeveloperAPI`).
+   */
+  public developerApi: boolean;
+
+  /**
+   * Whether the node reported these limits: true when decoded from its
+   * response, false for {@link SimulateLimitsResponse.stock}, the fallback
+   * for a node without the endpoint. Not part of the response's encoding.
+   */
+  public reported: boolean;
+
+  /**
+   * Creates a new `SimulateLimitsResponse` object.
+   * @param maxTxnGroups - The most transaction groups a request may hold.
+   * @param maxRounds - The most entries a request may list in `rounds`; 0 means
+   * `rounds` is disabled.
+   * @param maxExtraOpcodeBudget - The most `extraOpcodeBudget`, per group.
+   * @param resourceLimitMultiplier - The factor on the unnamed-resource limits.
+   * @param timeTravel - Whether any round since genesis can be simulated.
+   * @param developerApi - Whether `execTraceConfig` and the protocol `future`
+   * are allowed.
+   * @param reported - Whether the node reported these limits. Not encoded;
+   * defaults to false, and decoding sets it to true.
+   */
+  constructor({
+    maxTxnGroups,
+    maxRounds,
+    maxExtraOpcodeBudget,
+    resourceLimitMultiplier,
+    timeTravel,
+    developerApi,
+    reported = false,
+  }: {
+    maxTxnGroups: number | bigint;
+    maxRounds: number | bigint;
+    maxExtraOpcodeBudget: number | bigint;
+    resourceLimitMultiplier: number | bigint;
+    timeTravel: boolean;
+    developerApi: boolean;
+    reported?: boolean;
+  }) {
+    this.maxTxnGroups = ensureSafeInteger(maxTxnGroups);
+    this.maxRounds = ensureSafeInteger(maxRounds);
+    this.maxExtraOpcodeBudget = ensureSafeInteger(maxExtraOpcodeBudget);
+    this.resourceLimitMultiplier = ensureSafeInteger(resourceLimitMultiplier);
+    this.timeTravel = timeTravel;
+    this.developerApi = developerApi;
+    this.reported = reported;
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  getEncodingSchema(): Schema {
+    return SimulateLimitsResponse.encodingSchema;
+  }
+
+  toEncodingData(): Map<string, unknown> {
+    return new Map<string, unknown>([
+      ['max-txn-groups', this.maxTxnGroups],
+      ['max-rounds', this.maxRounds],
+      ['max-extra-opcode-budget', this.maxExtraOpcodeBudget],
+      ['resource-limit-multiplier', this.resourceLimitMultiplier],
+      ['time-travel', this.timeTravel],
+      ['developer-api', this.developerApi],
+    ]);
+  }
+
+  static fromEncodingData(data: unknown): SimulateLimitsResponse {
+    if (!(data instanceof Map)) {
+      throw new Error(`Invalid decoded SimulateLimitsResponse: ${data}`);
+    }
+    return new SimulateLimitsResponse({
+      maxTxnGroups: data.get('max-txn-groups') ?? 0,
+      maxRounds: data.get('max-rounds') ?? 0,
+      maxExtraOpcodeBudget: data.get('max-extra-opcode-budget') ?? 0,
+      resourceLimitMultiplier: data.get('resource-limit-multiplier') ?? 0,
+      timeTravel: data.get('time-travel') ?? false,
+      developerApi: data.get('developer-api') ?? false,
+      reported: true,
+    });
+  }
+}

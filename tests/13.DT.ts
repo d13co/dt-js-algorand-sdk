@@ -19,6 +19,7 @@ import {
   SimulateProtocolOverride,
   SimulateProtocolNote,
   SimulateProtocolNoteHit,
+  SimulateLimitsResponse,
   packSimulateRounds,
 } from '../src/client/v2/algod/dt/index';
 import { AlgodClient } from '../src/client/v2/algod/algod';
@@ -545,6 +546,121 @@ describe('time travel', () => {
       const client = new DTAlgodClient(stub, '');
       await assert.rejects(client.supportsDT());
       assert.strictEqual(await client.supportsDT(), true);
+    });
+  });
+
+  describe('simulateLimits', () => {
+    const limits = {
+      'max-txn-groups': 8,
+      'max-rounds': 4,
+      'max-extra-opcode-budget': 640000,
+      'resource-limit-multiplier': 2,
+      'time-travel': true,
+      'developer-api': false,
+    };
+
+    it('decodes the node limits and caches them', async () => {
+      const stub = new StubClient([ok(limits)]);
+      const client = new DTAlgodClient(stub, '');
+      const got = await client.simulateLimits();
+      assert.ok(got instanceof SimulateLimitsResponse);
+      assert.deepStrictEqual(
+        { ...got },
+        {
+          maxTxnGroups: 8,
+          maxRounds: 4,
+          maxExtraOpcodeBudget: 640000,
+          resourceLimitMultiplier: 2,
+          timeTravel: true,
+          developerApi: false,
+          reported: true,
+        }
+      );
+      assert.strictEqual(await client.simulateLimits(), got);
+      assert.ok(Object.isFrozen(got));
+      assert.strictEqual(stub.calls.length, 1);
+      assert.strictEqual(
+        stub.calls[0].path,
+        '/v2/transactions/simulate/limits'
+      );
+    });
+
+    it('decodes 0 rounds and false flags, which a node sends', async () => {
+      const stub = new StubClient([
+        ok({ ...limits, 'max-rounds': 0, 'time-travel': false }),
+      ]);
+      const got = await new DTAlgodClient(stub, '').simulateLimits();
+      assert.strictEqual(got.maxRounds, 0);
+      assert.strictEqual(got.timeTravel, false);
+    });
+
+    it('falls back to the stock limits on a 404, and caches them', async () => {
+      const stub = new StubClient([status(404)]);
+      const client = new DTAlgodClient(stub, '');
+      const got = await client.simulateLimits();
+      assert.deepStrictEqual(got, SimulateLimitsResponse.stock());
+      assert.strictEqual(got.maxTxnGroups, 1);
+      assert.strictEqual(got.maxRounds, 0);
+      assert.strictEqual(got.maxExtraOpcodeBudget, 320000);
+      assert.strictEqual(got.reported, false);
+      assert.ok(Object.isFrozen(got));
+      assert.strictEqual(await client.simulateLimits(), got);
+      assert.strictEqual(stub.calls.length, 1);
+    });
+
+    it('throws a 404 as DTUnsupportedError from getSimulateLimits', async () => {
+      const stub = new StubClient([status(404)]);
+      await assert.rejects(
+        new DTAlgodClient(stub, '').getSimulateLimits().do(),
+        (err) =>
+          err instanceof DTUnsupportedError &&
+          (err.cause as { status?: number }).status === 404
+      );
+    });
+
+    it('rethrows other errors without caching them', async () => {
+      const stub = new StubClient([status(503), ok(limits)]);
+      const client = new DTAlgodClient(stub, '');
+      await assert.rejects(
+        client.simulateLimits(),
+        (err) =>
+          !(err instanceof DTUnsupportedError) &&
+          (err as { status?: number }).status === 503
+      );
+      assert.strictEqual((await client.simulateLimits()).maxTxnGroups, 8);
+      assert.strictEqual(stub.calls.length, 2);
+    });
+
+    it('shares one request between concurrent calls', async () => {
+      const stub = new StubClient([ok(limits)]);
+      const client = new DTAlgodClient(stub, '');
+      const [a, b] = await Promise.all([
+        client.simulateLimits(),
+        client.simulateLimits(),
+      ]);
+      assert.strictEqual(a, b);
+      assert.strictEqual(stub.calls.length, 1);
+    });
+
+    it('is shared by DTAlgodClient.from for the same client', async () => {
+      const stub = new StubClient([ok(limits)]);
+      const algod = new AlgodClient(stub, '');
+      await DTAlgodClient.from(algod).simulateLimits();
+      await DTAlgodClient.from(algod).simulateLimits();
+      assert.strictEqual(stub.calls.length, 1);
+    });
+
+    it('is listed in features', () => {
+      assert.ok(DTAlgodClient.features.includes('simulate-limits'));
+    });
+
+    it('does not encode reported', () => {
+      const encoded = algosdk.encodeJSON(SimulateLimitsResponse.stock());
+      assert.ok(!/reported/.test(encoded));
+      assert.strictEqual(
+        algosdk.decodeJSON(encoded, SimulateLimitsResponse).reported,
+        true
+      );
     });
   });
 
@@ -2339,6 +2455,12 @@ describe('time travel', () => {
         assert.throws(() => packSimulateRounds([5, 0]), RangeError);
         assert.throws(
           () => packSimulateRounds([5], { maxRounds: 0 }),
+          (err: Error) =>
+            err instanceof RangeError &&
+            /does not simulate at several rounds/.test(err.message)
+        );
+        assert.throws(
+          () => packSimulateRounds([5], { maxRounds: 1.5 }),
           RangeError
         );
         assert.throws(() => packSimulateRounds([-1]));

@@ -19,7 +19,9 @@ import GetApplicationBoxesAt from './getApplicationBoxesAt.js';
 import GetApplicationBoxVersions from './getApplicationBoxVersions.js';
 import GetApplicationBoxesVersions from './getApplicationBoxesVersions.js';
 import SimulateTransactionsAt from './simulateTransactionsAt.js';
+import GetSimulateLimits from './getSimulateLimits.js';
 import { DTUnsupportedError } from './errors.js';
+import { SimulateLimitsResponse } from './models.js';
 import {
   SimulateRequest,
   SimulateRequestTransactionGroup,
@@ -62,7 +64,8 @@ export class DTAlgodClient extends AlgodClient {
    * - `validity-window`: `skipValidityWindow()` and `rewriteValidityWindow()`
    *   in `simulateTransactions`, and `maxSpan: null` in `packSimulateRounds`;
    * - `simulate-protocol`: `protocol()` in `simulateTransactions`, and
-   *   `protocolOverride` on the response and its round results.
+   *   `protocolOverride` on the response and its round results;
+   * - `simulate-limits`: `simulateLimits()` and `getSimulateLimits()`.
    *
    * #### Example
    * ```typescript
@@ -84,6 +87,7 @@ export class DTAlgodClient extends AlgodClient {
     'pack-rounds',
     'validity-window',
     'simulate-protocol',
+    'simulate-limits',
   ]);
 
   /** The clients made by {@link DTAlgodClient.from}, by source client. */
@@ -132,6 +136,8 @@ export class DTAlgodClient extends AlgodClient {
   }
 
   private supportsDTResult?: Promise<boolean>;
+
+  private simulateLimitsResult?: Promise<SimulateLimitsResponse>;
 
   /**
    * Given an account address, return the account information, at the latest
@@ -414,7 +420,8 @@ export class DTAlgodClient extends AlgodClient {
    * {@link AlgodClient.simulateTransactions}:
    *
    * - `txnGroups` may hold several groups, up to the node's
-   *   `MaxAPISimulateGroups` (default 16). By default they run in order as
+   *   `MaxAPISimulateGroups` (default 16; {@link DTAlgodClient.simulateLimits}
+   *   has the node's value). By default they run in order as
    *   consecutive groups of one simulated block: each group sees the effects
    *   of the groups before it, a transaction or lease used by an earlier group
    *   is a duplicate, and the groups share the block's byte limit, so a group
@@ -424,7 +431,7 @@ export class DTAlgodClient extends AlgodClient {
    *   `fixSigners`) or a corrupted evaluator: every later group is then
    *   reported as not simulated. Each group's failure is in its own
    *   `failureMessage` / `failedAt` (0-based). `extraOpcodeBudget` applies to
-   *   each group.
+   *   each group, up to the node's `maxExtraOpcodeBudget`.
    * - With `.parallelGroups()` (or `parallelGroups` on a
    *   {@link DTSimulateRequest}), every group is simulated alone
    *   against the state at the start round, concurrently.
@@ -535,6 +542,65 @@ export class DTAlgodClient extends AlgodClient {
         ),
       })
     );
+  }
+
+  /**
+   * The node's simulate limits (`GET /v2/transactions/simulate/limits`), as
+   * it reports them. A node without the endpoint (stock algod, or a fork build
+   * older than it) answers 404, thrown as a {@link DTUnsupportedError}.
+   * {@link DTAlgodClient.simulateLimits} caches the answer and falls back to
+   * stock algod's limits instead.
+   *
+   * @category GET
+   */
+  getSimulateLimits() {
+    return new GetSimulateLimits(this.c);
+  }
+
+  /**
+   * The limits to build simulate requests within: how many groups and
+   * `rounds` entries a request may hold, the most `extraOpcodeBudget`, and
+   * whether time travel and the developer API (`execTraceConfig`, protocol
+   * `future`) are on. Pass `maxRounds` to {@link packSimulateRounds}, and
+   * split groups into requests of at most `maxTxnGroups`.
+   *
+   * A node without the limits endpoint answers 404; the limits are then
+   * those of stock algod ({@link SimulateLimitsResponse.stock}), with
+   * `reported` false: one group per request and no `rounds`. An older fork
+   * build may allow more, but staying within these always works. Its
+   * `timeTravel` and `developerApi` are unknown and read false: check
+   * `reported` before gating on them, and use
+   * {@link DTAlgodClient.supportsDT} for time travel.
+   *
+   * The answer is cached on the client and shared, so it is frozen. Other
+   * errors, such as network failures, are rethrown and not cached.
+   *
+   * #### Example
+   * ```typescript
+   * const limits = await algodClient.simulateLimits();
+   * if (limits.maxRounds === 0) {
+   *   // No `rounds`: send one request per round, with `round` set.
+   * } else {
+   *   const { windows } = algosdk.packSimulateRounds(rounds, {
+   *     maxRounds: limits.maxRounds,
+   *   });
+   * }
+   * ```
+   */
+  simulateLimits(): Promise<SimulateLimitsResponse> {
+    if (!this.simulateLimitsResult) {
+      this.simulateLimitsResult = this.getSimulateLimits()
+        .do()
+        .catch((err) => {
+          if (err instanceof DTUnsupportedError) {
+            return SimulateLimitsResponse.stock();
+          }
+          this.simulateLimitsResult = undefined;
+          throw err;
+        })
+        .then((limits) => Object.freeze(limits));
+    }
+    return this.simulateLimitsResult;
   }
 
   /**

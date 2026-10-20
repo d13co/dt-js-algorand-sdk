@@ -2,13 +2,15 @@ import { ensureUint64 } from '../../../../utils/utils.js';
 
 /**
  * The default for a node's `MaxAPISimulateGroups`: how many transaction groups
- * one simulate request may hold.
+ * one simulate request may hold. `DTAlgodClient.simulateLimits()` has the
+ * node's value.
  */
 export const DEFAULT_MAX_SIMULATE_GROUPS = 16;
 
 /**
  * The default for a node's `MaxAPISimulateRounds`: how many entries a simulate
  * request's `rounds` may list, duplicates included.
+ * `DTAlgodClient.simulateLimits()` has the node's value.
  */
 export const DEFAULT_MAX_SIMULATE_ROUNDS = 16;
 
@@ -80,10 +82,12 @@ export interface PackedSimulateRounds {
  * @param rounds - The rounds, as `rounds()` takes them. 0 (the latest round)
  * is not allowed: look the round up first, with `status()`.
  * @param options - `maxRounds`: the most rounds per request, the node's
- * `MaxAPISimulateRounds` (default 16). `maxSpan`: the most rounds between the
+ * `MaxAPISimulateRounds` (default 16): pass `maxRounds` from
+ * `DTAlgodClient.simulateLimits()`. `maxSpan`: the most rounds between the
  * first and the last of a request (default 1000, `MaxTxnLife`), or null for
  * no limit.
- * @throws RangeError for a round of 0 or an invalid option.
+ * @throws RangeError for a round of 0 or an invalid option, including a
+ * `maxRounds` of 0, which a node reports when it does not take `rounds`.
  */
 export function packSimulateRounds(
   rounds: (number | bigint)[],
@@ -92,6 +96,11 @@ export function packSimulateRounds(
     maxSpan = MAX_TXN_LIFE,
   }: { maxRounds?: number; maxSpan?: number | bigint | null } = {}
 ): PackedSimulateRounds {
+  if (maxRounds === 0) {
+    throw new RangeError(
+      'maxRounds is 0: the node does not simulate at several rounds (rounds is disabled or unsupported)'
+    );
+  }
   if (!Number.isInteger(maxRounds) || maxRounds < 1) {
     throw new RangeError(
       `maxRounds must be a positive integer, not ${maxRounds}`

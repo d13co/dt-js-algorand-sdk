@@ -11,7 +11,8 @@ import { SimulateTransactionGroupResult } from '../models/types.js';
  * transaction groups, `parallel-groups`, `rounds`, the validity window modes,
  * `protocol`) or answered without applying them (`rounds` without one result
  * per listed round, a validity window mode not echoed, `protocol` without a
- * `protocol-override`).
+ * `protocol-override`), or it has no simulate limits endpoint
+ * (`getSimulateLimits`).
  */
 export class DTUnsupportedError extends Error {
   /** The round that was asked for, when the error comes from a round check. */

@@ -61,6 +61,16 @@ describe('time travel against a live node', function liveSuite() {
     assert.strictEqual(await c.supportsDT(), true);
   });
 
+  it('reports its simulate limits', async function limits() {
+    const l = await c.simulateLimits();
+    // A node built before the limits endpoint falls back to stock limits.
+    if (!l.reported) this.skip();
+    assert.strictEqual(l.timeTravel, true);
+    assert.ok(l.maxTxnGroups >= 1);
+    assert.ok(l.maxExtraOpcodeBudget >= 320000);
+    assert.ok(l.resourceLimitMultiplier >= 1);
+  });
+
   describe('reads at a round', () => {
     it('reads an account at a past round', async () => {
       const r = await c

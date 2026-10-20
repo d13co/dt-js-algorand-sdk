@@ -14,7 +14,8 @@ import {
 
 /**
  * {@link SimulateRawTransactions} with the fork's simulate features: several
- * transaction groups per request, `parallelGroups` and `rounds`. Requires a
+ * transaction groups per request, `parallelGroups`, `rounds`, the validity
+ * window modes and `protocol`. Requires a
  * node built from the time-travel fork; a stock node's rejection of these
  * features is thrown as a {@link DTUnsupportedError}.
  *
@@ -68,6 +69,80 @@ export default class SimulateTransactionsAt extends SimulateRawTransactions {
     return this;
   }
 
+  /**
+   * Evaluate the transactions as sent at every round, even outside their
+   * `firstValid`..`lastValid` window, so `rounds` can be more than
+   * `MaxTxnLife` (1000) apart. The round-range check and the check for a
+   * transaction ID confirmed earlier are skipped; leases, duplicates in the
+   * block, the genesis ID and hash, well-formedness and fees are still
+   * checked. Programs see the original window, so `block`, the
+   * `FirstValidTime` field and inner transactions stay tied to it, and reading a
+   * block after the start round fails.
+   *
+   * Only with `rounds`, and not with `rewriteValidityWindow`.
+   *
+   * @param skipValidityWindow - Whether to skip the validity window check.
+   * @category body
+   */
+  skipValidityWindow(skipValidityWindow = true) {
+    this.request.skipValidityWindow = skipValidityWindow;
+    return this;
+  }
+
+  /**
+   * At every round, move each top-level transaction's validity window to the
+   * simulated block, keeping its width, and recompute valid group IDs, so
+   * `rounds` can be more than `MaxTxnLife` (1000) apart. Transaction IDs
+   * change, so the signatures over every changed transaction (sig, msig, PQ
+   * signature bytes) are dropped; logic signatures are kept.
+   *
+   * The results echo the rewritten transactions: do not match them by
+   * transaction ID. Transactions that differ only by their window become
+   * identical, so the later one fails as a duplicate: give them distinct
+   * notes.
+   *
+   * Only with `rounds` and `allowEmptySignatures`, and not with
+   * `skipValidityWindow`.
+   *
+   * @param rewriteValidityWindow - Whether to move the validity windows.
+   * @category body
+   */
+  rewriteValidityWindow(rewriteValidityWindow = true) {
+    this.request.rewriteValidityWindow = rewriteValidityWindow;
+    return this;
+  }
+
+  /**
+   * Simulate the round under a later consensus protocol, as if an upgrade to
+   * it took effect right after the start round: its programs, limits, fees
+   * and other parameters apply, to programs deployed earlier too. With
+   * `rounds`, it applies to every round.
+   *
+   * The response's `protocolOverride` (each round result's, with `rounds`)
+   * has the protocol the round really ran (`from`), the resolved target
+   * (`to`), whether it `applied` (not when they are the same), and `notes`
+   * on where the simulation differs from what the chain recorded: changed
+   * parameters as a whole, and data the chain never produced, which reads
+   * as a real upgrade would have seen it (usually zero), with the
+   * transactions that read it.
+   *
+   * An unknown name, or `future` without the developer API, is a 400 for the
+   * whole request. A protocol that is not a later one of the chain than the
+   * round really ran is a 400, or that round's `error` with `rounds`. The
+   * protocol the round really ran is simulated as it is, with `applied`
+   * false.
+   *
+   * @param protocol - A consensus version string, `v24` to `v42` for a
+   * mainline one, `latest` (the protocol of the block after the node's latest
+   * one) or `future` (vFuture, only on a node with `EnableDeveloperAPI`). An
+   * empty string sends none.
+   * @category body
+   */
+  protocol(protocol: string) {
+    this.request.protocol = protocol === '' ? undefined : protocol;
+    return this;
+  }
+
   /** The rounds asked for, if any; an empty list sends none. */
   private requestedRounds(): bigint[] | undefined {
     const { rounds } = this.request;
@@ -82,7 +157,79 @@ export default class SimulateTransactionsAt extends SimulateRawTransactions {
       fields.push('parallel-groups');
     }
     if (this.requestedRounds()) fields.push('rounds');
+    if (this.request.skipValidityWindow) fields.push('skip-validity-window');
+    if (this.request.rewriteValidityWindow) {
+      fields.push('rewrite-validity-window');
+    }
+    if (this.request.protocol) fields.push('protocol');
     return { groups: this.request.txnGroups.length, fields };
+  }
+
+  /**
+   * Why the request is invalid in a way the node would reject as a whole, or
+   * undefined. Checked before sending, for a clearer error than the node's.
+   */
+  private invalidReason(): string | undefined {
+    const { round, skipValidityWindow, rewriteValidityWindow } = this.request;
+    const rounds = this.requestedRounds();
+    if (rounds && round !== undefined && round !== BigInt(0)) {
+      return `Cannot simulate at round ${round} and at rounds: set one or the other`;
+    }
+    if (skipValidityWindow && rewriteValidityWindow) {
+      return 'Cannot both skip and rewrite the validity window: set one or the other';
+    }
+    if ((skipValidityWindow || rewriteValidityWindow) && !rounds) {
+      return `${skipValidityWindow ? 'skipValidityWindow' : 'rewriteValidityWindow'} requires rounds`;
+    }
+    if (rewriteValidityWindow && !this.request.allowEmptySignatures) {
+      return 'rewriteValidityWindow requires allowEmptySignatures, since it drops the signatures of the transactions it changes';
+    }
+    return undefined;
+  }
+
+  /**
+   * Throws a {@link DTUnsupportedError} if the request set a fork option the
+   * response does not show was applied: a validity window mode missing from
+   * `evalOverrides`, or `protocol` without a `protocolOverride` (at the top
+   * level, or in each round result without an `error`).
+   */
+  private checkOptionsApplied(data: DTSimulateResponse) {
+    const { skipValidityWindow, rewriteValidityWindow, protocol } =
+      this.request;
+    const overrides = data.evalOverrides;
+    const modes: [boolean | undefined, boolean | undefined, string][] = [
+      [
+        skipValidityWindow,
+        overrides?.skipValidityWindow,
+        'skip-validity-window',
+      ],
+      [
+        rewriteValidityWindow,
+        overrides?.rewriteValidityWindow,
+        'rewrite-validity-window',
+      ],
+    ];
+    for (const [asked, echoed, name] of modes) {
+      if (asked && !echoed) {
+        throw new DTUnsupportedError(
+          `Asked for ${name} but the node's eval-overrides do not show it; it does not support it`
+        );
+      }
+    }
+    if (!protocol) return;
+    const missing = (where: string) =>
+      new DTUnsupportedError(
+        `Asked for protocol ${protocol} but the node answered without a protocol-override${where}; it does not support simulating under another protocol`
+      );
+    if (!this.requestedRounds()) {
+      if (data.protocolOverride === undefined) throw missing('');
+      return;
+    }
+    data.roundResults!.forEach((result, i) => {
+      if (result.error === undefined && result.protocolOverride === undefined) {
+        throw missing(` in round result ${i}`);
+      }
+    });
   }
 
   /**
@@ -140,14 +287,8 @@ export default class SimulateTransactionsAt extends SimulateRawTransactions {
     headers?: Record<string, string>,
     customOptions?: Record<string, unknown>
   ): Promise<HTTPClientResponse> {
-    const { round } = this.request;
-    if (this.requestedRounds() && round !== undefined && round !== BigInt(0)) {
-      return Promise.reject(
-        new Error(
-          `Cannot simulate at round ${round} and at rounds: set one or the other`
-        )
-      );
-    }
+    const invalid = this.invalidReason();
+    if (invalid !== undefined) return Promise.reject(new Error(invalid));
     // Encoded here, not in the constructor, so that the builders apply.
     return simulateWithFeatures(
       this.features(),
@@ -165,6 +306,7 @@ export default class SimulateTransactionsAt extends SimulateRawTransactions {
     const data = decodeMsgpack(response.body, DTSimulateResponse);
     this.checkRoundResults(data);
     this.checkGroupResults(data);
+    this.checkOptionsApplied(data);
     data.requestGroupCount = this.request.txnGroups.length;
     return data;
   }
@@ -183,8 +325,8 @@ export default class SimulateTransactionsAt extends SimulateRawTransactions {
 
   /**
    * Execute the request, returning the response body as received. With
-   * `rounds`, the response is also decoded to check its round and group
-   * results.
+   * `rounds` or `protocol`, the response is also decoded to check that the
+   * node applied them.
    * @param headers - Additional headers to send in the request. Optional.
    * @param customOptions - Additional options to pass to the underlying BaseHTTPClient. Optional.
    */
@@ -193,7 +335,8 @@ export default class SimulateTransactionsAt extends SimulateRawTransactions {
     customOptions?: Record<string, unknown>
   ): Promise<Uint8Array> {
     const res = await this.executeRequest(headers, customOptions);
-    if (this.requestedRounds()) this.prepare(res);
+    // The validity window modes require rounds.
+    if (this.requestedRounds() || this.request.protocol) this.prepare(res);
     return res.body;
   }
 }

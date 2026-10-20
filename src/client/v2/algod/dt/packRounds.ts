@@ -24,7 +24,12 @@ export interface SimulateRoundsWindow {
   rounds: bigint[];
   /** The `firstValid` for the request's transactions: the first round + 1. */
   firstValid: bigint;
-  /** The `lastValid` for the request's transactions: the last round + 1. */
+  /**
+   * The `lastValid` for the request's transactions: the last round + 1, or,
+   * with `maxSpan: null`, at most `firstValid + MaxTxnLife`, so the window is
+   * valid. The later rounds then lie outside it: simulate them with a
+   * validity window mode.
+   */
   lastValid: bigint;
 }
 
@@ -52,6 +57,10 @@ export interface PackedSimulateRounds {
  * and `lastValid`, simulate them with `rounds(window.rounds)`, and use
  * `positions` to find each input round's results.
  *
+ * With `skipValidityWindow()` or `rewriteValidityWindow()`, the rounds of a
+ * request need not lie in the transactions' window: pass `maxSpan: null` to
+ * pack by `maxRounds` only.
+ *
  * #### Example
  * ```typescript
  * const { windows, positions } = algosdk.packSimulateRounds(rounds);
@@ -72,7 +81,8 @@ export interface PackedSimulateRounds {
  * is not allowed: look the round up first, with `status()`.
  * @param options - `maxRounds`: the most rounds per request, the node's
  * `MaxAPISimulateRounds` (default 16). `maxSpan`: the most rounds between the
- * first and the last of a request (default 1000, `MaxTxnLife`).
+ * first and the last of a request (default 1000, `MaxTxnLife`), or null for
+ * no limit.
  * @throws RangeError for a round of 0 or an invalid option.
  */
 export function packSimulateRounds(
@@ -80,14 +90,14 @@ export function packSimulateRounds(
   {
     maxRounds = DEFAULT_MAX_SIMULATE_ROUNDS,
     maxSpan = MAX_TXN_LIFE,
-  }: { maxRounds?: number; maxSpan?: number | bigint } = {}
+  }: { maxRounds?: number; maxSpan?: number | bigint | null } = {}
 ): PackedSimulateRounds {
   if (!Number.isInteger(maxRounds) || maxRounds < 1) {
     throw new RangeError(
       `maxRounds must be a positive integer, not ${maxRounds}`
     );
   }
-  const span = ensureUint64(maxSpan);
+  const span = maxSpan === null ? undefined : ensureUint64(maxSpan);
   const requested = rounds.map((round) => {
     const r = ensureUint64(round);
     if (r === BigInt(0)) {
@@ -109,7 +119,7 @@ export function packSimulateRounds(
     if (
       current === undefined ||
       current.rounds.length >= maxRounds ||
-      round - current.rounds[0] > span
+      (span !== undefined && round - current.rounds[0] > span)
     ) {
       current = {
         rounds: [],
@@ -124,6 +134,9 @@ export function packSimulateRounds(
     });
     current.rounds.push(round);
     current.lastValid = round + BigInt(1);
+    // Without a span limit the rounds may not fit a valid window.
+    const widest = current.firstValid + BigInt(MAX_TXN_LIFE);
+    if (current.lastValid > widest) current.lastValid = widest;
   }
   return { windows, positions: requested.map((r) => found.get(r)!) };
 }

@@ -58,7 +58,11 @@ export class DTAlgodClient extends AlgodClient {
    * - `group-results`: `groupResult()` / `groupResults()` on the simulate
    *   response;
    * - `from-transactions`: `DTSimulateRequest.fromTransactions`;
-   * - `pack-rounds`: `packSimulateRounds`.
+   * - `pack-rounds`: `packSimulateRounds`;
+   * - `validity-window`: `skipValidityWindow()` and `rewriteValidityWindow()`
+   *   in `simulateTransactions`, and `maxSpan: null` in `packSimulateRounds`;
+   * - `simulate-protocol`: `protocol()` in `simulateTransactions`, and
+   *   `protocolOverride` on the response and its round results.
    *
    * #### Example
    * ```typescript
@@ -78,6 +82,8 @@ export class DTAlgodClient extends AlgodClient {
     'group-results',
     'from-transactions',
     'pack-rounds',
+    'validity-window',
+    'simulate-protocol',
   ]);
 
   /** The clients made by {@link DTAlgodClient.from}, by source client. */
@@ -431,15 +437,24 @@ export class DTAlgodClient extends AlgodClient {
    *   (`EnableTimeTravel`) any round since genesis can be listed; otherwise
    *   only the node's last few rounds. `AtomicTransactionComposer.simulate`
    *   reads the top-level `txnGroups`, so use the client directly for this.
+   * - With `.skipValidityWindow()` or `.rewriteValidityWindow()` (only with
+   *   `rounds`), the transactions are evaluated outside their validity window,
+   *   or have it moved to each simulated block, so the rounds can be more than
+   *   `MaxTxnLife` (1000) apart.
+   * - With `.protocol('v42')` (or `latest`, ...), the round is simulated
+   *   under a later consensus protocol, as if an upgrade to it took effect
+   *   right after the start round. `protocolOverride` on the response (on
+   *   each round result, with `rounds`) says how it applied.
    *
    * The node may also raise the limits on unnamed resources
    * (`allowUnnamedResources`) with its `SimulateResourceLimitMultiplier`
    * setting. The resources it then reports may not fit in a group that can be
    * submitted.
    *
-   * A stock node's rejection of several groups, `parallelGroups` or `rounds`
-   * is thrown as a {@link DTUnsupportedError}, as is a response
-   * without one round result per listed round, each for the round asked for.
+   * A stock node's rejection of several groups or of the fork's fields is
+   * thrown as a {@link DTUnsupportedError}, as is a response without one
+   * round result per listed round, each for the round asked for, or without
+   * the validity window mode or `protocolOverride` asked for.
    *
    * #### Example
    * ```typescript
@@ -459,6 +474,18 @@ export class DTAlgodClient extends AlgodClient {
    *   .do();
    * for (const r of atRounds.roundResults!) {
    *   console.log(r.lastRound, r.error ?? r.txnGroups[1].failureMessage ?? 'ok');
+   * }
+   *
+   * // Years apart, with each window moved to the round, under today's rules.
+   * const underLatest = await algodClient
+   *   .simulateTransactions(request)
+   *   .rounds([20000000, 45000000])
+   *   .rewriteValidityWindow()
+   *   .protocol('latest')
+   *   .do();
+   * for (const r of underLatest.roundResults!) {
+   *   const po = r.protocolOverride;
+   *   console.log(r.lastRound, po?.from, '->', po?.to, po?.notes?.map((n) => n.code));
    * }
    * ```
    *

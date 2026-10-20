@@ -8,8 +8,10 @@ import { SimulateTransactionGroupResult } from '../models/types.js';
  * `/versions` endpoints, it rejected a past round, it answered a read for a
  * round other than the one asked for, which is what stock algod does when it
  * ignores `round`, or it rejected the fork's simulate features (several
- * transaction groups, `parallel-groups`, `rounds`) or answered `rounds`
- * without one result per listed round.
+ * transaction groups, `parallel-groups`, `rounds`, the validity window modes,
+ * `protocol`) or answered without applying them (`rounds` without one result
+ * per listed round, a validity window mode not echoed, `protocol` without a
+ * `protocol-override`).
  */
 export class DTUnsupportedError extends Error {
   /** The round that was asked for, when the error comes from a round check. */

@@ -16,6 +16,9 @@ import {
   DTSimulateResponse,
   DTSimulationEvalOverrides,
   SimulateGroupError,
+  SimulateProtocolOverride,
+  SimulateProtocolNote,
+  SimulateProtocolNoteHit,
   packSimulateRounds,
 } from '../src/client/v2/algod/dt/index';
 import { AlgodClient } from '../src/client/v2/algod/algod';
@@ -1643,6 +1646,8 @@ describe('time travel', () => {
           'from-transactions',
           'pack-rounds',
           'simulate-rounds',
+          'validity-window',
+          'simulate-protocol',
         ]) {
           assert.ok(DTAlgodClient.features.includes(feature), feature);
         }
@@ -1890,6 +1895,367 @@ describe('time travel', () => {
       });
     });
 
+    describe('validity window modes and protocol', () => {
+      const request = (fields: { allowEmptySignatures?: boolean } = {}) =>
+        new SimulateRequest({
+          txnGroups: [group(1), group(2)],
+          allowEmptySignatures: true,
+          ...fields,
+        });
+      const roundResult = (
+        round: number,
+        protocolOverride?: SimulateProtocolOverride
+      ) =>
+        new SimulateRoundResult({
+          lastRound: round,
+          txnGroups: [groupResult(stxn(1)), groupResult(stxn(2))],
+          protocolOverride,
+        });
+      const response = ({
+        evalOverrides,
+        protocolOverride,
+        roundResults,
+      }: {
+        evalOverrides?: DTSimulationEvalOverrides;
+        protocolOverride?: SimulateProtocolOverride;
+        roundResults?: SimulateRoundResult[];
+      }) =>
+        new DTSimulateResponse({
+          lastRound: roundResults ? 0 : 10,
+          version: 2,
+          txnGroups: roundResults
+            ? []
+            : [groupResult(stxn(1)), groupResult(stxn(2))],
+          evalOverrides,
+          protocolOverride,
+          roundResults,
+        });
+      const override = (from: string, to: string) =>
+        new SimulateProtocolOverride({
+          from,
+          to,
+          applied: from !== to,
+          notes:
+            from !== to
+              ? [
+                  new SimulateProtocolNote({
+                    code: 'semantics-changed',
+                    message: 'LogicSigMsig: true → false',
+                  }),
+                  new SimulateProtocolNote({
+                    code: 'block-incentive-fields',
+                    message: 'BlkProposer reads as zero',
+                    hits: [
+                      new SimulateProtocolNoteHit({ group: 0, path: [0] }),
+                      new SimulateProtocolNoteHit({ group: 1, path: [0, 2] }),
+                    ],
+                  }),
+                ]
+              : undefined,
+        });
+
+      it('sends skip-validity-window and reads its echo', async () => {
+        const stub = new StubClient([
+          msgpack(
+            response({
+              evalOverrides: new DTSimulationEvalOverrides({
+                allowEmptySignatures: true,
+                skipValidityWindow: true,
+              }),
+              roundResults: [roundResult(100), roundResult(5000)],
+            })
+          ),
+        ]);
+        const res = await new DTAlgodClient(stub, '')
+          .simulateTransactions(request())
+          .rounds([100, 5000])
+          .skipValidityWindow()
+          .do();
+        const req = sent(stub);
+        assert.strictEqual(req.skipValidityWindow, true);
+        assert.strictEqual(req.rewriteValidityWindow, undefined);
+        assert.strictEqual(res.evalOverrides!.skipValidityWindow, true);
+        assert.strictEqual(res.roundResults!.length, 2);
+      });
+
+      it('sends rewrite-validity-window and reads its echo', async () => {
+        const stub = new StubClient([
+          msgpack(
+            response({
+              evalOverrides: new DTSimulationEvalOverrides({
+                allowEmptySignatures: true,
+                rewriteValidityWindow: true,
+              }),
+              roundResults: [roundResult(100), roundResult(5000)],
+            })
+          ),
+        ]);
+        const res = await new DTAlgodClient(stub, '')
+          .simulateTransactions(request())
+          .rounds([100, 5000])
+          .rewriteValidityWindow()
+          .do();
+        assert.strictEqual(sent(stub).rewriteValidityWindow, true);
+        assert.strictEqual(sent(stub).skipValidityWindow, undefined);
+        assert.strictEqual(res.evalOverrides!.rewriteValidityWindow, true);
+      });
+
+      it('sends neither mode when turned off', async () => {
+        const stub = new StubClient([
+          msgpack(response({ roundResults: [roundResult(100)] })),
+        ]);
+        await new DTAlgodClient(stub, '')
+          .simulateTransactions(request())
+          .rounds([100])
+          .skipValidityWindow()
+          .skipValidityWindow(false)
+          .do();
+        assert.strictEqual(sent(stub).skipValidityWindow, undefined);
+      });
+
+      it('refuses invalid combinations before sending', async () => {
+        const cases: [
+          (call: ReturnType<DTAlgodClient['simulateTransactions']>) => unknown,
+          RegExp,
+          boolean?,
+        ][] = [
+          [
+            (c) => c.rounds([1]).skipValidityWindow().rewriteValidityWindow(),
+            /both skip and rewrite/,
+          ],
+          [(c) => c.skipValidityWindow(), /skipValidityWindow requires rounds/],
+          [
+            (c) => c.rounds([]).rewriteValidityWindow(),
+            /rewriteValidityWindow requires rounds/,
+          ],
+          [
+            (c) => c.rounds([1]).rewriteValidityWindow(),
+            /requires allowEmptySignatures/,
+            false,
+          ],
+        ];
+        for (const [build, message, allowEmptySignatures] of cases) {
+          const stub = new StubClient([]);
+          const call = new DTAlgodClient(stub, '').simulateTransactions(
+            request({ allowEmptySignatures: allowEmptySignatures ?? true })
+          );
+          build(call);
+          // eslint-disable-next-line no-await-in-loop
+          await assert.rejects(call.do(), message);
+          assert.strictEqual(stub.calls.length, 0);
+        }
+      });
+
+      it('throws DTUnsupportedError when a mode is not echoed', async () => {
+        const stub = new StubClient([
+          msgpack(
+            response({
+              evalOverrides: new DTSimulationEvalOverrides({
+                allowEmptySignatures: true,
+              }),
+              roundResults: [roundResult(100)],
+            })
+          ),
+        ]);
+        await assert.rejects(
+          new DTAlgodClient(stub, '')
+            .simulateTransactions(request())
+            .rounds([100])
+            .skipValidityWindow()
+            .do(),
+          (err: Error) =>
+            err instanceof DTUnsupportedError &&
+            /skip-validity-window/.test(err.message)
+        );
+      });
+
+      it('sends protocol and decodes the override at the top level', async () => {
+        const stub = new StubClient([
+          msgpack(
+            response({ protocolOverride: override('v35', 'future-ish') })
+          ),
+        ]);
+        const res = await new DTAlgodClient(stub, '')
+          .simulateTransactions(request())
+          .protocol('latest')
+          .do();
+        assert.strictEqual(sent(stub).protocol, 'latest');
+        const po = res.protocolOverride!;
+        assert.ok(po instanceof SimulateProtocolOverride);
+        assert.strictEqual(po.from, 'v35');
+        assert.strictEqual(po.to, 'future-ish');
+        assert.strictEqual(po.applied, true);
+        assert.deepStrictEqual(
+          po.notes!.map((n) => n.code),
+          ['semantics-changed', 'block-incentive-fields']
+        );
+        assert.strictEqual(po.notes![0].hits, undefined);
+        assert.ok(po.notes![1].hits![0] instanceof SimulateProtocolNoteHit);
+        assert.deepStrictEqual(
+          po.notes![1].hits!.map((h) => [h.group, h.path]),
+          [
+            [0, [0]],
+            [1, [0, 2]],
+          ]
+        );
+      });
+
+      it('decodes a protocol that was not applied', async () => {
+        const stub = new StubClient([
+          msgpack(response({ protocolOverride: override('v42', 'v42') })),
+        ]);
+        const res = await new DTAlgodClient(stub, '')
+          .simulateTransactions(request())
+          .protocol('v42')
+          .do();
+        assert.strictEqual(res.protocolOverride!.applied, false);
+        assert.strictEqual(res.protocolOverride!.notes, undefined);
+      });
+
+      it('decodes an override per round, none for a round error', async () => {
+        const stub = new StubClient([
+          msgpack(
+            response({
+              evalOverrides: new DTSimulationEvalOverrides({
+                allowEmptySignatures: true,
+                rewriteValidityWindow: true,
+              }),
+              roundResults: [
+                roundResult(100, override('v24', 'v42')),
+                new SimulateRoundResult({
+                  lastRound: 1,
+                  txnGroups: [],
+                  error: 'v42 is not a later protocol',
+                }),
+                roundResult(5000, override('v42', 'v42')),
+              ],
+            })
+          ),
+        ]);
+        const res = await new DTAlgodClient(stub, '')
+          .simulateTransactions(request())
+          .rounds([100, 1, 5000])
+          .rewriteValidityWindow()
+          .protocol('v42')
+          .do();
+        assert.strictEqual(res.protocolOverride, undefined);
+        const results = res.roundResults!;
+        assert.strictEqual(results[0].protocolOverride!.from, 'v24');
+        assert.strictEqual(results[1].protocolOverride, undefined);
+        assert.strictEqual(results[2].protocolOverride!.applied, false);
+      });
+
+      it('throws DTUnsupportedError when protocol-override is missing', async () => {
+        const single = new StubClient([msgpack(response({}))]);
+        await assert.rejects(
+          new DTAlgodClient(single, '')
+            .simulateTransactions(request())
+            .protocol('v42')
+            .do(),
+          (err: Error) =>
+            err instanceof DTUnsupportedError &&
+            /without a protocol-override;/.test(err.message)
+        );
+        const rounds = new StubClient([
+          msgpack(
+            response({
+              roundResults: [
+                roundResult(100, override('v24', 'v42')),
+                roundResult(200),
+              ],
+            })
+          ),
+        ]);
+        await assert.rejects(
+          new DTAlgodClient(rounds, '')
+            .simulateTransactions(request())
+            .rounds([100, 200])
+            .protocol('v42')
+            .doRaw(),
+          (err: Error) =>
+            err instanceof DTUnsupportedError &&
+            /in round result 1/.test(err.message)
+        );
+      });
+
+      it('sends no protocol for an empty string', async () => {
+        const stub = new StubClient([msgpack(response({}))]);
+        await new DTAlgodClient(stub, '')
+          .simulateTransactions(request())
+          .protocol('v42')
+          .protocol('')
+          .do();
+        assert.strictEqual(sent(stub).protocol, undefined);
+      });
+
+      it('names protocol when a node cannot decode it', async () => {
+        const stub = new StubClient([
+          badRequest(
+            'failed to decode object: json decode error [pos 1]: only encoded map or array can be decoded into a struct'
+          ),
+        ]);
+        await assert.rejects(
+          new DTAlgodClient(stub, '')
+            .simulateTransactions(request())
+            .protocol('v42')
+            .do(),
+          (err: Error) =>
+            err instanceof DTUnsupportedError &&
+            /sets protocol/.test(err.message)
+        );
+      });
+
+      it('encodes applied false and group 0 like the node', () => {
+        const bytes = encodeMsgpack(
+          new SimulateProtocolOverride({
+            from: 'v42',
+            to: 'v42',
+            applied: false,
+            notes: [
+              new SimulateProtocolNote({
+                code: 'block-hash-fields',
+                message: 'm',
+                hits: [new SimulateProtocolNoteHit({ group: 0, path: [0] })],
+              }),
+            ],
+          })
+        );
+        const raw = algosdk.decodeObj(bytes) as Record<string, unknown>;
+        assert.strictEqual(raw.applied, false);
+        const hit = (raw.notes as Record<string, unknown>[])[0].hits as Record<
+          string,
+          unknown
+        >[];
+        assert.strictEqual(hit[0].group, 0);
+      });
+
+      it('keeps the new fields when copying and encoding a request', () => {
+        const original = new DTSimulateRequest({
+          txnGroups: [group(1)],
+          allowEmptySignatures: true,
+          rounds: [1, 2],
+          rewriteValidityWindow: true,
+          protocol: 'v42',
+        });
+        const copy = DTSimulateRequest.from(original);
+        assert.strictEqual(copy.rewriteValidityWindow, true);
+        assert.strictEqual(copy.protocol, 'v42');
+        const decoded = decodeMsgpack(
+          encodeMsgpack(
+            new DTSimulateRequest({
+              txnGroups: [group(1)],
+              skipValidityWindow: true,
+              protocol: 'latest',
+            })
+          ),
+          DTSimulateRequest
+        );
+        assert.strictEqual(decoded.skipValidityWindow, true);
+        assert.strictEqual(decoded.rewriteValidityWindow, undefined);
+        assert.strictEqual(decoded.protocol, 'latest');
+      });
+    });
+
     describe('packSimulateRounds', () => {
       const b = (...xs: number[]) => xs.map(BigInt);
 
@@ -1953,6 +2319,20 @@ describe('time travel', () => {
           ),
           [b(1, 2), b(3)]
         );
+      });
+
+      it('packs by maxRounds only with maxSpan null', () => {
+        const { windows } = packSimulateRounds([1, 5000, 3000000, 2], {
+          maxSpan: null,
+          maxRounds: 3,
+        });
+        assert.deepStrictEqual(
+          windows.map((w) => w.rounds),
+          [b(1, 2, 5000), b(3000000)]
+        );
+        assert.strictEqual(windows[0].firstValid, BigInt(2));
+        assert.strictEqual(windows[0].lastValid, BigInt(1002));
+        assert.strictEqual(windows[1].lastValid, BigInt(3000001));
       });
 
       it('refuses round 0 and bad options', () => {

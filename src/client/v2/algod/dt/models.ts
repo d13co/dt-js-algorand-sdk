@@ -1594,6 +1594,296 @@ function entriesOf(schema: Schema): NamedMapEntry[] {
 }
 
 /**
+ * A transaction that read data a {@link SimulateProtocolNote} is about.
+ */
+export class SimulateProtocolNoteHit implements Encodable {
+  private static encodingSchemaValue: Schema | undefined;
+
+  static get encodingSchema(): Schema {
+    if (!this.encodingSchemaValue) {
+      this.encodingSchemaValue = new NamedMapSchema([]);
+      (this.encodingSchemaValue as NamedMapSchema).pushEntries(
+        { key: 'group', valueSchema: new Uint64Schema(), omitEmpty: false },
+        {
+          key: 'path',
+          valueSchema: new ArraySchema(new Uint64Schema()),
+          omitEmpty: false,
+        }
+      );
+    }
+    return this.encodingSchemaValue;
+  }
+
+  /** The 0-based index of the transaction group in the request. */
+  public group: number;
+
+  /**
+   * The path of the transaction in its group, as in `failedAt`. A logic
+   * signature's hit has the path of its top-level transaction.
+   */
+  public path: number[];
+
+  /**
+   * Creates a new `SimulateProtocolNoteHit` object.
+   * @param group - The 0-based index of the transaction group in the request.
+   * @param path - The path of the transaction in its group, as in `failedAt`.
+   */
+  constructor({
+    group,
+    path,
+  }: {
+    group: number | bigint;
+    path: (number | bigint)[];
+  }) {
+    this.group = ensureSafeInteger(group);
+    this.path = path.map(ensureSafeInteger);
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  getEncodingSchema(): Schema {
+    return SimulateProtocolNoteHit.encodingSchema;
+  }
+
+  toEncodingData(): Map<string, unknown> {
+    return new Map<string, unknown>([
+      ['group', this.group],
+      ['path', this.path],
+    ]);
+  }
+
+  static fromEncodingData(data: unknown): SimulateProtocolNoteHit {
+    if (!(data instanceof Map)) {
+      throw new Error(`Invalid decoded SimulateProtocolNoteHit: ${data}`);
+    }
+    return new SimulateProtocolNoteHit({
+      group: data.get('group') ?? 0,
+      path: data.get('path') ?? [],
+    });
+  }
+}
+
+/**
+ * The codes of {@link SimulateProtocolNote}, as of this client. A newer node
+ * may send others.
+ * - `semantics-changed`: consensus parameters that affect transactions differ;
+ *   the message lists each, old → new.
+ * - `no-heartbeat-challenges`: no heartbeat challenge applies, since earlier
+ *   challenge rounds ran other rules.
+ * - `no-load-history`: a congestion tax computed from a load of 0.
+ * - `block-incentive-fields`: `block` read an incentive field of a round
+ *   without incentives, which reads as zero.
+ * - `block-hash-fields`: `block` read a SHA-512 or SHA-256 header field of a
+ *   round that did not compute it, which reads as zero bytes.
+ * - `online-stake-includes-expired`: `online_stake` included keys that expire
+ *   before the simulated round.
+ * - `account-incentive-fields`: an account incentive field read before
+ *   incentives, which reads as false or 0.
+ * - `app-version-starts-at-upgrade`: `AppVersion` counts from the upgrade on.
+ */
+export type SimulateProtocolNoteCode =
+  | 'semantics-changed'
+  | 'no-heartbeat-challenges'
+  | 'no-load-history'
+  | 'block-incentive-fields'
+  | 'block-hash-fields'
+  | 'online-stake-includes-expired'
+  | 'account-incentive-fields'
+  | 'app-version-starts-at-upgrade';
+
+/**
+ * A note about simulating under a later protocol: where the simulation
+ * differs from what the chain recorded, or read data the chain never produced.
+ */
+export class SimulateProtocolNote implements Encodable {
+  private static encodingSchemaValue: Schema | undefined;
+
+  static get encodingSchema(): Schema {
+    if (!this.encodingSchemaValue) {
+      this.encodingSchemaValue = new NamedMapSchema([]);
+      (this.encodingSchemaValue as NamedMapSchema).pushEntries(
+        { key: 'code', valueSchema: new StringSchema(), omitEmpty: false },
+        { key: 'message', valueSchema: new StringSchema(), omitEmpty: false },
+        {
+          key: 'hits',
+          valueSchema: new OptionalSchema(
+            new ArraySchema(SimulateProtocolNoteHit.encodingSchema)
+          ),
+          omitEmpty: true,
+        }
+      );
+    }
+    return this.encodingSchemaValue;
+  }
+
+  /** What the note is about: a {@link SimulateProtocolNoteCode}. */
+  public code: SimulateProtocolNoteCode | (string & {});
+
+  /** The note, for people. */
+  public message: string;
+
+  /**
+   * The transactions that read the data the note is about, at most 16.
+   * Undefined for notes about the protocol change as a whole.
+   */
+  public hits?: SimulateProtocolNoteHit[];
+
+  /**
+   * Creates a new `SimulateProtocolNote` object.
+   * @param code - What the note is about.
+   * @param message - The note, for people.
+   * @param hits - The transactions that read the data the note is about.
+   */
+  constructor({
+    code,
+    message,
+    hits,
+  }: {
+    code: string;
+    message: string;
+    hits?: SimulateProtocolNoteHit[];
+  }) {
+    this.code = code;
+    this.message = message;
+    this.hits = hits;
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  getEncodingSchema(): Schema {
+    return SimulateProtocolNote.encodingSchema;
+  }
+
+  toEncodingData(): Map<string, unknown> {
+    return new Map<string, unknown>([
+      ['code', this.code],
+      ['message', this.message],
+      [
+        'hits',
+        typeof this.hits !== 'undefined'
+          ? this.hits.map((v) => v.toEncodingData())
+          : undefined,
+      ],
+    ]);
+  }
+
+  static fromEncodingData(data: unknown): SimulateProtocolNote {
+    if (!(data instanceof Map)) {
+      throw new Error(`Invalid decoded SimulateProtocolNote: ${data}`);
+    }
+    return new SimulateProtocolNote({
+      code: data.get('code') ?? '',
+      message: data.get('message') ?? '',
+      hits:
+        typeof data.get('hits') !== 'undefined'
+          ? data
+              .get('hits')
+              .map((v: unknown) => SimulateProtocolNoteHit.fromEncodingData(v))
+          : undefined,
+    });
+  }
+}
+
+/**
+ * How a simulate request's `protocol` applied to the simulated round.
+ */
+export class SimulateProtocolOverride implements Encodable {
+  private static encodingSchemaValue: Schema | undefined;
+
+  static get encodingSchema(): Schema {
+    if (!this.encodingSchemaValue) {
+      this.encodingSchemaValue = new NamedMapSchema([]);
+      (this.encodingSchemaValue as NamedMapSchema).pushEntries(
+        { key: 'from', valueSchema: new StringSchema(), omitEmpty: false },
+        { key: 'to', valueSchema: new StringSchema(), omitEmpty: false },
+        { key: 'applied', valueSchema: new BooleanSchema(), omitEmpty: false },
+        {
+          key: 'notes',
+          valueSchema: new OptionalSchema(
+            new ArraySchema(SimulateProtocolNote.encodingSchema)
+          ),
+          omitEmpty: true,
+        }
+      );
+    }
+    return this.encodingSchemaValue;
+  }
+
+  /** The protocol the round after the simulated one really ran. */
+  public from: string;
+
+  /** The requested protocol, with aliases (`v42`, `latest`) resolved. */
+  public to: string;
+
+  /** False when `from` is already `to`: the round was simulated as it is. */
+  public applied: boolean;
+
+  /**
+   * Where the simulation under `to` differs from what the chain recorded, or
+   * read data the chain never produced. Only set when `applied`.
+   */
+  public notes?: SimulateProtocolNote[];
+
+  /**
+   * Creates a new `SimulateProtocolOverride` object.
+   * @param from - The protocol the round after the simulated one really ran.
+   * @param to - The requested protocol, with aliases resolved.
+   * @param applied - False when `from` is already `to`.
+   * @param notes - Where the simulation differs from the chain.
+   */
+  constructor({
+    from,
+    to,
+    applied,
+    notes,
+  }: {
+    from: string;
+    to: string;
+    applied: boolean;
+    notes?: SimulateProtocolNote[];
+  }) {
+    this.from = from;
+    this.to = to;
+    this.applied = applied;
+    this.notes = notes;
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  getEncodingSchema(): Schema {
+    return SimulateProtocolOverride.encodingSchema;
+  }
+
+  toEncodingData(): Map<string, unknown> {
+    return new Map<string, unknown>([
+      ['from', this.from],
+      ['to', this.to],
+      ['applied', this.applied],
+      [
+        'notes',
+        typeof this.notes !== 'undefined'
+          ? this.notes.map((v) => v.toEncodingData())
+          : undefined,
+      ],
+    ]);
+  }
+
+  static fromEncodingData(data: unknown): SimulateProtocolOverride {
+    if (!(data instanceof Map)) {
+      throw new Error(`Invalid decoded SimulateProtocolOverride: ${data}`);
+    }
+    return new SimulateProtocolOverride({
+      from: data.get('from') ?? '',
+      to: data.get('to') ?? '',
+      applied: data.get('applied') ?? false,
+      notes:
+        typeof data.get('notes') !== 'undefined'
+          ? data
+              .get('notes')
+              .map((v: unknown) => SimulateProtocolNote.fromEncodingData(v))
+          : undefined,
+    });
+  }
+}
+
+/**
  * A {@link SimulateRequest} with the fork's simulate fields.
  *
  * `txnGroups` may hold several groups, up to the node's `MaxAPISimulateGroups`
@@ -1623,6 +1913,21 @@ export class DTSimulateRequest extends SimulateRequest {
           valueSchema: new OptionalSchema(new ArraySchema(new Uint64Schema())),
           omitEmpty: true,
         },
+        {
+          key: 'skip-validity-window',
+          valueSchema: new OptionalSchema(new BooleanSchema()),
+          omitEmpty: true,
+        },
+        {
+          key: 'rewrite-validity-window',
+          valueSchema: new OptionalSchema(new BooleanSchema()),
+          omitEmpty: true,
+        },
+        {
+          key: 'protocol',
+          valueSchema: new OptionalSchema(new StringSchema()),
+          omitEmpty: true,
+        },
       ]);
     }
     return this.dtEncodingSchemaValue;
@@ -1647,24 +1952,83 @@ export class DTSimulateRequest extends SimulateRequest {
   public rounds?: bigint[];
 
   /**
+   * If true, the transactions are evaluated as sent at every round, even
+   * outside their `firstValid`..`lastValid` window: the round-range check and
+   * the check for a transaction ID confirmed earlier are skipped, so `rounds`
+   * can be more than `MaxTxnLife` (1000) apart. Leases, duplicates in the
+   * block, the genesis ID and hash, well-formedness and fees are still
+   * checked. Programs see the original window, so `block`, the
+   * `FirstValidTime` field and inner transactions stay tied to it, and reading a
+   * block after the start round fails. Only with `rounds`, and not with
+   * `rewriteValidityWindow`.
+   */
+  public skipValidityWindow?: boolean;
+
+  /**
+   * If true, at every round each top-level transaction's window is moved to
+   * the simulated block, keeping its width, and valid group IDs are
+   * recomputed, so `rounds` can be more than `MaxTxnLife` (1000) apart.
+   * Transaction IDs change, so the signatures over every changed transaction
+   * (sig, msig, PQ signature bytes) are dropped: requires
+   * `allowEmptySignatures`. Logic signatures are kept. The results echo the
+   * rewritten transactions, so do not match them by transaction ID, and give
+   * transactions that differ only by their window distinct notes, or the
+   * later one is a duplicate. Only with `rounds`, and not with
+   * `skipValidityWindow`.
+   */
+  public rewriteValidityWindow?: boolean;
+
+  /**
+   * If set, the simulated round runs this consensus protocol, as if an
+   * upgrade to it took effect right after the start round: its programs,
+   * limits, fees and other parameters apply, to programs deployed earlier
+   * too. A consensus version string, `v24` to `v42` for a mainline one,
+   * `latest` (the protocol of the block after the node's latest one) or
+   * `future` (vFuture, only with `EnableDeveloperAPI`). It must be a later
+   * protocol of the chain than the one the round really ran. The response's
+   * `protocolOverride` (each round result's, with `rounds`) says how it
+   * applied and where the simulation differs from what the chain recorded.
+   * An unknown name, or `future` without the developer API, fails the whole
+   * request; a protocol that is not a later one of the chain is a 400, or
+   * that round's `error` with `rounds`; the protocol the round really ran
+   * is simulated as it is, with `applied` false.
+   */
+  public protocol?: string;
+
+  /**
    * Creates a new `DTSimulateRequest` object.
    * @param parallelGroups - If true, every transaction group is simulated alone
    * against the state at the start round, concurrently.
    * @param rounds - If not empty, simulate the request once per listed round.
+   * @param skipValidityWindow - If true, evaluate the transactions as sent at
+   * every round, outside their validity window. Only with `rounds`.
+   * @param rewriteValidityWindow - If true, move each transaction's validity
+   * window to the simulated block, dropping its signature. Only with `rounds`
+   * and `allowEmptySignatures`.
+   * @param protocol - The consensus protocol to simulate the round under.
    * The other parameters are those of {@link SimulateRequest}.
    */
   constructor({
     parallelGroups,
     rounds,
+    skipValidityWindow,
+    rewriteValidityWindow,
+    protocol,
     ...rest
   }: ConstructorParameters<typeof SimulateRequest>[0] & {
     parallelGroups?: boolean;
     rounds?: (number | bigint)[];
+    skipValidityWindow?: boolean;
+    rewriteValidityWindow?: boolean;
+    protocol?: string;
   }) {
     super(rest);
     this.parallelGroups = parallelGroups;
     this.rounds =
       typeof rounds === 'undefined' ? undefined : rounds.map(ensureUint64);
+    this.skipValidityWindow = skipValidityWindow;
+    this.rewriteValidityWindow = rewriteValidityWindow;
+    this.protocol = protocol;
   }
 
   /**
@@ -1682,7 +2046,13 @@ export class DTSimulateRequest extends SimulateRequest {
       fixSigners: request.fixSigners,
       round: request.round,
       ...(request instanceof DTSimulateRequest
-        ? { parallelGroups: request.parallelGroups, rounds: request.rounds }
+        ? {
+            parallelGroups: request.parallelGroups,
+            rounds: request.rounds,
+            skipValidityWindow: request.skipValidityWindow,
+            rewriteValidityWindow: request.rewriteValidityWindow,
+            protocol: request.protocol,
+          }
         : {}),
     });
   }
@@ -1744,6 +2114,9 @@ export class DTSimulateRequest extends SimulateRequest {
     const data = super.toEncodingData();
     data.set('parallel-groups', this.parallelGroups);
     data.set('rounds', this.rounds);
+    data.set('skip-validity-window', this.skipValidityWindow);
+    data.set('rewrite-validity-window', this.rewriteValidityWindow);
+    data.set('protocol', this.protocol);
     return data;
   }
 
@@ -1767,6 +2140,9 @@ export class DTSimulateRequest extends SimulateRequest {
       round: data.get('round'),
       parallelGroups: data.get('parallel-groups'),
       rounds: data.get('rounds'),
+      skipValidityWindow: data.get('skip-validity-window'),
+      rewriteValidityWindow: data.get('rewrite-validity-window'),
+      protocol: data.get('protocol'),
     });
   }
 }
@@ -1786,6 +2162,16 @@ export class DTSimulationEvalOverrides extends SimulationEvalOverrides {
           valueSchema: new OptionalSchema(new BooleanSchema()),
           omitEmpty: true,
         },
+        {
+          key: 'skip-validity-window',
+          valueSchema: new OptionalSchema(new BooleanSchema()),
+          omitEmpty: true,
+        },
+        {
+          key: 'rewrite-validity-window',
+          valueSchema: new OptionalSchema(new BooleanSchema()),
+          omitEmpty: true,
+        },
       ]);
     }
     return this.dtEncodingSchemaValue;
@@ -1798,19 +2184,41 @@ export class DTSimulationEvalOverrides extends SimulationEvalOverrides {
   public parallelGroups?: boolean;
 
   /**
+   * If true, transactions were evaluated outside their validity window, as
+   * sent.
+   */
+  public skipValidityWindow?: boolean;
+
+  /**
+   * If true, transactions' validity windows were moved to the simulated
+   * block, and their signatures over the transaction dropped.
+   */
+  public rewriteValidityWindow?: boolean;
+
+  /**
    * Creates a new `DTSimulationEvalOverrides` object.
    * @param parallelGroups - If true, every transaction group was simulated
    * alone against the state at the start round.
+   * @param skipValidityWindow - If true, transactions were evaluated outside
+   * their validity window.
+   * @param rewriteValidityWindow - If true, transactions' validity windows
+   * were moved to the simulated block.
    * The other parameters are those of {@link SimulationEvalOverrides}.
    */
   constructor({
     parallelGroups,
+    skipValidityWindow,
+    rewriteValidityWindow,
     ...rest
   }: ConstructorParameters<typeof SimulationEvalOverrides>[0] & {
     parallelGroups?: boolean;
+    skipValidityWindow?: boolean;
+    rewriteValidityWindow?: boolean;
   }) {
     super(rest);
     this.parallelGroups = parallelGroups;
+    this.skipValidityWindow = skipValidityWindow;
+    this.rewriteValidityWindow = rewriteValidityWindow;
   }
 
   // eslint-disable-next-line class-methods-use-this
@@ -1821,6 +2229,8 @@ export class DTSimulationEvalOverrides extends SimulationEvalOverrides {
   toEncodingData(): Map<string, unknown> {
     const data = super.toEncodingData();
     data.set('parallel-groups', this.parallelGroups);
+    data.set('skip-validity-window', this.skipValidityWindow);
+    data.set('rewrite-validity-window', this.rewriteValidityWindow);
     return data;
   }
 
@@ -1836,6 +2246,8 @@ export class DTSimulationEvalOverrides extends SimulationEvalOverrides {
       maxLogCalls: data.get('max-log-calls'),
       maxLogSize: data.get('max-log-size'),
       parallelGroups: data.get('parallel-groups'),
+      skipValidityWindow: data.get('skip-validity-window'),
+      rewriteValidityWindow: data.get('rewrite-validity-window'),
     });
   }
 }
@@ -1861,6 +2273,13 @@ export class SimulateRoundResult implements Encodable {
         {
           key: 'initial-states',
           valueSchema: new OptionalSchema(SimulateInitialStates.encodingSchema),
+          omitEmpty: true,
+        },
+        {
+          key: 'protocol-override',
+          valueSchema: new OptionalSchema(
+            SimulateProtocolOverride.encodingSchema
+          ),
           omitEmpty: true,
         },
         {
@@ -1892,6 +2311,12 @@ export class SimulateRoundResult implements Encodable {
   public initialStates?: SimulateInitialStates;
 
   /**
+   * With the request's `protocol`: how it applied at this round. Undefined
+   * when `error` is set.
+   */
+  public protocolOverride?: SimulateProtocolOverride;
+
+  /**
    * If set, the request could not be simulated at this round (the round is not
    * available, or a group is invalid under that round's protocol), and why.
    */
@@ -1904,6 +2329,8 @@ export class SimulateRoundResult implements Encodable {
    * simulated at this round.
    * @param initialStates - Initial states of resources that were accessed
    * during simulation at this round.
+   * @param protocolOverride - How the request's `protocol` applied at this
+   * round.
    * @param error - If set, the request could not be simulated at this round,
    * and why.
    */
@@ -1911,16 +2338,19 @@ export class SimulateRoundResult implements Encodable {
     lastRound,
     txnGroups,
     initialStates,
+    protocolOverride,
     error,
   }: {
     lastRound: number | bigint;
     txnGroups: SimulateTransactionGroupResult[];
     initialStates?: SimulateInitialStates;
+    protocolOverride?: SimulateProtocolOverride;
     error?: string;
   }) {
     this.lastRound = ensureBigInt(lastRound);
     this.txnGroups = txnGroups;
     this.initialStates = initialStates;
+    this.protocolOverride = protocolOverride;
     this.error = error;
   }
 
@@ -1939,6 +2369,12 @@ export class SimulateRoundResult implements Encodable {
           ? this.initialStates.toEncodingData()
           : undefined,
       ],
+      [
+        'protocol-override',
+        typeof this.protocolOverride !== 'undefined'
+          ? this.protocolOverride.toEncodingData()
+          : undefined,
+      ],
       ['error', this.error],
     ]);
   }
@@ -1955,6 +2391,12 @@ export class SimulateRoundResult implements Encodable {
       initialStates:
         typeof data.get('initial-states') !== 'undefined'
           ? SimulateInitialStates.fromEncodingData(data.get('initial-states'))
+          : undefined,
+      protocolOverride:
+        typeof data.get('protocol-override') !== 'undefined'
+          ? SimulateProtocolOverride.fromEncodingData(
+              data.get('protocol-override')
+            )
           : undefined,
       error: data.get('error'),
     });
@@ -2012,13 +2454,22 @@ export class DTSimulateResponse extends SimulateResponse {
             : entry
         )
       );
-      (this.dtEncodingSchemaValue as NamedMapSchema).pushEntries({
-        key: 'round-results',
-        valueSchema: new OptionalSchema(
-          new ArraySchema(SimulateRoundResult.encodingSchema)
-        ),
-        omitEmpty: true,
-      });
+      (this.dtEncodingSchemaValue as NamedMapSchema).pushEntries(
+        {
+          key: 'protocol-override',
+          valueSchema: new OptionalSchema(
+            SimulateProtocolOverride.encodingSchema
+          ),
+          omitEmpty: true,
+        },
+        {
+          key: 'round-results',
+          valueSchema: new OptionalSchema(
+            new ArraySchema(SimulateRoundResult.encodingSchema)
+          ),
+          omitEmpty: true,
+        }
+      );
     }
     return this.dtEncodingSchemaValue;
   }
@@ -2028,6 +2479,12 @@ export class DTSimulateResponse extends SimulateResponse {
    * `parallelGroups`.
    */
   public evalOverrides?: DTSimulationEvalOverrides;
+
+  /**
+   * With the request's `protocol` and no `rounds`: how it applied. With
+   * `rounds`, each round result has its own instead.
+   */
+  public protocolOverride?: SimulateProtocolOverride;
 
   /**
    * Present when the request listed `rounds`: one result per entry, in the
@@ -2044,6 +2501,7 @@ export class DTSimulateResponse extends SimulateResponse {
   /**
    * Creates a new `DTSimulateResponse` object. The parameters are
    * those of {@link SimulateResponse}, with the fork's eval overrides.
+   * @param protocolOverride - With `protocol` and no `rounds`, how it applied.
    * @param roundResults - With `rounds`, one result per entry.
    */
   constructor(
@@ -2052,11 +2510,13 @@ export class DTSimulateResponse extends SimulateResponse {
       'evalOverrides'
     > & {
       evalOverrides?: DTSimulationEvalOverrides;
+      protocolOverride?: SimulateProtocolOverride;
       roundResults?: SimulateRoundResult[];
     }
   ) {
     super(args);
     this.evalOverrides = args.evalOverrides;
+    this.protocolOverride = args.protocolOverride;
     this.roundResults = args.roundResults;
   }
 
@@ -2188,6 +2648,12 @@ export class DTSimulateResponse extends SimulateResponse {
   toEncodingData(): Map<string, unknown> {
     const data = super.toEncodingData();
     data.set(
+      'protocol-override',
+      typeof this.protocolOverride !== 'undefined'
+        ? this.protocolOverride.toEncodingData()
+        : undefined
+    );
+    data.set(
       'round-results',
       typeof this.roundResults !== 'undefined'
         ? this.roundResults.map((v) => v.toEncodingData())
@@ -2211,6 +2677,12 @@ export class DTSimulateResponse extends SimulateResponse {
         typeof data.get('eval-overrides') !== 'undefined'
           ? DTSimulationEvalOverrides.fromEncodingData(
               data.get('eval-overrides')
+            )
+          : undefined,
+      protocolOverride:
+        typeof data.get('protocol-override') !== 'undefined'
+          ? SimulateProtocolOverride.fromEncodingData(
+              data.get('protocol-override')
             )
           : undefined,
       roundResults:

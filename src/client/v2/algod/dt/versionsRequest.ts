@@ -2,10 +2,7 @@ import JSONRequest from '../../jsonrequest.js';
 import { HTTPClientResponse } from '../../../client.js';
 import { Query } from '../../../baseHTTPClient.js';
 import { ensureBigInt } from '../../../../utils/utils.js';
-import {
-  isMissingVersionsRoute,
-  TimeTravelUnsupportedError,
-} from './errors.js';
+import { isMissingVersionsRoute, DTUnsupportedError } from './errors.js';
 
 export type VersionsOrder = 'asc' | 'desc';
 export type VersionsInclude = 'values';
@@ -17,7 +14,7 @@ export type VersionsInclude = 'values';
  *
  * On a node without time travel the routes don't exist (they are only
  * registered with `EnableTimeTravel`), which is thrown as a
- * {@link TimeTravelUnsupportedError} with the HTTP error as its `cause`. The endpoints never 404 otherwise: an
+ * {@link DTUnsupportedError} with the HTTP error as its `cause`. The endpoints never 404 otherwise: an
  * object that never existed in the range has no versions.
  */
 export default abstract class VersionsRequest<
@@ -157,7 +154,7 @@ export default abstract class VersionsRequest<
       });
     } catch (err) {
       if (isMissingVersionsRoute(err)) {
-        throw new TimeTravelUnsupportedError(
+        throw new DTUnsupportedError(
           `${this.path()} does not exist: the node does not have time travel (EnableTimeTravel)`,
           { cause: err }
         );

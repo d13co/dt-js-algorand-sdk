@@ -15,9 +15,9 @@ export default class GetApplicationByIDAt extends GetApplicationByID {
    *
    * The response does not say which round it is for, so it cannot be checked:
    * stock algod ignores this parameter and answers for the latest round. Use
-   * `supportsTimeTravel()` to find out whether the node has time travel. A
+   * `supportsDT()` to find out whether the node has time travel. A
    * time-travel build without `EnableTimeTravel` rejects the round, which is
-   * thrown as a {@link TimeTravelUnsupportedError}.
+   * thrown as a {@link DTUnsupportedError}.
    *
    * @param round - The round to answer at.
    * @category query

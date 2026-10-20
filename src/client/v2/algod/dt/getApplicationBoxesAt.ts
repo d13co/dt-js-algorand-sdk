@@ -10,7 +10,7 @@ import { checkRound, readAtRound } from './errors.js';
  *
  * Without time travel, algod keeps only its last few rounds (`MaxAcctLookback`,
  * default 4) and answers 400 `given round is no longer available` for older
- * ones, which is thrown as a {@link TimeTravelUnsupportedError}.
+ * ones, which is thrown as a {@link DTUnsupportedError}.
  */
 export default class GetApplicationBoxesAt extends GetApplicationBoxes {
   private requestedRound?: bigint;

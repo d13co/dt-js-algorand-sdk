@@ -4,34 +4,31 @@ import SimulateRawTransactions, {
   setSimulateTransactionsHeaders,
 } from '../simulateTransaction.js';
 import { SimulateRequest } from '../models/types.js';
-import {
-  TimeTravelSimulateRequest,
-  TimeTravelSimulateResponse,
-} from './models.js';
+import { DTSimulateRequest, DTSimulateResponse } from './models.js';
 import { ensureUint64 } from '../../../../utils/utils.js';
 import {
   SimulateFeatures,
   simulateWithFeatures,
-  TimeTravelUnsupportedError,
+  DTUnsupportedError,
 } from './errors.js';
 
 /**
  * {@link SimulateRawTransactions} with the fork's simulate features: several
  * transaction groups per request, `parallelGroups` and `rounds`. Requires a
  * node built from the time-travel fork; a stock node's rejection of these
- * features is thrown as a {@link TimeTravelUnsupportedError}.
+ * features is thrown as a {@link DTUnsupportedError}.
  *
  * The request is copied when this is made (its group list too, not the groups
  * themselves) and encoded when it is sent, so the builders apply.
  */
 export default class SimulateTransactionsAt extends SimulateRawTransactions {
-  private request: TimeTravelSimulateRequest;
+  private request: DTSimulateRequest;
 
   constructor(c: HTTPClient, request: SimulateRequest) {
     // The base class encodes the request it is given; this class encodes its
     // own copy when it is sent, so give the base an empty one.
     super(c, new SimulateRequest({ txnGroups: [] }));
-    this.request = TimeTravelSimulateRequest.from(request);
+    this.request = DTSimulateRequest.from(request);
   }
 
   /**
@@ -89,23 +86,23 @@ export default class SimulateTransactionsAt extends SimulateRawTransactions {
   }
 
   /**
-   * Throws a {@link TimeTravelUnsupportedError} if the request listed rounds
+   * Throws a {@link DTUnsupportedError} if the request listed rounds
    * and the response does not have one result per entry, each for the round
    * asked for (any round for a 0 entry, which the node resolves).
    */
-  private checkRoundResults(data: TimeTravelSimulateResponse) {
+  private checkRoundResults(data: DTSimulateResponse) {
     const rounds = this.requestedRounds();
     if (!rounds) return;
     const results = data.roundResults;
     if (results === undefined || results.length !== rounds.length) {
-      throw new TimeTravelUnsupportedError(
+      throw new DTUnsupportedError(
         `Asked to simulate at ${rounds.length} rounds but the node answered with ${results === undefined ? 'no round-results' : `${results.length} round results`}; it does not support simulating at several rounds`
       );
     }
     rounds.forEach((requested, i) => {
       const returned = results[i].lastRound;
       if (requested !== BigInt(0) && returned !== requested) {
-        throw new TimeTravelUnsupportedError(
+        throw new DTUnsupportedError(
           `Round result ${i} is for round ${returned}, not the round asked for, ${requested}`,
           { requestedRound: requested, returnedRound: returned }
         );
@@ -114,16 +111,16 @@ export default class SimulateTransactionsAt extends SimulateRawTransactions {
   }
 
   /**
-   * Throws a {@link TimeTravelUnsupportedError} if the response does not have
+   * Throws a {@link DTUnsupportedError} if the response does not have
    * one group result per requested group: at the top level, or in each round
    * result without an `error`. The node returns one per group, including
    * groups it did not simulate, so results can be matched to groups by index.
    */
-  private checkGroupResults(data: TimeTravelSimulateResponse) {
+  private checkGroupResults(data: DTSimulateResponse) {
     const expected = this.request.txnGroups.length;
     const check = (actual: number, where: string) => {
       if (actual !== expected) {
-        throw new TimeTravelUnsupportedError(
+        throw new DTUnsupportedError(
           `Simulated ${expected} transaction groups but the node answered with ${actual} group results${where}`
         );
       }
@@ -164,8 +161,8 @@ export default class SimulateTransactionsAt extends SimulateRawTransactions {
     );
   }
 
-  prepare(response: HTTPClientResponse): TimeTravelSimulateResponse {
-    const data = decodeMsgpack(response.body, TimeTravelSimulateResponse);
+  prepare(response: HTTPClientResponse): DTSimulateResponse {
+    const data = decodeMsgpack(response.body, DTSimulateResponse);
     this.checkRoundResults(data);
     this.checkGroupResults(data);
     data.requestGroupCount = this.request.txnGroups.length;
@@ -180,11 +177,8 @@ export default class SimulateTransactionsAt extends SimulateRawTransactions {
   async do(
     headers?: Record<string, string>,
     customOptions?: Record<string, unknown>
-  ): Promise<TimeTravelSimulateResponse> {
-    return (await super.do(
-      headers,
-      customOptions
-    )) as TimeTravelSimulateResponse;
+  ): Promise<DTSimulateResponse> {
+    return (await super.do(headers, customOptions)) as DTSimulateResponse;
   }
 
   /**

@@ -1,35 +1,24 @@
 import { HTTPClientResponse } from '../../../client.js';
 import { ensureBigInt } from '../../../../utils/utils.js';
-import GetApplicationBoxByName from '../getApplicationBoxByName.js';
-import { Box } from '../models/types.js';
+import AccountApplicationInformation from '../accountApplicationInformation.js';
+import { AccountApplicationResponse } from '../models/types.js';
 import { checkRound, readAtRound } from './errors.js';
 
 /**
- * {@link GetApplicationBoxByName} with `round`: read the box as it was at the
- * end of a past round. Requires a time-travel algod.
- *
- * A 404 means the box did not exist at that round (not created yet, or deleted
- * by then), or the app did not exist.
+ * {@link AccountApplicationInformation} with `round`: an account's application local state as of the end of a past round.
+ * Requires a time-travel algod.
  */
-export default class GetApplicationBoxByNameAt extends GetApplicationBoxByName {
+export default class AccountApplicationInformationAt extends AccountApplicationInformation {
   private requestedRound?: bigint;
 
   /**
-   * Return the box as of the end of this round instead of the latest round.
+   * Answer as of the end of this round instead of the latest round.
    *
    * Stock algod ignores this parameter and answers for the latest round, so
    * the response is checked: a response for a different round throws a
-   * {@link TimeTravelUnsupportedError}.
+   * {@link DTUnsupportedError}.
    *
-   * #### Example
-   * ```typescript
-   * const box = await algodClient
-   *   .getApplicationBoxByName(1234, boxName)
-   *   .round(45000000)
-   *   .do();
-   * ```
-   *
-   * @param round - The round to read the box at.
+   * @param round - The round to answer at.
    * @category query
    */
   round(round: number | bigint) {
@@ -39,10 +28,10 @@ export default class GetApplicationBoxByNameAt extends GetApplicationBoxByName {
     return this;
   }
 
-  prepare(response: HTTPClientResponse): Box {
-    const box = super.prepare(response);
-    checkRound(this.requestedRound, box.round, response);
-    return box;
+  prepare(response: HTTPClientResponse): AccountApplicationResponse {
+    const data = super.prepare(response);
+    checkRound(this.requestedRound, data.round, response);
+    return data;
   }
 
   protected executeRequest(

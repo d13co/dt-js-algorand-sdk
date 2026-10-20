@@ -75,8 +75,8 @@ export * from './stateproof.js';
 export { UntypedValue } from './client/v2/untypedmodel.js';
 export * as modelsv2 from './client/v2/algod/models/types.js';
 export {
-  TimeTravelAlgodClient,
-  TimeTravelUnsupportedError,
+  DTAlgodClient,
+  DTUnsupportedError,
   VersionsOrder,
   VersionsInclude,
   AccountVersionsExclude,
@@ -89,8 +89,8 @@ export {
   DEFAULT_MAX_SIMULATE_GROUPS,
   DEFAULT_MAX_SIMULATE_ROUNDS,
   MAX_TXN_LIFE,
-} from './client/v2/algod/timeTravel/index.js';
-export * as timeTravelModels from './client/v2/algod/timeTravel/models.js';
+} from './client/v2/algod/dt/index.js';
+export * as dtModels from './client/v2/algod/dt/models.js';
 export * as indexerModels from './client/v2/indexer/models/types.js';
 export {
   mnemonicToMasterDerivationKey,

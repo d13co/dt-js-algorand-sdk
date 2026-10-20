@@ -1,17 +1,17 @@
 /* eslint-env mocha */
 /**
- * Live checks of TimeTravelAlgodClient against a real MainNet time-travel node
+ * Live checks of DTAlgodClient against a real MainNet time-travel node
  * (`EnableTimeTravel: true`). Skipped unless DT_ALGOD_SERVER is set:
  *
- *   DT_ALGOD_SERVER=http://10.114.0.27:4000 npx mocha --import=tsx tests/14.TimeTravelLive.ts
+ *   DT_ALGOD_SERVER=http://10.114.0.27:4000 npx mocha --import=tsx tests/14.DTLive.ts
  *
  * DT_ALGOD_TOKEN sets the API token, if the node needs one.
  */
 import assert from 'assert';
 import {
-  TimeTravelAlgodClient,
-  TimeTravelSimulateRequest,
-} from '../src/client/v2/algod/timeTravel/index';
+  DTAlgodClient,
+  DTSimulateRequest,
+} from '../src/client/v2/algod/dt/index';
 import { SimulateRequestTransactionGroup } from '../src/client/v2/algod/models/types';
 import { makePaymentTxnWithSuggestedParamsFromObject } from '../src/makeTxn';
 import { SignedTransaction } from '../src/signedTransaction';
@@ -41,13 +41,13 @@ const sameBytes = (a?: Uint8Array, b?: Uint8Array) =>
 describe('time travel against a live node', function liveSuite() {
   this.timeout(60_000);
 
-  let c: TimeTravelAlgodClient;
+  let c: DTAlgodClient;
   let latest: bigint;
 
   before(async function setup() {
     if (!server) this.skip();
     const url = new URL(server!);
-    c = new TimeTravelAlgodClient(
+    c = new DTAlgodClient(
       env.DT_ALGOD_TOKEN ?? '',
       `${url.protocol}//${url.hostname}`,
       url.port
@@ -58,7 +58,7 @@ describe('time travel against a live node', function liveSuite() {
   });
 
   it('supports time travel', async () => {
-    assert.strictEqual(await c.supportsTimeTravel(), true);
+    assert.strictEqual(await c.supportsDT(), true);
   });
 
   describe('reads at a round', () => {
@@ -286,7 +286,7 @@ describe('time travel against a live node', function liveSuite() {
         txns: txns.map((txn) => new SignedTransaction({ txn })),
       });
     const request = () =>
-      new TimeTravelSimulateRequest({
+      new DTSimulateRequest({
         txnGroups: [group(fund), group(spend)],
         allowEmptySignatures: true,
       });
@@ -368,7 +368,7 @@ describe('time travel against a live node', function liveSuite() {
         });
       const r = await c
         .simulateTransactions(
-          new TimeTravelSimulateRequest({
+          new DTSimulateRequest({
             // The xGov creator did not exist yet; the USDC reserve was rekeyed.
             txnGroups: [group(pay(XGOV_CREATOR)), group(pay(USDC_RESERVE))],
             allowEmptySignatures: true,

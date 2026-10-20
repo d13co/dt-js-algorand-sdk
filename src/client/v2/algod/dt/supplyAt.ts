@@ -1,24 +1,22 @@
 import { HTTPClientResponse } from '../../../client.js';
 import { ensureBigInt } from '../../../../utils/utils.js';
-import AccountApplicationsInformation from '../accountApplicationsInformation.js';
-import { AccountApplicationsInformationResponse } from '../models/types.js';
+import Supply from '../supply.js';
+import { SupplyResponse } from '../models/types.js';
 import { checkRound, readAtRound } from './errors.js';
 
 /**
- * {@link AccountApplicationsInformation} with `round`: an account's applications as of the end of a past round.
+ * {@link Supply} with `round`: the supply as of the end of a past round.
  * Requires a time-travel algod.
  */
-export default class AccountApplicationsInformationAt extends AccountApplicationsInformation {
+export default class SupplyAt extends Supply {
   private requestedRound?: bigint;
 
   /**
    * Answer as of the end of this round instead of the latest round.
-   * Pass the same round on every page: past rounds never change, so the pages
-   * fit together.
    *
    * Stock algod ignores this parameter and answers for the latest round, so
    * the response is checked: a response for a different round throws a
-   * {@link TimeTravelUnsupportedError}.
+   * {@link DTUnsupportedError}.
    *
    * @param round - The round to answer at.
    * @category query
@@ -30,11 +28,14 @@ export default class AccountApplicationsInformationAt extends AccountApplication
     return this;
   }
 
-  prepare(
-    response: HTTPClientResponse
-  ): AccountApplicationsInformationResponse {
+  prepare(response: HTTPClientResponse): SupplyResponse {
     const data = super.prepare(response);
-    checkRound(this.requestedRound, data.round, response);
+    checkRound(
+      this.requestedRound,
+      data.currentRound,
+      response,
+      'current_round'
+    );
     return data;
   }
 

@@ -1,14 +1,14 @@
 import { HTTPClientResponse } from '../../../client.js';
 import { ensureBigInt } from '../../../../utils/utils.js';
-import Supply from '../supply.js';
-import { SupplyResponse } from '../models/types.js';
+import AccountInformation from '../accountInformation.js';
+import { Account } from '../models/types.js';
 import { checkRound, readAtRound } from './errors.js';
 
 /**
- * {@link Supply} with `round`: the supply as of the end of a past round.
+ * {@link AccountInformation} with `round`: account information as of the end of a past round.
  * Requires a time-travel algod.
  */
-export default class SupplyAt extends Supply {
+export default class AccountInformationAt extends AccountInformation {
   private requestedRound?: bigint;
 
   /**
@@ -16,7 +16,7 @@ export default class SupplyAt extends Supply {
    *
    * Stock algod ignores this parameter and answers for the latest round, so
    * the response is checked: a response for a different round throws a
-   * {@link TimeTravelUnsupportedError}.
+   * {@link DTUnsupportedError}.
    *
    * @param round - The round to answer at.
    * @category query
@@ -28,14 +28,9 @@ export default class SupplyAt extends Supply {
     return this;
   }
 
-  prepare(response: HTTPClientResponse): SupplyResponse {
+  prepare(response: HTTPClientResponse): Account {
     const data = super.prepare(response);
-    checkRound(
-      this.requestedRound,
-      data.currentRound,
-      response,
-      'current_round'
-    );
+    checkRound(this.requestedRound, data.round, response);
     return data;
   }
 

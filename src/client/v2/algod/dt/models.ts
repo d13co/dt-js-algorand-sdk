@@ -1606,12 +1606,12 @@ function entriesOf(schema: Schema): NamedMapEntry[] {
  * every later group is then reported as not simulated. With `parallelGroups`,
  * every group is simulated alone against the state at the start round.
  */
-export class TimeTravelSimulateRequest extends SimulateRequest {
-  private static ttEncodingSchemaValue: Schema | undefined;
+export class DTSimulateRequest extends SimulateRequest {
+  private static dtEncodingSchemaValue: Schema | undefined;
 
   static get encodingSchema(): Schema {
-    if (!this.ttEncodingSchemaValue) {
-      this.ttEncodingSchemaValue = new NamedMapSchema([
+    if (!this.dtEncodingSchemaValue) {
+      this.dtEncodingSchemaValue = new NamedMapSchema([
         ...entriesOf(SimulateRequest.encodingSchema),
         {
           key: 'parallel-groups',
@@ -1625,7 +1625,7 @@ export class TimeTravelSimulateRequest extends SimulateRequest {
         },
       ]);
     }
-    return this.ttEncodingSchemaValue;
+    return this.dtEncodingSchemaValue;
   }
 
   /**
@@ -1647,7 +1647,7 @@ export class TimeTravelSimulateRequest extends SimulateRequest {
   public rounds?: bigint[];
 
   /**
-   * Creates a new `TimeTravelSimulateRequest` object.
+   * Creates a new `DTSimulateRequest` object.
    * @param parallelGroups - If true, every transaction group is simulated alone
    * against the state at the start round, concurrently.
    * @param rounds - If not empty, simulate the request once per listed round.
@@ -1671,8 +1671,8 @@ export class TimeTravelSimulateRequest extends SimulateRequest {
    * A copy of a {@link SimulateRequest}, keeping the fork fields if it has
    * them.
    */
-  static from(request: SimulateRequest): TimeTravelSimulateRequest {
-    return new TimeTravelSimulateRequest({
+  static from(request: SimulateRequest): DTSimulateRequest {
+    return new DTSimulateRequest({
       txnGroups: [...request.txnGroups],
       allowEmptySignatures: request.allowEmptySignatures,
       allowMoreLogging: request.allowMoreLogging,
@@ -1681,7 +1681,7 @@ export class TimeTravelSimulateRequest extends SimulateRequest {
       extraOpcodeBudget: request.extraOpcodeBudget,
       fixSigners: request.fixSigners,
       round: request.round,
-      ...(request instanceof TimeTravelSimulateRequest
+      ...(request instanceof DTSimulateRequest
         ? { parallelGroups: request.parallelGroups, rounds: request.rounds }
         : {}),
     });
@@ -1700,7 +1700,7 @@ export class TimeTravelSimulateRequest extends SimulateRequest {
    *
    * #### Example
    * ```typescript
-   * const request = TimeTravelSimulateRequest.fromTransactions(
+   * const request = DTSimulateRequest.fromTransactions(
    *   [group1Txns, group2Txns],
    *   { allowUnnamedResources: true, parallelGroups: true }
    * );
@@ -1713,10 +1713,10 @@ export class TimeTravelSimulateRequest extends SimulateRequest {
   static fromTransactions(
     groups: Transaction[][],
     fields: Omit<
-      ConstructorParameters<typeof TimeTravelSimulateRequest>[0],
+      ConstructorParameters<typeof DTSimulateRequest>[0],
       'txnGroups'
     > = {}
-  ): TimeTravelSimulateRequest {
+  ): DTSimulateRequest {
     const txnGroups = groups.map((txns, i) => {
       if (txns.length === 0) {
         throw new Error(`Transaction group ${i} is empty`);
@@ -1728,7 +1728,7 @@ export class TimeTravelSimulateRequest extends SimulateRequest {
         txns: txns.map((txn) => new SignedTransaction({ txn })),
       });
     });
-    return new TimeTravelSimulateRequest({
+    return new DTSimulateRequest({
       allowEmptySignatures: true,
       ...fields,
       txnGroups,
@@ -1737,7 +1737,7 @@ export class TimeTravelSimulateRequest extends SimulateRequest {
 
   // eslint-disable-next-line class-methods-use-this
   getEncodingSchema(): Schema {
-    return TimeTravelSimulateRequest.encodingSchema;
+    return DTSimulateRequest.encodingSchema;
   }
 
   toEncodingData(): Map<string, unknown> {
@@ -1747,11 +1747,11 @@ export class TimeTravelSimulateRequest extends SimulateRequest {
     return data;
   }
 
-  static fromEncodingData(data: unknown): TimeTravelSimulateRequest {
+  static fromEncodingData(data: unknown): DTSimulateRequest {
     if (!(data instanceof Map)) {
-      throw new Error(`Invalid decoded TimeTravelSimulateRequest: ${data}`);
+      throw new Error(`Invalid decoded DTSimulateRequest: ${data}`);
     }
-    return new TimeTravelSimulateRequest({
+    return new DTSimulateRequest({
       txnGroups: (data.get('txn-groups') ?? []).map((v: unknown) =>
         SimulateRequestTransactionGroup.fromEncodingData(v)
       ),
@@ -1774,12 +1774,12 @@ export class TimeTravelSimulateRequest extends SimulateRequest {
 /**
  * A {@link SimulationEvalOverrides} with the fork's simulate fields.
  */
-export class TimeTravelSimulationEvalOverrides extends SimulationEvalOverrides {
-  private static ttEncodingSchemaValue: Schema | undefined;
+export class DTSimulationEvalOverrides extends SimulationEvalOverrides {
+  private static dtEncodingSchemaValue: Schema | undefined;
 
   static get encodingSchema(): Schema {
-    if (!this.ttEncodingSchemaValue) {
-      this.ttEncodingSchemaValue = new NamedMapSchema([
+    if (!this.dtEncodingSchemaValue) {
+      this.dtEncodingSchemaValue = new NamedMapSchema([
         ...entriesOf(SimulationEvalOverrides.encodingSchema),
         {
           key: 'parallel-groups',
@@ -1788,7 +1788,7 @@ export class TimeTravelSimulationEvalOverrides extends SimulationEvalOverrides {
         },
       ]);
     }
-    return this.ttEncodingSchemaValue;
+    return this.dtEncodingSchemaValue;
   }
 
   /**
@@ -1798,7 +1798,7 @@ export class TimeTravelSimulationEvalOverrides extends SimulationEvalOverrides {
   public parallelGroups?: boolean;
 
   /**
-   * Creates a new `TimeTravelSimulationEvalOverrides` object.
+   * Creates a new `DTSimulationEvalOverrides` object.
    * @param parallelGroups - If true, every transaction group was simulated
    * alone against the state at the start round.
    * The other parameters are those of {@link SimulationEvalOverrides}.
@@ -1815,7 +1815,7 @@ export class TimeTravelSimulationEvalOverrides extends SimulationEvalOverrides {
 
   // eslint-disable-next-line class-methods-use-this
   getEncodingSchema(): Schema {
-    return TimeTravelSimulationEvalOverrides.encodingSchema;
+    return DTSimulationEvalOverrides.encodingSchema;
   }
 
   toEncodingData(): Map<string, unknown> {
@@ -1824,13 +1824,11 @@ export class TimeTravelSimulationEvalOverrides extends SimulationEvalOverrides {
     return data;
   }
 
-  static fromEncodingData(data: unknown): TimeTravelSimulationEvalOverrides {
+  static fromEncodingData(data: unknown): DTSimulationEvalOverrides {
     if (!(data instanceof Map)) {
-      throw new Error(
-        `Invalid decoded TimeTravelSimulationEvalOverrides: ${data}`
-      );
+      throw new Error(`Invalid decoded DTSimulationEvalOverrides: ${data}`);
     }
-    return new TimeTravelSimulationEvalOverrides({
+    return new DTSimulationEvalOverrides({
       allowEmptySignatures: data.get('allow-empty-signatures'),
       allowUnnamedResources: data.get('allow-unnamed-resources'),
       extraOpcodeBudget: data.get('extra-opcode-budget'),
@@ -1968,7 +1966,7 @@ const NOT_SIMULATED_PREFIX = 'not simulated: ';
 
 /**
  * The outcome of one transaction group at one round of a simulate response,
- * from {@link TimeTravelSimulateResponse.groupResult}.
+ * from {@link DTSimulateResponse.groupResult}.
  */
 export type SimulateGroupOutcome = {
   /** The index into the response's `roundResults`, or 0 without rounds. */
@@ -1997,24 +1995,24 @@ export type SimulateGroupOutcome = {
  * the first entry that was simulated, or from the request when no round could
  * be simulated.
  */
-export class TimeTravelSimulateResponse extends SimulateResponse {
-  private static ttEncodingSchemaValue: Schema | undefined;
+export class DTSimulateResponse extends SimulateResponse {
+  private static dtEncodingSchemaValue: Schema | undefined;
 
   static get encodingSchema(): Schema {
-    if (!this.ttEncodingSchemaValue) {
-      this.ttEncodingSchemaValue = new NamedMapSchema(
+    if (!this.dtEncodingSchemaValue) {
+      this.dtEncodingSchemaValue = new NamedMapSchema(
         entriesOf(SimulateResponse.encodingSchema).map((entry) =>
           entry.key === 'eval-overrides'
             ? {
                 ...entry,
                 valueSchema: new OptionalSchema(
-                  TimeTravelSimulationEvalOverrides.encodingSchema
+                  DTSimulationEvalOverrides.encodingSchema
                 ),
               }
             : entry
         )
       );
-      (this.ttEncodingSchemaValue as NamedMapSchema).pushEntries({
+      (this.dtEncodingSchemaValue as NamedMapSchema).pushEntries({
         key: 'round-results',
         valueSchema: new OptionalSchema(
           new ArraySchema(SimulateRoundResult.encodingSchema)
@@ -2022,14 +2020,14 @@ export class TimeTravelSimulateResponse extends SimulateResponse {
         omitEmpty: true,
       });
     }
-    return this.ttEncodingSchemaValue;
+    return this.dtEncodingSchemaValue;
   }
 
   /**
    * The parameters and limits overridden during simulation, including
    * `parallelGroups`.
    */
-  public evalOverrides?: TimeTravelSimulationEvalOverrides;
+  public evalOverrides?: DTSimulationEvalOverrides;
 
   /**
    * Present when the request listed `rounds`: one result per entry, in the
@@ -2044,7 +2042,7 @@ export class TimeTravelSimulateResponse extends SimulateResponse {
   public requestGroupCount?: number;
 
   /**
-   * Creates a new `TimeTravelSimulateResponse` object. The parameters are
+   * Creates a new `DTSimulateResponse` object. The parameters are
    * those of {@link SimulateResponse}, with the fork's eval overrides.
    * @param roundResults - With `rounds`, one result per entry.
    */
@@ -2053,7 +2051,7 @@ export class TimeTravelSimulateResponse extends SimulateResponse {
       ConstructorParameters<typeof SimulateResponse>[0],
       'evalOverrides'
     > & {
-      evalOverrides?: TimeTravelSimulationEvalOverrides;
+      evalOverrides?: DTSimulationEvalOverrides;
       roundResults?: SimulateRoundResult[];
     }
   ) {
@@ -2161,7 +2159,7 @@ export class TimeTravelSimulateResponse extends SimulateResponse {
   /**
    * The outcome of every transaction group at every round, indexed
    * `[roundIndex][groupIndex]`, with a single row when the request listed no
-   * rounds. See {@link TimeTravelSimulateResponse.groupResult}.
+   * rounds. See {@link DTSimulateResponse.groupResult}.
    *
    * @param groupCount - How many groups the request had. Defaults to
    * `requestGroupCount`, which `simulateTransactions().do()` sets. For a
@@ -2184,7 +2182,7 @@ export class TimeTravelSimulateResponse extends SimulateResponse {
 
   // eslint-disable-next-line class-methods-use-this
   getEncodingSchema(): Schema {
-    return TimeTravelSimulateResponse.encodingSchema;
+    return DTSimulateResponse.encodingSchema;
   }
 
   toEncodingData(): Map<string, unknown> {
@@ -2198,12 +2196,12 @@ export class TimeTravelSimulateResponse extends SimulateResponse {
     return data;
   }
 
-  static fromEncodingData(data: unknown): TimeTravelSimulateResponse {
+  static fromEncodingData(data: unknown): DTSimulateResponse {
     if (!(data instanceof Map)) {
-      throw new Error(`Invalid decoded TimeTravelSimulateResponse: ${data}`);
+      throw new Error(`Invalid decoded DTSimulateResponse: ${data}`);
     }
     const base = SimulateResponse.fromEncodingData(data);
-    return new TimeTravelSimulateResponse({
+    return new DTSimulateResponse({
       lastRound: base.lastRound,
       txnGroups: base.txnGroups,
       version: base.version,
@@ -2211,7 +2209,7 @@ export class TimeTravelSimulateResponse extends SimulateResponse {
       initialStates: base.initialStates,
       evalOverrides:
         typeof data.get('eval-overrides') !== 'undefined'
-          ? TimeTravelSimulationEvalOverrides.fromEncodingData(
+          ? DTSimulationEvalOverrides.fromEncodingData(
               data.get('eval-overrides')
             )
           : undefined,

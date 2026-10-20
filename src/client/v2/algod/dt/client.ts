@@ -19,7 +19,7 @@ import GetApplicationBoxesAt from './getApplicationBoxesAt.js';
 import GetApplicationBoxVersions from './getApplicationBoxVersions.js';
 import GetApplicationBoxesVersions from './getApplicationBoxesVersions.js';
 import SimulateTransactionsAt from './simulateTransactionsAt.js';
-import { TimeTravelUnsupportedError } from './errors.js';
+import { DTUnsupportedError } from './errors.js';
 import {
   SimulateRequest,
   SimulateRequestTransactionGroup,
@@ -37,34 +37,34 @@ import { decodeMsgpack } from '../../../../encoding/encoding.js';
  *
  * #### Example
  * ```typescript
- * const algodClient = new algosdk.TimeTravelAlgodClient(token, server, port);
+ * const algodClient = new algosdk.DTAlgodClient(token, server, port);
  * const box = await algodClient
  *   .getApplicationBoxByName(1234, boxName)
  *   .round(45000000)
  *   .do();
  * ```
  */
-export class TimeTravelAlgodClient extends AlgodClient {
+export class DTAlgodClient extends AlgodClient {
   /**
    * What this build of the client supports, for code that finds
-   * `TimeTravelAlgodClient` at runtime on an algosdk that may be stock or an
+   * `DTAlgodClient` at runtime on an algosdk that may be stock or an
    * older fork build:
    * - `reads-at-round`: `.round()` on the account, asset, application, box and
    *   supply reads;
    * - `versions`: the `...Versions` methods;
    * - `simulate-groups`, `parallel-groups`, `simulate-rounds`: several groups,
    *   `parallelGroups()` and `rounds()` in `simulateTransactions`;
-   * - `from`: {@link TimeTravelAlgodClient.from};
+   * - `from`: {@link DTAlgodClient.from};
    * - `group-results`: `groupResult()` / `groupResults()` on the simulate
    *   response;
-   * - `from-transactions`: `TimeTravelSimulateRequest.fromTransactions`;
+   * - `from-transactions`: `DTSimulateRequest.fromTransactions`;
    * - `pack-rounds`: `packSimulateRounds`.
    *
    * #### Example
    * ```typescript
-   * const TT = (algosdk as any).TimeTravelAlgodClient;
-   * if (TT?.features?.includes('group-results')) {
-   *   const client = TT.from(algod);
+   * const DT = (algosdk as any).DTAlgodClient;
+   * if (DT?.features?.includes('group-results')) {
+   *   const client = DT.from(algod);
    * }
    * ```
    */
@@ -80,16 +80,16 @@ export class TimeTravelAlgodClient extends AlgodClient {
     'pack-rounds',
   ]);
 
-  /** The clients made by {@link TimeTravelAlgodClient.from}, by source client. */
-  private static fromCache = new WeakMap<object, TimeTravelAlgodClient>();
+  /** The clients made by {@link DTAlgodClient.from}, by source client. */
+  private static fromCache = new WeakMap<object, DTAlgodClient>();
 
   /**
-   * A `TimeTravelAlgodClient` that sends its requests through an existing
+   * A `DTAlgodClient` that sends its requests through an existing
    * {@link AlgodClient}'s HTTP client: same server, token, headers and custom
    * `BaseHTTPClient`, if any. Returns `algod` itself if it already is a
-   * `TimeTravelAlgodClient`. Calling it again with the same client returns
-   * the same `TimeTravelAlgodClient`, so what it caches, such as
-   * `supportsTimeTravel()`, is kept.
+   * `DTAlgodClient`. Calling it again with the same client returns
+   * the same `DTAlgodClient`, so what it caches, such as
+   * `supportsDT()`, is kept.
    *
    * `algod` may come from another copy of algosdk (it is read by shape, not
    * `instanceof`), but transactions and models passed to this client must come
@@ -97,7 +97,7 @@ export class TimeTravelAlgodClient extends AlgodClient {
    *
    * #### Example
    * ```typescript
-   * const algodClient = algosdk.TimeTravelAlgodClient.from(
+   * const algodClient = algosdk.DTAlgodClient.from(
    *   algorand.client.algod
    * );
    * ```
@@ -105,9 +105,9 @@ export class TimeTravelAlgodClient extends AlgodClient {
    * @param algod - The client to share the connection of.
    * @throws TypeError if `algod` is not shaped like an `AlgodClient`.
    */
-  static from(algod: AlgodClient | { c: unknown }): TimeTravelAlgodClient {
-    if (algod instanceof TimeTravelAlgodClient) return algod;
-    const cached = TimeTravelAlgodClient.fromCache.get(algod);
+  static from(algod: AlgodClient | { c: unknown }): DTAlgodClient {
+    if (algod instanceof DTAlgodClient) return algod;
+    const cached = DTAlgodClient.fromCache.get(algod);
     if (cached) return cached;
     const bc = (algod as unknown as { c?: { bc?: Partial<BaseHTTPClient> } })?.c
       ?.bc;
@@ -117,15 +117,15 @@ export class TimeTravelAlgodClient extends AlgodClient {
       typeof bc.delete !== 'function'
     ) {
       throw new TypeError(
-        'TimeTravelAlgodClient.from expects an AlgodClient: found no HTTP client with get, post and delete on it'
+        'DTAlgodClient.from expects an AlgodClient: found no HTTP client with get, post and delete on it'
       );
     }
-    const client = new TimeTravelAlgodClient(bc as BaseHTTPClient, '');
-    TimeTravelAlgodClient.fromCache.set(algod, client);
+    const client = new DTAlgodClient(bc as BaseHTTPClient, '');
+    DTAlgodClient.fromCache.set(algod, client);
     return client;
   }
 
-  private supportsTimeTravelResult?: Promise<boolean>;
+  private supportsDTResult?: Promise<boolean>;
 
   /**
    * Given an account address, return the account information, at the latest
@@ -214,7 +214,7 @@ export class TimeTravelAlgodClient extends AlgodClient {
    *
    * The response does not say which round it is for, so unlike the other
    * reads, a stock algod that ignores `.round()` cannot be detected here: it
-   * answers with the latest asset. Check `supportsTimeTravel()` first.
+   * answers with the latest asset. Check `supportsDT()` first.
    *
    * @param index - The asset ID to look up.
    * @category GET
@@ -229,7 +229,7 @@ export class TimeTravelAlgodClient extends AlgodClient {
    *
    * The response does not say which round it is for, so unlike the other
    * reads, a stock algod that ignores `.round()` cannot be detected here: it
-   * answers with the latest application. Check `supportsTimeTravel()` first.
+   * answers with the latest application. Check `supportsDT()` first.
    *
    * @param index - The application ID to look up.
    * @category GET
@@ -305,9 +305,9 @@ export class TimeTravelAlgodClient extends AlgodClient {
    * Given an application ID, list the rounds at which any of its boxes was
    * created, written or deleted, with the boxes that changed in each.
    *
-   * `supportsTimeTravel()` probes the single-box versions route, so a
+   * `supportsDT()` probes the single-box versions route, so a
    * time-travel node built before this endpoint passes it, then answers this
-   * one with a 404, thrown as a {@link TimeTravelUnsupportedError}.
+   * one with a 404, thrown as a {@link DTUnsupportedError}.
    *
    * #### Example
    * ```typescript
@@ -420,10 +420,10 @@ export class TimeTravelAlgodClient extends AlgodClient {
    *   `failureMessage` / `failedAt` (0-based). `extraOpcodeBudget` applies to
    *   each group.
    * - With `.parallelGroups()` (or `parallelGroups` on a
-   *   {@link TimeTravelSimulateRequest}), every group is simulated alone
+   *   {@link DTSimulateRequest}), every group is simulated alone
    *   against the state at the start round, concurrently.
    * - With `.rounds([...])` (or `rounds` on a
-   *   {@link TimeTravelSimulateRequest}), the request is simulated once per
+   *   {@link DTSimulateRequest}), the request is simulated once per
    *   listed round (0 is the latest), and the results are in `roundResults`,
    *   one per entry in request order. A round that cannot be simulated has an
    *   `error` in its entry instead of failing the request. The top-level
@@ -438,12 +438,12 @@ export class TimeTravelAlgodClient extends AlgodClient {
    * submitted.
    *
    * A stock node's rejection of several groups, `parallelGroups` or `rounds`
-   * is thrown as a {@link TimeTravelUnsupportedError}, as is a response
+   * is thrown as a {@link DTUnsupportedError}, as is a response
    * without one round result per listed round, each for the round asked for.
    *
    * #### Example
    * ```typescript
-   * const request = new algosdk.timeTravelModels.TimeTravelSimulateRequest({
+   * const request = new algosdk.dtModels.DTSimulateRequest({
    *   txnGroups: [fundGroup, spendGroup].map(
    *     (txns) => new algosdk.modelsv2.SimulateRequestTransactionGroup({ txns })
    *   ),
@@ -462,7 +462,7 @@ export class TimeTravelAlgodClient extends AlgodClient {
    * }
    * ```
    *
-   * @param request - The simulate request. A {@link TimeTravelSimulateRequest}
+   * @param request - The simulate request. A {@link DTSimulateRequest}
    * can set the fork's fields.
    * @category POST
    */
@@ -473,7 +473,7 @@ export class TimeTravelAlgodClient extends AlgodClient {
   /**
    * Simulate signed transactions given as msgpack bytes. Several groups can be
    * passed as an array of arrays, one array per group; see
-   * {@link TimeTravelAlgodClient.simulateTransactions} for how they run.
+   * {@link DTAlgodClient.simulateTransactions} for how they run.
    *
    * #### Example
    * ```typescript
@@ -513,21 +513,21 @@ export class TimeTravelAlgodClient extends AlgodClient {
   /**
    * Whether the node has time travel, found by probing a `/versions` route,
    * which only exists with `EnableTimeTravel`. A
-   * {@link TimeTravelUnsupportedError} (route missing, or no history) means
+   * {@link DTUnsupportedError} (route missing, or no history) means
    * no; a response, or any other 400 (the route exists but rejected the
    * probe), means yes. The answer is cached on the client. Other errors, such
    * as network failures, are rethrown and not cached.
    *
    * #### Example
    * ```typescript
-   * if (!(await algodClient.supportsTimeTravel())) {
+   * if (!(await algodClient.supportsDT())) {
    *   // fall back to an indexer
    * }
    * ```
    */
-  supportsTimeTravel(): Promise<boolean> {
-    if (!this.supportsTimeTravelResult) {
-      this.supportsTimeTravelResult = this.getApplicationBoxVersions(
+  supportsDT(): Promise<boolean> {
+    if (!this.supportsDTResult) {
+      this.supportsDTResult = this.getApplicationBoxVersions(
         0,
         new Uint8Array([0])
       )
@@ -536,14 +536,14 @@ export class TimeTravelAlgodClient extends AlgodClient {
         .then(
           () => true,
           (err) => {
-            if (err instanceof TimeTravelUnsupportedError) return false;
+            if (err instanceof DTUnsupportedError) return false;
             // The route exists but rejected the probe's parameters.
             if ((err as { status?: number }).status === 400) return true;
-            this.supportsTimeTravelResult = undefined;
+            this.supportsDTResult = undefined;
             throw err;
           }
         );
     }
-    return this.supportsTimeTravelResult;
+    return this.supportsDTResult;
   }
 }

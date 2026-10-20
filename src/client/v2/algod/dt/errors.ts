@@ -11,7 +11,7 @@ import { SimulateTransactionGroupResult } from '../models/types.js';
  * transaction groups, `parallel-groups`, `rounds`) or answered `rounds`
  * without one result per listed round.
  */
-export class TimeTravelUnsupportedError extends Error {
+export class DTUnsupportedError extends Error {
   /** The round that was asked for, when the error comes from a round check. */
   public requestedRound?: bigint;
 
@@ -30,7 +30,7 @@ export class TimeTravelUnsupportedError extends Error {
     }: { requestedRound?: bigint; returnedRound?: bigint; cause?: unknown } = {}
   ) {
     super(message);
-    this.name = 'TimeTravelUnsupportedError';
+    this.name = 'DTUnsupportedError';
     this.requestedRound = requestedRound;
     this.returnedRound = returnedRound;
     this.cause = cause;
@@ -47,7 +47,7 @@ function hasKey(response: HTTPClientResponse, key: string) {
 }
 
 /**
- * Throws a {@link TimeTravelUnsupportedError} if a round was requested and the
+ * Throws a {@link DTUnsupportedError} if a round was requested and the
  * response is for a different round (or reports none).
  * @param requested - The round that was asked for, if any.
  * @param returned - The round reported by the decoded response.
@@ -67,7 +67,7 @@ export function checkRound(
     returnedRound = undefined;
   }
   if (returnedRound !== requested) {
-    throw new TimeTravelUnsupportedError(
+    throw new DTUnsupportedError(
       `Asked for round ${requested} but the node answered for ${returnedRound ?? 'an unknown round'}; it does not support reads at past rounds`,
       { requestedRound: requested, returnedRound }
     );
@@ -125,7 +125,7 @@ export function isPastRoundUnsupported(err: unknown) {
 
 /**
  * Runs a read, turning a refusal to read a past round into a
- * {@link TimeTravelUnsupportedError}.
+ * {@link DTUnsupportedError}.
  * @param requested - The round that was asked for, if any.
  * @param request - The read.
  */
@@ -137,7 +137,7 @@ export async function readAtRound(
     return await request;
   } catch (err) {
     if (requested !== undefined && isPastRoundUnsupported(err)) {
-      throw new TimeTravelUnsupportedError(
+      throw new DTUnsupportedError(
         `The node cannot read round ${requested}; it does not support reads at past rounds`,
         { requestedRound: requested, cause: err }
       );
@@ -189,7 +189,7 @@ export function simulateUnsupportedReason(
 
 /**
  * Runs a simulate request, turning a rejection of the fork features it uses
- * into a {@link TimeTravelUnsupportedError}.
+ * into a {@link DTUnsupportedError}.
  * @param features - What the request uses.
  * @param request - The request.
  */
@@ -202,7 +202,7 @@ export async function simulateWithFeatures(
   } catch (err) {
     const reason = simulateUnsupportedReason(err, features);
     if (reason !== undefined) {
-      throw new TimeTravelUnsupportedError(
+      throw new DTUnsupportedError(
         `The node does not support this simulate request: ${reason}`,
         { cause: err }
       );
@@ -229,7 +229,7 @@ export type SimulateGroupErrorKind =
 
 /**
  * The failure of one transaction group at one round of a simulate response,
- * from `TimeTravelSimulateResponse.groupResult`.
+ * from `DTSimulateResponse.groupResult`.
  */
 export class SimulateGroupError extends Error {
   /** Why the group has no usable result. */

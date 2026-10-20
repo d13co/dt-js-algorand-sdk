@@ -6,18 +6,18 @@ import {
   Query,
 } from '../src/client/baseHTTPClient';
 import {
-  TimeTravelAlgodClient,
-  TimeTravelUnsupportedError,
+  DTAlgodClient,
+  DTUnsupportedError,
   BoxVersion,
   BoxChange,
   BoxesVersion,
   SimulateRoundResult,
-  TimeTravelSimulateRequest,
-  TimeTravelSimulateResponse,
-  TimeTravelSimulationEvalOverrides,
+  DTSimulateRequest,
+  DTSimulateResponse,
+  DTSimulationEvalOverrides,
   SimulateGroupError,
   packSimulateRounds,
-} from '../src/client/v2/algod/timeTravel/index';
+} from '../src/client/v2/algod/dt/index';
 import { AlgodClient } from '../src/client/v2/algod/algod';
 import { assignGroupID, computeGroupID } from '../src/group';
 import * as algosdk from '../src/index';
@@ -119,7 +119,7 @@ describe('time travel', () => {
       const stub = new StubClient([
         ok({ round: 45000000, name: 'Y29uZmln', value: 'AAAAAAAAAAE=' }),
       ]);
-      const box = await new TimeTravelAlgodClient(stub, '')
+      const box = await new DTAlgodClient(stub, '')
         .getApplicationBoxByName(1234, name)
         .round(45000000)
         .do();
@@ -138,7 +138,7 @@ describe('time travel', () => {
 
     it('keeps round 0', async () => {
       const stub = new StubClient([ok({ round: 0, name: 'AA==', value: '' })]);
-      await new TimeTravelAlgodClient(stub, '')
+      await new DTAlgodClient(stub, '')
         .getApplicationBoxByName(1, new Uint8Array([0]))
         .round(0)
         .do();
@@ -151,12 +151,12 @@ describe('time travel', () => {
         ok({ round: 50000000, name: 'Y29uZmln', value: 'AAAAAAAAAAI=' }),
       ]);
       await assert.rejects(
-        new TimeTravelAlgodClient(stub, '')
+        new DTAlgodClient(stub, '')
           .getApplicationBoxByName(1234, name)
           .round(45000000)
           .do(),
         (err: unknown) =>
-          err instanceof TimeTravelUnsupportedError &&
+          err instanceof DTUnsupportedError &&
           err.requestedRound === BigInt(45000000) &&
           err.returnedRound === BigInt(50000000)
       );
@@ -166,7 +166,7 @@ describe('time travel', () => {
       const stub = new StubClient([
         ok({ round: 50000000, name: 'Y29uZmln', value: 'AAAAAAAAAAI=' }),
       ]);
-      const box = await new TimeTravelAlgodClient(stub, '')
+      const box = await new DTAlgodClient(stub, '')
         .getApplicationBoxByName(1234, name)
         .do();
       assert.strictEqual(box.round, BigInt(50000000));
@@ -178,11 +178,8 @@ describe('time travel', () => {
     it('checks the round of the response', async () => {
       const stub = new StubClient([ok({ round: 7, boxes: [] })]);
       await assert.rejects(
-        new TimeTravelAlgodClient(stub, '')
-          .getApplicationBoxes(1)
-          .round(6)
-          .do(),
-        TimeTravelUnsupportedError
+        new DTAlgodClient(stub, '').getApplicationBoxes(1).round(6).do(),
+        DTUnsupportedError
       );
     });
 
@@ -190,7 +187,7 @@ describe('time travel', () => {
       const stub = new StubClient([
         ok({ round: 6, boxes: [{ name: 'AA==' }], 'next-token': 'b64:AA==' }),
       ]);
-      const res = await new TimeTravelAlgodClient(stub, '')
+      const res = await new DTAlgodClient(stub, '')
         .getApplicationBoxes(1)
         .round(6)
         .next('b64:AQ==')
@@ -218,7 +215,7 @@ describe('time travel', () => {
           'next-token': '44000152',
         }),
       ]);
-      const res = await new TimeTravelAlgodClient(stub, '')
+      const res = await new DTAlgodClient(stub, '')
         .getApplicationBoxVersions(1234, name)
         .minRound(0)
         .maxRound(45000000)
@@ -270,7 +267,7 @@ describe('time travel', () => {
         ok({ round: 9, versions: [v(3)], 'next-token': '5' }),
         ok({ round: 9, versions: [v(5), v(8)] }),
       ]);
-      const request = new TimeTravelAlgodClient(stub, '')
+      const request = new DTAlgodClient(stub, '')
         .getApplicationBoxVersions(1, name)
         .limit(2);
 
@@ -287,24 +284,20 @@ describe('time travel', () => {
       assert.strictEqual(request.query.next, undefined);
     });
 
-    it('turns a 404 into TimeTravelUnsupportedError', async () => {
+    it('turns a 404 into DTUnsupportedError', async () => {
       const stub = new StubClient([status(404)]);
       await assert.rejects(
-        new TimeTravelAlgodClient(stub, '')
-          .getApplicationBoxVersions(1, name)
-          .do(),
-        TimeTravelUnsupportedError
+        new DTAlgodClient(stub, '').getApplicationBoxVersions(1, name).do(),
+        DTUnsupportedError
       );
     });
 
     it('passes other errors through', async () => {
       const stub = new StubClient([status(400)]);
       await assert.rejects(
-        new TimeTravelAlgodClient(stub, '')
-          .getApplicationBoxVersions(1, name)
-          .do(),
+        new DTAlgodClient(stub, '').getApplicationBoxVersions(1, name).do(),
         (err: { status?: number }) =>
-          !(err instanceof TimeTravelUnsupportedError) && err.status === 400
+          !(err instanceof DTUnsupportedError) && err.status === 400
       );
     });
   });
@@ -334,7 +327,7 @@ describe('time travel', () => {
           'next-token': '44000069',
         }),
       ]);
-      const res = await new TimeTravelAlgodClient(stub, '')
+      const res = await new DTAlgodClient(stub, '')
         .getApplicationBoxesVersions(1234)
         .minRound(0)
         .maxRound(45000000)
@@ -400,7 +393,7 @@ describe('time travel', () => {
           ],
         }),
       ]);
-      const res = await new TimeTravelAlgodClient(stub, '')
+      const res = await new DTAlgodClient(stub, '')
         .getApplicationBoxesVersions(1)
         .do();
 
@@ -411,7 +404,7 @@ describe('time travel', () => {
 
     it('decodes an empty page', async () => {
       const stub = new StubClient([ok({ round: 9, versions: [] })]);
-      const res = await new TimeTravelAlgodClient(stub, '')
+      const res = await new DTAlgodClient(stub, '')
         .getApplicationBoxesVersions(1)
         .do();
 
@@ -436,7 +429,7 @@ describe('time travel', () => {
         ok({ round: 7, versions: [v(6, 'Yw==')], 'next-token': '5' }),
         ok({ round: 5, versions: [v(2, 'ZA==')] }),
       ]);
-      const request = new TimeTravelAlgodClient(stub, '')
+      const request = new DTAlgodClient(stub, '')
         .getApplicationBoxesVersions(1)
         .minRound(1)
         .maxRound(9)
@@ -480,8 +473,8 @@ describe('time travel', () => {
         ),
       ]);
       await assert.rejects(
-        new TimeTravelAlgodClient(stub, '').getApplicationBoxesVersions(1).do(),
-        TimeTravelUnsupportedError
+        new DTAlgodClient(stub, '').getApplicationBoxesVersions(1).do(),
+        DTUnsupportedError
       );
     });
 
@@ -493,58 +486,52 @@ describe('time travel', () => {
         ),
       ]);
       await assert.rejects(
-        new TimeTravelAlgodClient(stub, '')
+        new DTAlgodClient(stub, '')
           .getApplicationBoxesVersions(1)
           .next('x/versions')
           .do(),
         (err: { status?: number }) =>
-          !(err instanceof TimeTravelUnsupportedError) && err.status === 400
+          !(err instanceof DTUnsupportedError) && err.status === 400
       );
     });
 
-    it('turns a 404 into TimeTravelUnsupportedError', async () => {
+    it('turns a 404 into DTUnsupportedError', async () => {
       const stub = new StubClient([status(404)]);
       await assert.rejects(
-        new TimeTravelAlgodClient(stub, '').getApplicationBoxesVersions(1).do(),
-        TimeTravelUnsupportedError
+        new DTAlgodClient(stub, '').getApplicationBoxesVersions(1).do(),
+        DTUnsupportedError
       );
     });
 
     it('passes a 503 for an incomplete box index through', async () => {
       const stub = new StubClient([status(503)]);
       await assert.rejects(
-        new TimeTravelAlgodClient(stub, '').getApplicationBoxesVersions(1).do(),
+        new DTAlgodClient(stub, '').getApplicationBoxesVersions(1).do(),
         (err: { status?: number }) =>
-          !(err instanceof TimeTravelUnsupportedError) &&
+          !(err instanceof DTUnsupportedError) &&
           err.status === 503 &&
           /nope/.test(String((err as { message?: string }).message))
       );
     });
   });
 
-  describe('supportsTimeTravel', () => {
+  describe('supportsDT', () => {
     it('is true when the versions route answers, and is cached', async () => {
       const stub = new StubClient([ok({ round: 1, versions: [] })]);
-      const client = new TimeTravelAlgodClient(stub, '');
-      assert.strictEqual(await client.supportsTimeTravel(), true);
-      assert.strictEqual(await client.supportsTimeTravel(), true);
+      const client = new DTAlgodClient(stub, '');
+      assert.strictEqual(await client.supportsDT(), true);
+      assert.strictEqual(await client.supportsDT(), true);
       assert.strictEqual(stub.calls.length, 1);
     });
 
     it('is true when the route rejects the probe with 400', async () => {
       const stub = new StubClient([status(400)]);
-      assert.strictEqual(
-        await new TimeTravelAlgodClient(stub, '').supportsTimeTravel(),
-        true
-      );
+      assert.strictEqual(await new DTAlgodClient(stub, '').supportsDT(), true);
     });
 
     it('is false when the route is missing', async () => {
       const stub = new StubClient([status(404)]);
-      assert.strictEqual(
-        await new TimeTravelAlgodClient(stub, '').supportsTimeTravel(),
-        false
-      );
+      assert.strictEqual(await new DTAlgodClient(stub, '').supportsDT(), false);
     });
 
     it('rethrows other errors without caching them', async () => {
@@ -552,9 +539,9 @@ describe('time travel', () => {
         status(401),
         ok({ round: 1, versions: [] }),
       ]);
-      const client = new TimeTravelAlgodClient(stub, '');
-      await assert.rejects(client.supportsTimeTravel());
-      assert.strictEqual(await client.supportsTimeTravel(), true);
+      const client = new DTAlgodClient(stub, '');
+      await assert.rejects(client.supportsDT());
+      assert.strictEqual(await client.supportsDT(), true);
     });
   });
 
@@ -567,7 +554,7 @@ describe('time travel', () => {
         ok(account),
         ok({ ...account, round: 121 }),
       ]);
-      const client = new TimeTravelAlgodClient(stub, '');
+      const client = new DTAlgodClient(stub, '');
 
       const res = await client
         .accountInformation(addr)
@@ -581,22 +568,19 @@ describe('time travel', () => {
       });
       await assert.rejects(
         client.accountInformation(addr).round(120).do(),
-        TimeTravelUnsupportedError
+        DTUnsupportedError
       );
     });
 
     it('checks the current_round of the supply', async () => {
       const supply = { current_round: 9, 'online-money': 1, 'total-money': 2 };
       const stub = new StubClient([ok(supply), ok(supply)]);
-      const client = new TimeTravelAlgodClient(stub, '');
+      const client = new DTAlgodClient(stub, '');
       assert.strictEqual(
         (await client.supply().round(9).do()).currentRound,
         BigInt(9)
       );
-      await assert.rejects(
-        client.supply().round(8).do(),
-        TimeTravelUnsupportedError
-      );
+      await assert.rejects(client.supply().round(8).do(), DTUnsupportedError);
     });
 
     it('sends round on asset and application lookups', async () => {
@@ -604,7 +588,7 @@ describe('time travel', () => {
         ok({ index: 7, params: { creator: addr, decimals: 0, total: 1 } }),
         ok({ id: 8, params: { creator: addr } }),
       ]);
-      const client = new TimeTravelAlgodClient(stub, '');
+      const client = new DTAlgodClient(stub, '');
       await client.getAssetByID(7).round(3).do();
       await client.getApplicationByID(8).round(4).do();
       assert.deepStrictEqual(
@@ -654,7 +638,7 @@ describe('time travel', () => {
           'next-token': '131',
         }),
       ]);
-      const res = await new TimeTravelAlgodClient(stub, '')
+      const res = await new DTAlgodClient(stub, '')
         .accountVersions(addr)
         .exclude('created-apps-params', 'created-assets-params')
         .include('values')
@@ -683,7 +667,7 @@ describe('time travel', () => {
     it('builds the paths of the other versions endpoints', async () => {
       const empty = ok({ round: 1, versions: [] });
       const stub = new StubClient([empty, empty, empty, empty]);
-      const client = new TimeTravelAlgodClient(stub, '');
+      const client = new DTAlgodClient(stub, '');
       await client.getApplicationVersions(8).do();
       await client.getAssetVersions(7).do();
       await client.accountAssetVersions(addr, 7).do();
@@ -710,8 +694,8 @@ describe('time travel', () => {
         }),
       ]);
       await assert.rejects(
-        new TimeTravelAlgodClient(stub, '').getAssetVersions(31566704).do(),
-        TimeTravelUnsupportedError
+        new DTAlgodClient(stub, '').getAssetVersions(31566704).do(),
+        DTUnsupportedError
       );
     });
 
@@ -766,7 +750,7 @@ describe('time travel', () => {
           ],
         }),
       ]);
-      const client = new TimeTravelAlgodClient(stub, '');
+      const client = new DTAlgodClient(stub, '');
 
       const assets = await client.getAssetVersions(7).include('values').do();
       assert.strictEqual(assets.versions[0].asset?.params.unitName, 'USDC');
@@ -803,12 +787,9 @@ describe('time travel', () => {
         ),
       ]);
       await assert.rejects(
-        new TimeTravelAlgodClient(stub, '')
-          .getApplicationVersions(8)
-          .next('abc')
-          .do(),
+        new DTAlgodClient(stub, '').getApplicationVersions(8).next('abc').do(),
         (err: { status?: number }) =>
-          !(err instanceof TimeTravelUnsupportedError) && err.status === 400
+          !(err instanceof DTUnsupportedError) && err.status === 400
       );
     });
 
@@ -817,22 +798,19 @@ describe('time travel', () => {
         badRequest('versions require EnableTimeTravel'),
         badRequest('versions require EnableTimeTravel'),
       ]);
-      const client = new TimeTravelAlgodClient(stub, '');
+      const client = new DTAlgodClient(stub, '');
       await assert.rejects(
         client.getAssetVersions(7).do(),
         (err: unknown) =>
-          err instanceof TimeTravelUnsupportedError &&
+          err instanceof DTUnsupportedError &&
           (err.cause as { status?: number }).status === 400
       );
-      assert.strictEqual(await client.supportsTimeTravel(), false);
+      assert.strictEqual(await client.supportsDT(), false);
     });
 
     it('sends limit 0 instead of dropping it', async () => {
       const stub = new StubClient([ok({ round: 1, versions: [] })]);
-      await new TimeTravelAlgodClient(stub, '')
-        .getAssetVersions(7)
-        .limit(0)
-        .do();
+      await new DTAlgodClient(stub, '').getAssetVersions(7).limit(0).do();
       assert.strictEqual(stub.calls[0].query.limit, '0');
     });
 
@@ -843,7 +821,7 @@ describe('time travel', () => {
         ok({ round: 9, versions: [], 'next-token': '6' }),
         ok({ round: 9, versions: [v(5)], 'next-token': '' }),
       ]);
-      const request = new TimeTravelAlgodClient(stub, '')
+      const request = new DTAlgodClient(stub, '')
         .accountVersions(addr)
         .minRound(0)
         .maxRound(9)
@@ -875,11 +853,11 @@ describe('time travel', () => {
       ]);
       const rounds: bigint[] = [];
       await assert.rejects(async () => {
-        for await (const version of new TimeTravelAlgodClient(stub, '')
+        for await (const version of new DTAlgodClient(stub, '')
           .getApplicationVersions(8)
           .iterate())
           rounds.push(version.round);
-      }, TimeTravelUnsupportedError);
+      }, DTUnsupportedError);
       assert.deepStrictEqual(rounds, [BigInt(1)]);
     });
   });
@@ -888,9 +866,7 @@ describe('time travel', () => {
     const addr = 'RETICA7ZSQTWPWFB7KTF4CPHJDPRXTPQYIMY6DOUQ72I2JD3T5RRDXTUSQ';
 
     it('checks the round of the account asset and application reads', async () => {
-      const reads: Array<
-        [unknown, (c: TimeTravelAlgodClient) => Promise<unknown>]
-      > = [
+      const reads: Array<[unknown, (c: DTAlgodClient) => Promise<unknown>]> = [
         [{ round: 5 }, (c) => c.accountAssetInformation(addr, 7).round(4).do()],
         [
           { round: 5 },
@@ -910,13 +886,12 @@ describe('time travel', () => {
           ok(json),
           ok({ ...(json as object), round: 4 }),
         ]);
-        const client = new TimeTravelAlgodClient(stub, '');
+        const client = new DTAlgodClient(stub, '');
         // eslint-disable-next-line no-await-in-loop
         await assert.rejects(
           read(client),
           (err: unknown) =>
-            err instanceof TimeTravelUnsupportedError &&
-            err.returnedRound === BigInt(5)
+            err instanceof DTUnsupportedError && err.returnedRound === BigInt(5)
         );
         // eslint-disable-next-line no-await-in-loop
         await read(client);
@@ -927,23 +902,22 @@ describe('time travel', () => {
     it('does not take a missing round for round 0', async () => {
       const stub = new StubClient([ok({ name: 'AA==', value: '' })]);
       await assert.rejects(
-        new TimeTravelAlgodClient(stub, '')
+        new DTAlgodClient(stub, '')
           .getApplicationBoxByName(1, new Uint8Array([0]))
           .round(0)
           .do(),
         (err: unknown) =>
-          err instanceof TimeTravelUnsupportedError &&
-          err.returnedRound === undefined
+          err instanceof DTUnsupportedError && err.returnedRound === undefined
       );
     });
 
     it('checks the round in doRaw, and returns the body as received', async () => {
       const box = { round: 50, name: 'Y29uZmln', value: 'AAAAAAAAAAI=' };
       const stub = new StubClient([ok(box), ok(box)]);
-      const client = new TimeTravelAlgodClient(stub, '');
+      const client = new DTAlgodClient(stub, '');
       await assert.rejects(
         client.getApplicationBoxByName(1234, name).round(45).doRaw(),
-        TimeTravelUnsupportedError
+        DTUnsupportedError
       );
       const raw = await client
         .getApplicationBoxByName(1234, name)
@@ -952,7 +926,7 @@ describe('time travel', () => {
       assert.deepStrictEqual(JSON.parse(new TextDecoder().decode(raw)), box);
     });
 
-    it('turns a refusal to read a past round into TimeTravelUnsupportedError', async () => {
+    it('turns a refusal to read a past round into DTUnsupportedError', async () => {
       const stub = new StubClient([
         badRequest('looking up past rounds requires EnableTimeTravel'),
         badRequest('looking up past rounds requires EnableTimeTravel'),
@@ -960,9 +934,9 @@ describe('time travel', () => {
           'given round is no longer available; use a more recent round'
         ),
       ]);
-      const client = new TimeTravelAlgodClient(stub, '');
+      const client = new DTAlgodClient(stub, '');
       const isUnsupported = (err: unknown) =>
-        err instanceof TimeTravelUnsupportedError &&
+        err instanceof DTUnsupportedError &&
         err.requestedRound === BigInt(3) &&
         (err.cause as { status?: number }).status === 400;
       await assert.rejects(
@@ -980,20 +954,17 @@ describe('time travel', () => {
     it('passes other 400s on reads at a round through', async () => {
       const stub = new StubClient([badRequest('round 99 is not available')]);
       await assert.rejects(
-        new TimeTravelAlgodClient(stub, '').supply().round(99).do(),
+        new DTAlgodClient(stub, '').supply().round(99).do(),
         (err: { status?: number }) =>
-          !(err instanceof TimeTravelUnsupportedError) && err.status === 400
+          !(err instanceof DTUnsupportedError) && err.status === 400
       );
     });
 
-    it('shares one probe between concurrent supportsTimeTravel calls', async () => {
+    it('shares one probe between concurrent supportsDT calls', async () => {
       const stub = new StubClient([ok({ round: 1, versions: [] })]);
-      const client = new TimeTravelAlgodClient(stub, '');
+      const client = new DTAlgodClient(stub, '');
       assert.deepStrictEqual(
-        await Promise.all([
-          client.supportsTimeTravel(),
-          client.supportsTimeTravel(),
-        ]),
+        await Promise.all([client.supportsDT(), client.supportsDT()]),
         [true, true]
       );
       assert.strictEqual(stub.calls.length, 1);
@@ -1035,7 +1006,7 @@ describe('time travel', () => {
       body: encodeMsgpack(response),
     });
     const sent = (stub: StubClient, i = 0) =>
-      decodeMsgpack(stub.calls[i].body!, TimeTravelSimulateRequest);
+      decodeMsgpack(stub.calls[i].body!, DTSimulateRequest);
     // Answers like the node: one result per requested group.
     const echo = (lastRound: number) => (call: Call) => ({
       status: 200,
@@ -1043,26 +1014,25 @@ describe('time travel', () => {
         new SimulateResponse({
           lastRound,
           version: 2,
-          txnGroups: decodeMsgpack(
-            call.body!,
-            TimeTravelSimulateRequest
-          ).txnGroups.map((g) => groupResult(g.txns[0])),
+          txnGroups: decodeMsgpack(call.body!, DTSimulateRequest).txnGroups.map(
+            (g) => groupResult(g.txns[0])
+          ),
         })
       ),
     });
 
     it('posts several groups and decodes one result per group', async () => {
-      const response = new TimeTravelSimulateResponse({
+      const response = new DTSimulateResponse({
         lastRound: 10,
         version: 2,
         txnGroups: [groupResult(stxn(1)), groupResult(stxn(2), 'overspend')],
-        evalOverrides: new TimeTravelSimulationEvalOverrides({
+        evalOverrides: new DTSimulationEvalOverrides({
           allowEmptySignatures: true,
           parallelGroups: true,
         }),
       });
       const stub = new StubClient([msgpack(response)]);
-      const res = await new TimeTravelAlgodClient(stub, '')
+      const res = await new DTAlgodClient(stub, '')
         .simulateTransactions(
           new SimulateRequest({
             txnGroups: [group(1), group(2, 3)],
@@ -1082,23 +1052,23 @@ describe('time travel', () => {
       assert.strictEqual(req.parallelGroups, true);
       assert.strictEqual(req.allowEmptySignatures, true);
 
-      assert.ok(res instanceof TimeTravelSimulateResponse);
+      assert.ok(res instanceof DTSimulateResponse);
       assert.strictEqual(res.txnGroups.length, 2);
       assert.strictEqual(res.txnGroups[0].failureMessage, undefined);
       assert.strictEqual(res.txnGroups[1].failureMessage, 'overspend');
       assert.deepStrictEqual(res.txnGroups[1].failedAt, [0]);
-      assert.ok(res.evalOverrides instanceof TimeTravelSimulationEvalOverrides);
+      assert.ok(res.evalOverrides instanceof DTSimulationEvalOverrides);
       assert.strictEqual(res.evalOverrides!.parallelGroups, true);
       assert.strictEqual(res.evalOverrides!.allowEmptySignatures, true);
     });
 
     it('needs the fork models to see parallel-groups in the response', () => {
       const bytes = encodeMsgpack(
-        new TimeTravelSimulateResponse({
+        new DTSimulateResponse({
           lastRound: 1,
           version: 2,
           txnGroups: [],
-          evalOverrides: new TimeTravelSimulationEvalOverrides({
+          evalOverrides: new DTSimulationEvalOverrides({
             parallelGroups: true,
           }),
         })
@@ -1108,8 +1078,7 @@ describe('time travel', () => {
       assert.ok(stock.evalOverrides);
       assert.ok(!('parallelGroups' in stock.evalOverrides!));
       assert.strictEqual(
-        decodeMsgpack(bytes, TimeTravelSimulateResponse).evalOverrides!
-          .parallelGroups,
+        decodeMsgpack(bytes, DTSimulateResponse).evalOverrides!.parallelGroups,
         true
       );
     });
@@ -1121,7 +1090,7 @@ describe('time travel', () => {
         txnGroups: [groupResult(stxn(1))],
       });
       const stub = new StubClient([msgpack(response)]);
-      const res = await new TimeTravelAlgodClient(stub, '')
+      const res = await new DTAlgodClient(stub, '')
         .simulateTransactions(new SimulateRequest({ txnGroups: [group(1)] }))
         .do();
       assert.strictEqual(res.lastRound, BigInt(10));
@@ -1144,7 +1113,7 @@ describe('time travel', () => {
         round: 42,
       });
       const stub = new StubClient([echo(42)]);
-      await new TimeTravelAlgodClient(stub, '')
+      await new DTAlgodClient(stub, '')
         .simulateTransactions(request)
         .parallelGroups(false)
         .do();
@@ -1180,9 +1149,7 @@ describe('time travel', () => {
     it('takes the request as it was when the call was made', async () => {
       const stub = new StubClient([echo(1)]);
       const request = new SimulateRequest({ txnGroups: [group(1)] });
-      const call = new TimeTravelAlgodClient(stub, '').simulateTransactions(
-        request
-      );
+      const call = new DTAlgodClient(stub, '').simulateTransactions(request);
       request.txnGroups.push(group(2));
       request.allowEmptySignatures = true;
       await call.do();
@@ -1190,11 +1157,11 @@ describe('time travel', () => {
       assert.strictEqual(sent(stub).allowEmptySignatures, undefined);
     });
 
-    it('keeps parallelGroups set on a TimeTravelSimulateRequest', async () => {
+    it('keeps parallelGroups set on a DTSimulateRequest', async () => {
       const stub = new StubClient([echo(1)]);
-      await new TimeTravelAlgodClient(stub, '')
+      await new DTAlgodClient(stub, '')
         .simulateTransactions(
-          new TimeTravelSimulateRequest({
+          new DTSimulateRequest({
             txnGroups: [group(1), group(2)],
             parallelGroups: true,
           })
@@ -1206,7 +1173,7 @@ describe('time travel', () => {
     it('takes several groups of raw transactions', async () => {
       const raw = (amount: number) => encodeMsgpack(stxn(amount));
       const stub = new StubClient([echo(1), echo(1), echo(1)]);
-      const client = new TimeTravelAlgodClient(stub, '');
+      const client = new DTAlgodClient(stub, '');
       await client.simulateRawTransactions([[raw(1)], [raw(2), raw(3)]]).do();
       await client.simulateRawTransactions([raw(4), raw(5)]).do();
       await client.simulateRawTransactions(raw(6)).do();
@@ -1225,16 +1192,16 @@ describe('time travel', () => {
       'failed to decode object: json decode error [pos 1]: only encoded map or array can be decoded into a struct'
     );
     const isUnsupported = (err: unknown) =>
-      err instanceof TimeTravelUnsupportedError &&
+      err instanceof DTUnsupportedError &&
       (err.cause as { status?: number }).status === 400;
     const isPlain400 = (err: unknown) =>
-      !(err instanceof TimeTravelUnsupportedError) &&
+      !(err instanceof DTUnsupportedError) &&
       (err as { status?: number }).status === 400;
 
     it("reports stock algod's one-group limit as unsupported", async () => {
       const stub = new StubClient([stockOneGroup]);
       await assert.rejects(
-        new TimeTravelAlgodClient(stub, '')
+        new DTAlgodClient(stub, '')
           .simulateTransactions(
             new SimulateRequest({ txnGroups: [group(1), group(2)] })
           )
@@ -1250,7 +1217,7 @@ describe('time travel', () => {
     it("reports stock algod's rejection of parallel-groups as unsupported", async () => {
       const stub = new StubClient([stockUnknownField]);
       await assert.rejects(
-        new TimeTravelAlgodClient(stub, '')
+        new DTAlgodClient(stub, '')
           .simulateTransactions(new SimulateRequest({ txnGroups: [group(1)] }))
           .parallelGroups()
           .do(),
@@ -1265,7 +1232,7 @@ describe('time travel', () => {
         stockUnknownField,
         stockUnknownField,
       ]);
-      const client = new TimeTravelAlgodClient(stub, '');
+      const client = new DTAlgodClient(stub, '');
       const single = () =>
         client
           .simulateTransactions(new SimulateRequest({ txnGroups: [group(1)] }))
@@ -1288,7 +1255,7 @@ describe('time travel', () => {
         badRequest('too many transaction groups: got 20, the limit is 16'),
         badRequest('FixSigners requires AllowEmptySignatures to be enabled'),
       ]);
-      const client = new TimeTravelAlgodClient(stub, '');
+      const client = new DTAlgodClient(stub, '');
       await assert.rejects(
         client
           .simulateTransactions(
@@ -1314,7 +1281,7 @@ describe('time travel', () => {
 
     describe('rounds', () => {
       const roundsResponse = (...results: SimulateRoundResult[]) =>
-        new TimeTravelSimulateResponse({
+        new DTSimulateResponse({
           lastRound: 0,
           version: 2,
           txnGroups: [],
@@ -1331,7 +1298,7 @@ describe('time travel', () => {
       const failedAt = (round: number, error: string) =>
         new SimulateRoundResult({ lastRound: round, txnGroups: [], error });
       const simulateAt = (stub: StubClient, rounds: number[]) =>
-        new TimeTravelAlgodClient(stub, '')
+        new DTAlgodClient(stub, '')
           .simulateTransactions(
             new SimulateRequest({
               txnGroups: [group(1), group(2)],
@@ -1406,7 +1373,7 @@ describe('time travel', () => {
       it('sends no rounds for an empty list', async () => {
         const request = new SimulateRequest({ txnGroups: [group(1)] });
         const stub = new StubClient([echo(9)]);
-        const res = await new TimeTravelAlgodClient(stub, '')
+        const res = await new DTAlgodClient(stub, '')
           .simulateTransactions(request)
           .rounds([])
           .do();
@@ -1414,13 +1381,13 @@ describe('time travel', () => {
         assert.strictEqual(res.roundResults, undefined);
       });
 
-      it('takes rounds set on a TimeTravelSimulateRequest', async () => {
+      it('takes rounds set on a DTSimulateRequest', async () => {
         const stub = new StubClient([
           msgpack(roundsResponse(at(7, undefined))),
         ]);
-        const res = await new TimeTravelAlgodClient(stub, '')
+        const res = await new DTAlgodClient(stub, '')
           .simulateTransactions(
-            new TimeTravelSimulateRequest({
+            new DTSimulateRequest({
               txnGroups: [group(1)],
               rounds: [7],
               round: 0,
@@ -1434,7 +1401,7 @@ describe('time travel', () => {
       it('refuses round together with rounds before sending', async () => {
         const stub = new StubClient([]);
         await assert.rejects(
-          new TimeTravelAlgodClient(stub, '')
+          new DTAlgodClient(stub, '')
             .simulateTransactions(
               new SimulateRequest({ txnGroups: [group(1)], round: 3 })
             )
@@ -1455,13 +1422,13 @@ describe('time travel', () => {
         await assert.rejects(
           simulateAt(stub, [5, 6]).do(),
           (err: unknown) =>
-            err instanceof TimeTravelUnsupportedError &&
+            err instanceof DTUnsupportedError &&
             /no round-results/.test(err.message)
         );
         await assert.rejects(
           simulateAt(stub, [5, 6]).do(),
           (err: unknown) =>
-            err instanceof TimeTravelUnsupportedError &&
+            err instanceof DTUnsupportedError &&
             /answered with 1 round results/.test(err.message)
         );
       });
@@ -1479,7 +1446,7 @@ describe('time travel', () => {
         await assert.rejects(
           simulateAt(stub, [5, 6]).do(),
           (err: unknown) =>
-            err instanceof TimeTravelUnsupportedError &&
+            err instanceof DTUnsupportedError &&
             err.requestedRound === BigInt(6) &&
             err.returnedRound === BigInt(7)
         );
@@ -1495,16 +1462,13 @@ describe('time travel', () => {
           msgpack(roundsResponse(at(6))),
         ]);
         assert.deepStrictEqual(await simulateAt(stub, [5]).doRaw(), good);
-        await assert.rejects(
-          simulateAt(stub, [5]).doRaw(),
-          TimeTravelUnsupportedError
-        );
+        await assert.rejects(simulateAt(stub, [5]).doRaw(), DTUnsupportedError);
       });
 
       it("reports stock algod's rejection of rounds as unsupported", async () => {
         const stub = new StubClient([stockUnknownField]);
         await assert.rejects(
-          new TimeTravelAlgodClient(stub, '')
+          new DTAlgodClient(stub, '')
             .simulateTransactions(
               new SimulateRequest({ txnGroups: [group(1)] })
             )
@@ -1537,7 +1501,7 @@ describe('time travel', () => {
           })
         ),
         msgpack(
-          new TimeTravelSimulateResponse({
+          new DTSimulateResponse({
             lastRound: 0,
             version: 2,
             txnGroups: [],
@@ -1556,12 +1520,12 @@ describe('time travel', () => {
           })
         ),
       ]);
-      const client = new TimeTravelAlgodClient(stub, '');
+      const client = new DTAlgodClient(stub, '');
       const request = new SimulateRequest({ txnGroups: [group(1), group(2)] });
       await assert.rejects(
         client.simulateTransactions(request).do(),
         (err: unknown) =>
-          err instanceof TimeTravelUnsupportedError &&
+          err instanceof DTUnsupportedError &&
           /Simulated 2 transaction groups but the node answered with 1 group results$/.test(
             err.message
           )
@@ -1569,7 +1533,7 @@ describe('time travel', () => {
       await assert.rejects(
         client.simulateTransactions(request).rounds([5, 6]).do(),
         (err: unknown) =>
-          err instanceof TimeTravelUnsupportedError &&
+          err instanceof DTUnsupportedError &&
           /answered with 1 group results in round result 1$/.test(err.message)
       );
     });
@@ -1582,7 +1546,7 @@ describe('time travel', () => {
       });
       const stub = new StubClient([
         msgpack(
-          new TimeTravelSimulateResponse({
+          new DTSimulateResponse({
             lastRound: 0,
             version: 2,
             txnGroups: [],
@@ -1595,7 +1559,7 @@ describe('time travel', () => {
           })
         ),
       ]);
-      const res = await new TimeTravelAlgodClient(stub, '')
+      const res = await new DTAlgodClient(stub, '')
         .simulateTransactions(stock)
         .parallelGroups()
         .rounds([5])
@@ -1608,33 +1572,33 @@ describe('time travel', () => {
       assert.ok(res.groupResult(1, 0).ok);
     });
 
-    describe('TimeTravelAlgodClient.from', () => {
+    describe('DTAlgodClient.from', () => {
       it('reuses the HTTP client of an AlgodClient', async () => {
         const algod = new AlgodClient('token', 'http://localhost', 4001, {
           'X-Extra': 'yes',
         });
-        const client = TimeTravelAlgodClient.from(algod);
-        assert.ok(client instanceof TimeTravelAlgodClient);
+        const client = DTAlgodClient.from(algod);
+        assert.ok(client instanceof DTAlgodClient);
         assert.notStrictEqual(client, algod);
         // Same server, token and headers: they all live in the base client.
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         assert.strictEqual((client.c as any).bc, (algod.c as any).bc);
 
         const stub = new StubClient([echo(3)]);
-        const res = await TimeTravelAlgodClient.from(new AlgodClient(stub, ''))
+        const res = await DTAlgodClient.from(new AlgodClient(stub, ''))
           .simulateTransactions(
             new SimulateRequest({ txnGroups: [group(1), group(2)] })
           )
           .do();
         assert.strictEqual(stub.calls.length, 1);
-        assert.ok(res instanceof TimeTravelSimulateResponse);
+        assert.ok(res instanceof DTSimulateResponse);
         assert.strictEqual(res.lastRound, BigInt(3));
       });
 
       it('takes a client shaped like an AlgodClient from another copy', async () => {
         const stub = new StubClient([echo(4)]);
         const foreign = { c: { bc: stub } } as unknown as AlgodClient;
-        const res = await TimeTravelAlgodClient.from(foreign)
+        const res = await DTAlgodClient.from(foreign)
           .simulateTransactions(new SimulateRequest({ txnGroups: [group(1)] }))
           .do();
         assert.strictEqual(stub.calls.length, 1);
@@ -1643,17 +1607,17 @@ describe('time travel', () => {
 
       it('returns the same client for the same AlgodClient', () => {
         const algod = new AlgodClient(new StubClient([]), '');
-        const client = TimeTravelAlgodClient.from(algod);
-        assert.strictEqual(TimeTravelAlgodClient.from(algod), client);
+        const client = DTAlgodClient.from(algod);
+        assert.strictEqual(DTAlgodClient.from(algod), client);
         assert.notStrictEqual(
-          TimeTravelAlgodClient.from(new AlgodClient(new StubClient([]), '')),
+          DTAlgodClient.from(new AlgodClient(new StubClient([]), '')),
           client
         );
       });
 
-      it('returns a TimeTravelAlgodClient as it is', () => {
-        const client = new TimeTravelAlgodClient(new StubClient([]), '');
-        assert.strictEqual(TimeTravelAlgodClient.from(client), client);
+      it('returns a DTAlgodClient as it is', () => {
+        const client = new DTAlgodClient(new StubClient([]), '');
+        assert.strictEqual(DTAlgodClient.from(client), client);
       });
 
       it('refuses what is not an AlgodClient', () => {
@@ -1665,17 +1629,14 @@ describe('time travel', () => {
         ];
         for (const value of notClients) {
           assert.throws(
-            () => TimeTravelAlgodClient.from(value as unknown as AlgodClient),
+            () => DTAlgodClient.from(value as unknown as AlgodClient),
             TypeError
           );
         }
       });
 
       it('is found with its features on the package', () => {
-        assert.strictEqual(
-          algosdk.TimeTravelAlgodClient,
-          TimeTravelAlgodClient
-        );
+        assert.strictEqual(algosdk.DTAlgodClient, DTAlgodClient);
         for (const feature of [
           'from',
           'group-results',
@@ -1683,7 +1644,7 @@ describe('time travel', () => {
           'pack-rounds',
           'simulate-rounds',
         ]) {
-          assert.ok(TimeTravelAlgodClient.features.includes(feature), feature);
+          assert.ok(DTAlgodClient.features.includes(feature), feature);
         }
         assert.strictEqual(algosdk.SimulateGroupError, SimulateGroupError);
         assert.strictEqual(algosdk.packSimulateRounds, packSimulateRounds);
@@ -1693,7 +1654,7 @@ describe('time travel', () => {
     describe('groupResult', () => {
       const notSimulated =
         'not simulated: an earlier group failed a post-evaluation check';
-      const topLevel = new TimeTravelSimulateResponse({
+      const topLevel = new DTSimulateResponse({
         lastRound: 10,
         version: 2,
         txnGroups: [
@@ -1702,7 +1663,7 @@ describe('time travel', () => {
           groupResult(stxn(3), notSimulated),
         ],
       });
-      const withRounds = new TimeTravelSimulateResponse({
+      const withRounds = new DTSimulateResponse({
         lastRound: 0,
         version: 2,
         txnGroups: [],
@@ -1823,7 +1784,7 @@ describe('time travel', () => {
           error: `round ${round} is not available`,
         });
       const call = (stub: StubClient) =>
-        new TimeTravelAlgodClient(stub, '')
+        new DTAlgodClient(stub, '')
           .simulateTransactions(
             new SimulateRequest({ txnGroups: [group(1), group(2)] })
           )
@@ -1832,7 +1793,7 @@ describe('time travel', () => {
       it('has a row of errors for each round that failed', async () => {
         const stub = new StubClient([
           msgpack(
-            new TimeTravelSimulateResponse({
+            new DTSimulateResponse({
               lastRound: 0,
               version: 2,
               txnGroups: [],
@@ -1853,7 +1814,7 @@ describe('time travel', () => {
       it('checks the group results in doRaw', async () => {
         const stub = new StubClient([
           msgpack(
-            new TimeTravelSimulateResponse({
+            new DTSimulateResponse({
               lastRound: 0,
               version: 2,
               txnGroups: [],
@@ -1869,19 +1830,19 @@ describe('time travel', () => {
         await assert.rejects(
           call(stub).doRaw(),
           (err: unknown) =>
-            err instanceof TimeTravelUnsupportedError &&
+            err instanceof DTUnsupportedError &&
             /answered with 1 group results in round result 0$/.test(err.message)
         );
       });
     });
 
-    describe('TimeTravelSimulateRequest.fromTransactions', () => {
+    describe('DTSimulateRequest.fromTransactions', () => {
       it('wraps transactions and assigns missing group IDs', () => {
         const single = payment(1);
         const pair = [payment(2), payment(3)];
         const grouped = assignGroupID([payment(4), payment(5)]);
         const groupedID = grouped[0].group;
-        const request = TimeTravelSimulateRequest.fromTransactions(
+        const request = DTSimulateRequest.fromTransactions(
           [[single], pair, grouped],
           { allowUnnamedResources: true, parallelGroups: true, rounds: [7] }
         );
@@ -1902,7 +1863,7 @@ describe('time travel', () => {
         }
         const decoded = decodeMsgpack(
           encodeMsgpack(request),
-          TimeTravelSimulateRequest
+          DTSimulateRequest
         );
         assert.deepStrictEqual(decoded.txnGroups[1].txns[1].txn.group, pairID);
         assert.deepStrictEqual(decoded.rounds, [BigInt(7)]);
@@ -1911,19 +1872,19 @@ describe('time travel', () => {
       it('leaves a group where any transaction has a group ID', () => {
         const first = assignGroupID([payment(1), payment(2)])[0];
         const second = payment(3);
-        TimeTravelSimulateRequest.fromTransactions([[first, second]]);
+        DTSimulateRequest.fromTransactions([[first, second]]);
         assert.strictEqual(second.group, undefined);
       });
 
       it('lets allowEmptySignatures be turned off, and refuses empty groups', () => {
         assert.strictEqual(
-          TimeTravelSimulateRequest.fromTransactions([[payment(1)]], {
+          DTSimulateRequest.fromTransactions([[payment(1)]], {
             allowEmptySignatures: false,
           }).allowEmptySignatures,
           false
         );
         assert.throws(
-          () => TimeTravelSimulateRequest.fromTransactions([[payment(1)], []]),
+          () => DTSimulateRequest.fromTransactions([[payment(1)], []]),
           /Transaction group 1 is empty/
         );
       });
@@ -2011,7 +1972,7 @@ describe('time travel', () => {
     it('works under AtomicTransactionComposer.simulate', async () => {
       const stub = new StubClient([
         (call) => {
-          const req = decodeMsgpack(call.body!, TimeTravelSimulateRequest);
+          const req = decodeMsgpack(call.body!, DTSimulateRequest);
           return {
             status: 200,
             body: encodeMsgpack(
@@ -2030,10 +1991,10 @@ describe('time travel', () => {
         signer: makeEmptyTransactionSigner(),
       });
       const { simulateResponse } = await atc.simulate(
-        new TimeTravelAlgodClient(stub, ''),
+        new DTAlgodClient(stub, ''),
         new SimulateRequest({ txnGroups: [], allowEmptySignatures: true })
       );
-      assert.ok(simulateResponse instanceof TimeTravelSimulateResponse);
+      assert.ok(simulateResponse instanceof DTSimulateResponse);
       assert.strictEqual(sent(stub).txnGroups.length, 1);
     });
   });

@@ -1,7 +1,7 @@
-// TIME TRAVEL ALGOD
-export { TimeTravelAlgodClient } from './client.js';
+// DT (time-travel) ALGOD
+export { DTAlgodClient } from './client.js';
 export {
-  TimeTravelUnsupportedError,
+  DTUnsupportedError,
   SimulateGroupError,
   SimulateGroupErrorKind,
 } from './errors.js';

@@ -37,6 +37,10 @@ import {
   SimulateTraceConfig,
   SimulationEvalOverrides,
 } from '../models/types.js';
+import { Transaction } from '../../../../transaction.js';
+import { SignedTransaction } from '../../../../signedTransaction.js';
+import { assignGroupID } from '../../../../group.js';
+import { SimulateGroupError } from './errors.js';
 
 /**
  * A version of a box.
@@ -1683,6 +1687,54 @@ export class TimeTravelSimulateRequest extends SimulateRequest {
     });
   }
 
+  /**
+   * A request simulating unsigned transactions, one inner array per group,
+   * such as the transactions of `TransactionComposer.buildTransactions()`.
+   * Each transaction is sent with an empty signature, and
+   * `allowEmptySignatures` defaults to true.
+   *
+   * A group of several transactions that has no group ID yet gets one: this
+   * sets `group` on those transactions. A group where any transaction already
+   * has one is left as it is, and IDs are never recomputed, so build new
+   * transactions for each request rather than changing and reusing them.
+   *
+   * #### Example
+   * ```typescript
+   * const request = TimeTravelSimulateRequest.fromTransactions(
+   *   [group1Txns, group2Txns],
+   *   { allowUnnamedResources: true, parallelGroups: true }
+   * );
+   * const res = await algodClient.simulateTransactions(request).do();
+   * ```
+   *
+   * @param groups - The transactions, one array per group.
+   * @param fields - The other request fields.
+   */
+  static fromTransactions(
+    groups: Transaction[][],
+    fields: Omit<
+      ConstructorParameters<typeof TimeTravelSimulateRequest>[0],
+      'txnGroups'
+    > = {}
+  ): TimeTravelSimulateRequest {
+    const txnGroups = groups.map((txns, i) => {
+      if (txns.length === 0) {
+        throw new Error(`Transaction group ${i} is empty`);
+      }
+      if (txns.length > 1 && txns.every((txn) => txn.group === undefined)) {
+        assignGroupID(txns);
+      }
+      return new SimulateRequestTransactionGroup({
+        txns: txns.map((txn) => new SignedTransaction({ txn })),
+      });
+    });
+    return new TimeTravelSimulateRequest({
+      allowEmptySignatures: true,
+      ...fields,
+      txnGroups,
+    });
+  }
+
   // eslint-disable-next-line class-methods-use-this
   getEncodingSchema(): Schema {
     return TimeTravelSimulateRequest.encodingSchema;
@@ -1911,6 +1963,25 @@ export class SimulateRoundResult implements Encodable {
   }
 }
 
+/** How the node prefixes the failure message of a group it skipped. */
+const NOT_SIMULATED_PREFIX = 'not simulated: ';
+
+/**
+ * The outcome of one transaction group at one round of a simulate response,
+ * from {@link TimeTravelSimulateResponse.groupResult}.
+ */
+export type SimulateGroupOutcome = {
+  /** The index into the response's `roundResults`, or 0 without rounds. */
+  roundIndex: number;
+  /** The index of the group in the request. */
+  groupIndex: number;
+  /** The round the simulation ran after (the result's `lastRound`). */
+  round: bigint;
+} & (
+  | { ok: true; result: SimulateTransactionGroupResult }
+  | { ok: false; error: SimulateGroupError }
+);
+
 /**
  * A {@link SimulateResponse} with the fork's simulate fields.
  *
@@ -1967,6 +2038,12 @@ export class TimeTravelSimulateResponse extends SimulateResponse {
   public roundResults?: SimulateRoundResult[];
 
   /**
+   * How many transaction groups the request had, set when the response comes
+   * from `simulateTransactions().do()`. Not part of the encoding.
+   */
+  public requestGroupCount?: number;
+
+  /**
    * Creates a new `TimeTravelSimulateResponse` object. The parameters are
    * those of {@link SimulateResponse}, with the fork's eval overrides.
    * @param roundResults - With `rounds`, one result per entry.
@@ -1983,6 +2060,126 @@ export class TimeTravelSimulateResponse extends SimulateResponse {
     super(args);
     this.evalOverrides = args.evalOverrides;
     this.roundResults = args.roundResults;
+  }
+
+  /**
+   * The results to read for `roundIndex`: `roundResults[roundIndex]`, or the
+   * top level (only index 0) when the request listed no rounds.
+   */
+  private roundAt(roundIndex: number): {
+    round: bigint;
+    txnGroups: SimulateTransactionGroupResult[];
+    error?: string;
+  } {
+    const count = this.roundResults ? this.roundResults.length : 1;
+    if (
+      !Number.isInteger(roundIndex) ||
+      roundIndex < 0 ||
+      roundIndex >= count
+    ) {
+      throw new RangeError(
+        `Round index ${roundIndex} is out of range: the response has ${this.roundResults ? `${count} round results` : 'no round results, so only index 0'}`
+      );
+    }
+    if (!this.roundResults) {
+      return { round: this.lastRound, txnGroups: this.txnGroups };
+    }
+    const result = this.roundResults[roundIndex];
+    return {
+      round: result.lastRound,
+      txnGroups: result.txnGroups,
+      error: result.error,
+    };
+  }
+
+  /**
+   * The outcome of one transaction group at one round: its result, or a
+   * {@link SimulateGroupError} saying why there is none (the round could not
+   * be simulated, the group failed, it was not simulated, or it is missing).
+   *
+   * #### Example
+   * ```typescript
+   * const res = await algodClient
+   *   .simulateTransactions(request)
+   *   .rounds([45000000, 45000500])
+   *   .do();
+   * const outcome = res.groupResult(1, 0); // group 1 at round 45000000
+   * if (outcome.ok) {
+   *   console.log(outcome.result.txnResults[0].txnResult.logs);
+   * } else {
+   *   console.log(outcome.error.kind, outcome.error.message);
+   * }
+   * ```
+   *
+   * @param groupIndex - The index of the group in the request.
+   * @param roundIndex - The index into `roundResults`; 0 (the default) when
+   * the request listed no rounds.
+   * @throws RangeError if `roundIndex` is not an index of the response's
+   * rounds, or `groupIndex` is not a non-negative integer.
+   */
+  groupResult(groupIndex: number, roundIndex = 0): SimulateGroupOutcome {
+    if (!Number.isInteger(groupIndex) || groupIndex < 0) {
+      throw new RangeError(`Invalid group index ${groupIndex}`);
+    }
+    const { round, txnGroups, error } = this.roundAt(roundIndex);
+    const at = { roundIndex, groupIndex, round };
+    const fail = (
+      fields: Omit<
+        ConstructorParameters<typeof SimulateGroupError>[0],
+        keyof typeof at
+      >
+    ): SimulateGroupOutcome => ({
+      ok: false,
+      ...at,
+      error: new SimulateGroupError({ ...at, ...fields }),
+    });
+
+    if (error !== undefined) {
+      return fail({ kind: 'round', failureMessage: error });
+    }
+    const result = txnGroups[groupIndex];
+    if (result === undefined) return fail({ kind: 'missing' });
+    const message = result.failureMessage;
+    if (message === undefined || message === '') {
+      return { ok: true, ...at, result };
+    }
+    if (message.startsWith(NOT_SIMULATED_PREFIX)) {
+      return fail({
+        kind: 'not-simulated',
+        failureMessage: message.slice(NOT_SIMULATED_PREFIX.length),
+        result,
+      });
+    }
+    return fail({
+      kind: 'group',
+      failureMessage: message,
+      failedAt: result.failedAt,
+      result,
+    });
+  }
+
+  /**
+   * The outcome of every transaction group at every round, indexed
+   * `[roundIndex][groupIndex]`, with a single row when the request listed no
+   * rounds. See {@link TimeTravelSimulateResponse.groupResult}.
+   *
+   * @param groupCount - How many groups the request had. Defaults to
+   * `requestGroupCount`, which `simulateTransactions().do()` sets. For a
+   * response decoded some other way, it defaults to the largest number of
+   * group results in a row, which is 0 when no round could be simulated: pass
+   * it then to get a row of errors for each such round.
+   */
+  groupResults(groupCount?: number): SimulateGroupOutcome[][] {
+    const rows = this.roundResults ?? [this];
+    const width =
+      groupCount ??
+      this.requestGroupCount ??
+      Math.max(0, ...rows.map((r) => r.txnGroups.length));
+    return rows.map((_, roundIndex) =>
+      Array.from({ length: width }, (__, groupIndex) =>
+        this.groupResult(groupIndex, roundIndex)
+      )
+    );
   }
 
   // eslint-disable-next-line class-methods-use-this

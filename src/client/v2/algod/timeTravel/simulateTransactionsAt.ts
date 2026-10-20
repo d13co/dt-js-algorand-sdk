@@ -113,6 +113,32 @@ export default class SimulateTransactionsAt extends SimulateRawTransactions {
     });
   }
 
+  /**
+   * Throws a {@link TimeTravelUnsupportedError} if the response does not have
+   * one group result per requested group: at the top level, or in each round
+   * result without an `error`. The node returns one per group, including
+   * groups it did not simulate, so results can be matched to groups by index.
+   */
+  private checkGroupResults(data: TimeTravelSimulateResponse) {
+    const expected = this.request.txnGroups.length;
+    const check = (actual: number, where: string) => {
+      if (actual !== expected) {
+        throw new TimeTravelUnsupportedError(
+          `Simulated ${expected} transaction groups but the node answered with ${actual} group results${where}`
+        );
+      }
+    };
+    if (!this.requestedRounds()) {
+      check(data.txnGroups.length, '');
+      return;
+    }
+    data.roundResults!.forEach((result, i) => {
+      if (result.error === undefined) {
+        check(result.txnGroups.length, ` in round result ${i}`);
+      }
+    });
+  }
+
   protected executeRequest(
     headers?: Record<string, string>,
     customOptions?: Record<string, unknown>
@@ -141,6 +167,8 @@ export default class SimulateTransactionsAt extends SimulateRawTransactions {
   prepare(response: HTTPClientResponse): TimeTravelSimulateResponse {
     const data = decodeMsgpack(response.body, TimeTravelSimulateResponse);
     this.checkRoundResults(data);
+    this.checkGroupResults(data);
+    data.requestGroupCount = this.request.txnGroups.length;
     return data;
   }
 
@@ -161,7 +189,8 @@ export default class SimulateTransactionsAt extends SimulateRawTransactions {
 
   /**
    * Execute the request, returning the response body as received. With
-   * `rounds`, the response is also decoded to check its round results.
+   * `rounds`, the response is also decoded to check its round and group
+   * results.
    * @param headers - Additional headers to send in the request. Optional.
    * @param customOptions - Additional options to pass to the underlying BaseHTTPClient. Optional.
    */

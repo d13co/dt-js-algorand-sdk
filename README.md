@@ -67,6 +67,60 @@ Running examples requires access to a running node. Follow the instructions in A
 
 **As portions of the codebase are written in TypeScript, example files cannot be run directly using `node`**. Please refer to the instructions described in the [examples/README.md](examples/README.md) file for more information regarding running the examples.
 
+## Time-travel fork
+
+This fork adds `TimeTravelAlgodClient`, an `AlgodClient` for a time-travel algod: reads at past rounds, the rounds at which objects changed, and simulate with several groups (`parallelGroups()`) at several rounds (`rounds()`).
+
+### Using it in place of algosdk
+
+Packages such as algokit-utils must load the same copy of algosdk as your code, so replace `algosdk` everywhere with a package-manager override. With pnpm (in `pnpm-workspace.yaml`, or under `pnpm` in `package.json`):
+
+```yaml
+overrides:
+  # local checkout: run `npm run build` in it first, and after each change
+  algosdk: link:/path/to/js-algorand-sdk
+  # or a packed build (`npm pack` in the checkout)
+  # algosdk: file:./vendor/algosdk-3.8.0-timetravel.1.tgz
+```
+
+`pnpm why algosdk` should then list only the fork.
+
+### Batching read-only simulate calls
+
+```typescript
+import algosdk from 'algosdk';
+
+// Reuses the server, token and headers of an existing client.
+const algod = algosdk.TimeTravelAlgodClient.from(algorand.client.algod);
+
+// Every round of one request must lie in its transactions' validity window.
+const { windows, positions } = algosdk.packSimulateRounds(rounds);
+const responses = await Promise.all(
+  windows.map((w) =>
+    algod
+      .simulateTransactions(
+        algosdk.timeTravelModels.TimeTravelSimulateRequest.fromTransactions(
+          buildGroups(w.firstValid, w.lastValid), // Transaction[][], up to 16 groups
+          { allowUnnamedResources: true, parallelGroups: true }
+        )
+      )
+      .rounds(w.rounds)
+      .do()
+  )
+);
+positions.forEach(({ window, roundIndex }, i) => {
+  for (const outcome of responses[window].groupResults()[roundIndex]) {
+    if (outcome.ok) {
+      console.log(rounds[i], outcome.result.txnResults[0].txnResult.logs);
+    } else {
+      console.log(rounds[i], outcome.error.kind, outcome.error.message);
+    }
+  }
+});
+```
+
+A node without these features answers with a `TimeTravelUnsupportedError`: catch it once and fall back to one group per simulate request. Code that may run on stock algosdk can find the client at runtime and check `TimeTravelAlgodClient.features` (for example `'group-results'`) before using it.
+
 ## SDK Development
 
 ### Building

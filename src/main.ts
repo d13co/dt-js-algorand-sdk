@@ -80,6 +80,15 @@ export {
   VersionsOrder,
   VersionsInclude,
   AccountVersionsExclude,
+  SimulateGroupError,
+  SimulateGroupErrorKind,
+  SimulateGroupOutcome,
+  packSimulateRounds,
+  PackedSimulateRounds,
+  SimulateRoundsWindow,
+  DEFAULT_MAX_SIMULATE_GROUPS,
+  DEFAULT_MAX_SIMULATE_ROUNDS,
+  MAX_TXN_LIFE,
 } from './client/v2/algod/timeTravel/index.js';
 export * as timeTravelModels from './client/v2/algod/timeTravel/models.js';
 export * as indexerModels from './client/v2/indexer/models/types.js';

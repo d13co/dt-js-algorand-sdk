@@ -1,6 +1,7 @@
 import { HTTPClientResponse } from '../../../client.js';
 import { ensureBigInt } from '../../../../utils/utils.js';
 import IntDecoding from '../../../../types/intDecoding.js';
+import { SimulateTransactionGroupResult } from '../models/types.js';
 
 /**
  * Thrown when a node cannot answer a time-travel request: it has no
@@ -207,5 +208,98 @@ export async function simulateWithFeatures(
       );
     }
     throw err;
+  }
+}
+
+/**
+ * Why a transaction group has no usable simulation result:
+ * - `round`: the request could not be simulated at that round at all (the
+ *   round result's `error`);
+ * - `group`: the group failed (`failureMessage`, with `failedAt` when the node
+ *   blamed one transaction);
+ * - `not-simulated`: the group was skipped after an earlier group failed a
+ *   post-evaluation check;
+ * - `missing`: the response has no result for the group.
+ */
+export type SimulateGroupErrorKind =
+  | 'round'
+  | 'group'
+  | 'not-simulated'
+  | 'missing';
+
+/**
+ * The failure of one transaction group at one round of a simulate response,
+ * from `TimeTravelSimulateResponse.groupResult`.
+ */
+export class SimulateGroupError extends Error {
+  /** Why the group has no usable result. */
+  public kind: SimulateGroupErrorKind;
+
+  /** The index into the response's `roundResults`, or 0 without rounds. */
+  public roundIndex: number;
+
+  /** The index of the group in the request. */
+  public groupIndex: number;
+
+  /** The round the simulation ran after (the result's `lastRound`). */
+  public round: bigint;
+
+  /**
+   * The node's message: the round's `error`, or the group's
+   * `failureMessage`. Undefined for `missing`.
+   */
+  public failureMessage?: string;
+
+  /** For `group`: the path of the transaction that failed, if the node gave one. */
+  public failedAt?: number[];
+
+  /**
+   * The group's result, when the node returned one (`group` and
+   * `not-simulated`): it holds the transactions that ran before the failure,
+   * with their logs and budget.
+   */
+  public result?: SimulateTransactionGroupResult;
+
+  constructor({
+    kind,
+    roundIndex,
+    groupIndex,
+    round,
+    failureMessage,
+    failedAt,
+    result,
+  }: {
+    kind: SimulateGroupErrorKind;
+    roundIndex: number;
+    groupIndex: number;
+    round: bigint;
+    failureMessage?: string;
+    failedAt?: number[];
+    result?: SimulateTransactionGroupResult;
+  }) {
+    const where = `group ${groupIndex} at round ${round}`;
+    let message: string;
+    switch (kind) {
+      case 'round':
+        message = `Could not simulate ${where}: ${failureMessage}`;
+        break;
+      case 'not-simulated':
+        message = `Did not simulate ${where}: ${failureMessage}`;
+        break;
+      case 'missing':
+        message = `The response has no result for ${where}`;
+        break;
+      default:
+        message = `Simulating ${where} failed${failedAt ? ` at transaction ${failedAt.join('.')}` : ''}: ${failureMessage}`;
+    }
+    super(message);
+    this.name = 'SimulateGroupError';
+    this.kind = kind;
+    this.roundIndex = roundIndex;
+    this.groupIndex = groupIndex;
+    this.round = round;
+    this.failureMessage = failureMessage;
+    this.failedAt = failedAt;
+    this.result = result;
   }
 }

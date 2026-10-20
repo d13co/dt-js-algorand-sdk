@@ -1,4 +1,5 @@
 import { AlgodClient } from '../algod.js';
+import { BaseHTTPClient } from '../../../baseHTTPClient.js';
 import { Address } from '../../../../encoding/address.js';
 import AccountInformationAt from './accountInformationAt.js';
 import AccountAssetInformationAt from './accountAssetInformationAt.js';
@@ -44,6 +45,86 @@ import { decodeMsgpack } from '../../../../encoding/encoding.js';
  * ```
  */
 export class TimeTravelAlgodClient extends AlgodClient {
+  /**
+   * What this build of the client supports, for code that finds
+   * `TimeTravelAlgodClient` at runtime on an algosdk that may be stock or an
+   * older fork build:
+   * - `reads-at-round`: `.round()` on the account, asset, application, box and
+   *   supply reads;
+   * - `versions`: the `...Versions` methods;
+   * - `simulate-groups`, `parallel-groups`, `simulate-rounds`: several groups,
+   *   `parallelGroups()` and `rounds()` in `simulateTransactions`;
+   * - `from`: {@link TimeTravelAlgodClient.from};
+   * - `group-results`: `groupResult()` / `groupResults()` on the simulate
+   *   response;
+   * - `from-transactions`: `TimeTravelSimulateRequest.fromTransactions`;
+   * - `pack-rounds`: `packSimulateRounds`.
+   *
+   * #### Example
+   * ```typescript
+   * const TT = (algosdk as any).TimeTravelAlgodClient;
+   * if (TT?.features?.includes('group-results')) {
+   *   const client = TT.from(algod);
+   * }
+   * ```
+   */
+  static readonly features: readonly string[] = Object.freeze([
+    'reads-at-round',
+    'versions',
+    'simulate-groups',
+    'parallel-groups',
+    'simulate-rounds',
+    'from',
+    'group-results',
+    'from-transactions',
+    'pack-rounds',
+  ]);
+
+  /** The clients made by {@link TimeTravelAlgodClient.from}, by source client. */
+  private static fromCache = new WeakMap<object, TimeTravelAlgodClient>();
+
+  /**
+   * A `TimeTravelAlgodClient` that sends its requests through an existing
+   * {@link AlgodClient}'s HTTP client: same server, token, headers and custom
+   * `BaseHTTPClient`, if any. Returns `algod` itself if it already is a
+   * `TimeTravelAlgodClient`. Calling it again with the same client returns
+   * the same `TimeTravelAlgodClient`, so what it caches, such as
+   * `supportsTimeTravel()`, is kept.
+   *
+   * `algod` may come from another copy of algosdk (it is read by shape, not
+   * `instanceof`), but transactions and models passed to this client must come
+   * from this copy, so make the app use a single copy.
+   *
+   * #### Example
+   * ```typescript
+   * const algodClient = algosdk.TimeTravelAlgodClient.from(
+   *   algorand.client.algod
+   * );
+   * ```
+   *
+   * @param algod - The client to share the connection of.
+   * @throws TypeError if `algod` is not shaped like an `AlgodClient`.
+   */
+  static from(algod: AlgodClient | { c: unknown }): TimeTravelAlgodClient {
+    if (algod instanceof TimeTravelAlgodClient) return algod;
+    const cached = TimeTravelAlgodClient.fromCache.get(algod);
+    if (cached) return cached;
+    const bc = (algod as unknown as { c?: { bc?: Partial<BaseHTTPClient> } })?.c
+      ?.bc;
+    if (
+      typeof bc?.get !== 'function' ||
+      typeof bc.post !== 'function' ||
+      typeof bc.delete !== 'function'
+    ) {
+      throw new TypeError(
+        'TimeTravelAlgodClient.from expects an AlgodClient: found no HTTP client with get, post and delete on it'
+      );
+    }
+    const client = new TimeTravelAlgodClient(bc as BaseHTTPClient, '');
+    TimeTravelAlgodClient.fromCache.set(algod, client);
+    return client;
+  }
+
   private supportsTimeTravelResult?: Promise<boolean>;
 
   /**

@@ -1,0 +1,361 @@
+# dtalgosdk: differences from algosdk
+
+`dtalgosdk` is [algosdk](https://www.npmjs.com/package/algosdk) v3.9.0 with additions for a time-travel algod: a node built from [dt-algorand](https://github.com/d13co/dt-algorand/tree/dtalgorand), the time-travel fork of go-algorand, and run with `EnableTimeTravel: true`, which keeps the state of every round since genesis. Everything in algosdk is unchanged and keeps working against stock algod; the additions are new exports, so code written for algosdk runs on dtalgosdk as is.
+
+"At round R" always means the state at the end of round R, after all of that round's transactions.
+
+- [Summary](#summary)
+- [Installing in place of algosdk](#installing-in-place-of-algosdk)
+- [New exports](#new-exports)
+- [DTAlgodClient](#dtalgodclient)
+- [Reads at past rounds](#reads-at-past-rounds)
+- [Versions: the rounds at which objects changed](#versions-the-rounds-at-which-objects-changed)
+- [Simulate](#simulate)
+- [Simulate limits](#simulate-limits)
+- [Running against stock algod](#running-against-stock-algod)
+- [Bug fixes to upstream code](#bug-fixes-to-upstream-code)
+- [Releasing dtalgosdk](#releasing-dtalgosdk)
+
+## Summary
+
+| Area                                              | algosdk                          | dtalgosdk                                                                                                                          |
+| ------------------------------------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Client                                            | `Algodv2` / `AlgodClient`        | also `DTAlgodClient`, a subclass, with `DTAlgodClient.from(existingAlgod)`                                                         |
+| Account, asset, application, box and supply reads | latest round only                | `.round(R)` on each read                                                                                                           |
+| History                                           | none (use an indexer)            | `...Versions` methods: the rounds at which an account, asset, application, box or any of an app's boxes changed, with paging       |
+| Simulate: groups per request                      | one                              | several (node's `MaxAPISimulateGroups`, default 16), in sequence or with `parallelGroups()`                                        |
+| Simulate: rounds per request                      | one (`round`)                    | several with `rounds([...])` (node's `MaxAPISimulateRounds`, default 16)                                                           |
+| Simulate: validity window                         | must contain the simulated round | `skipValidityWindow()` or `rewriteValidityWindow()` to simulate rounds far apart                                                   |
+| Simulate: consensus protocol                      | the round's own                  | `protocol('v42' \| 'latest' \| ...)` to run under a later protocol                                                                 |
+| Simulate results                                  | `txnGroups`                      | also `roundResults`, `protocolOverride`, and `groupResult()` / `groupResults()` that return each group's outcome or a typed error  |
+| Request building                                  | `SimulateRequest`                | `DTSimulateRequest`, with `fromTransactions()` for unsigned transactions, and `packSimulateRounds()` to split rounds into requests |
+| Node limits                                       | none                             | `simulateLimits()`                                                                                                                 |
+| Errors                                            | HTTP errors                      | `DTUnsupportedError` when the node lacks a feature, `SimulateGroupError` per failed group                                          |
+| ABI                                               |                                  | `ABIArrayDynamicType` and `ABITupleType` decode subarray views correctly (see [Bug fixes](#bug-fixes-to-upstream-code))            |
+
+## Installing in place of algosdk
+
+Install dtalgosdk under the name `algosdk` with your package manager's override, so that your code and every dependency that uses algosdk (algokit-utils, use-wallet, ...) load the same single copy. Two copies break `instanceof` checks and mix transaction and model classes. Imports stay `from 'algosdk'`.
+
+npm (`package.json`):
+
+```json
+{
+  "dependencies": {
+    "algosdk": "npm:dtalgosdk@3.9.0-dt.2.0.0.1"
+  },
+  "overrides": {
+    "algosdk": "$algosdk"
+  }
+}
+```
+
+pnpm 10 and later (`pnpm-workspace.yaml`; pnpm 11 and later read overrides only from here):
+
+```yaml
+overrides:
+  algosdk: npm:dtalgosdk@3.9.0-dt.2.0.0.1
+```
+
+pnpm 9 (`package.json`; it warns about an unmet `algosdk` peer dependency, which is harmless):
+
+```json
+{
+  "pnpm": {
+    "overrides": {
+      "algosdk": "npm:dtalgosdk@3.9.0-dt.2.0.0.1"
+    }
+  }
+}
+```
+
+Yarn and Bun (`package.json`):
+
+```json
+{
+  "dependencies": {
+    "algosdk": "npm:dtalgosdk@3.9.0-dt.2.0.0.1"
+  },
+  "resolutions": {
+    "algosdk": "npm:dtalgosdk@3.9.0-dt.2.0.0.1"
+  }
+}
+```
+
+Yarn 4 refuses versions published less than a day ago (`npmMinimalAgeGate`). To install a new dtalgosdk release right away, add `npmPreapprovedPackages: ["dtalgosdk"]` to `.yarnrc.yml`.
+
+Then check that only one copy is installed: `npm ls algosdk` or `pnpm why algosdk` (`yarn why dtalgosdk` on Yarn) should list `dtalgosdk@3.9.0-dt.2.0.0.1` and nothing else.
+
+Pin the exact version: dtalgosdk versions are prereleases, and ranges such as `^3.9.0` do not match them. A version reads `<algosdk version>-dt.<dt-algorand release>.<SDK release>`: `3.9.0-dt.2.0.0.1` is built on algosdk 3.9.0, covers the API of dt-algorand dt2 (`v5.0.4-dt2`), and is SDK release 0.0.1 for that pair.
+
+To use a local checkout instead, run `npm run build` in it (and again after each change), then use it in place of the registry version. With pnpm, set the override to `link:/path/to/js-algorand-sdk`. With npm, put a tarball from `npm pack` in `dependencies` (`"algosdk": "file:./vendor/dtalgosdk-3.9.0-dt.2.0.0.1.tgz"`) and keep the override as `"$algosdk"`: npm rejects an override that differs from the direct dependency.
+
+## New exports
+
+From the package root (`import algosdk from 'algosdk'`):
+
+- `DTAlgodClient`
+- `DTUnsupportedError`, `SimulateGroupError`, and the types `SimulateGroupErrorKind`, `SimulateGroupOutcome`
+- `packSimulateRounds`, and the types `PackedSimulateRounds`, `SimulateRoundsWindow`
+- `DEFAULT_MAX_SIMULATE_GROUPS` (16), `DEFAULT_MAX_SIMULATE_ROUNDS` (16), `MAX_TXN_LIFE` (1000)
+- the types `VersionsOrder`, `VersionsInclude`, `AccountVersionsExclude`
+- `dtModels`: the request and response models: `DTSimulateRequest`, `DTSimulateResponse`, `DTSimulationEvalOverrides`, `SimulateRoundResult`, `SimulateProtocolOverride`, `SimulateProtocolNote`, `SimulateProtocolNoteHit`, the type `SimulateProtocolNoteCode`, `SimulateLimitsResponse`, `BoxChange`, and the `...Version` / `...VersionsResponse` models
+
+`algosdk/client/algod` exports the same, with the models at its top level.
+
+## DTAlgodClient
+
+`DTAlgodClient` extends `AlgodClient` and takes the same constructor arguments. It overrides the reads that gain a `.round()`, `simulateTransactions` and `simulateRawTransactions`, and adds the versions, limits and detection methods. Every other method is inherited unchanged.
+
+```typescript
+const algod = new algosdk.DTAlgodClient(token, server, port);
+```
+
+To reuse a client you already have, such as algokit-utils' `algorand.client.algod`:
+
+```typescript
+const algod = algosdk.DTAlgodClient.from(algorand.client.algod);
+```
+
+`from` sends requests through the existing client's HTTP client (same server, token, headers and custom `BaseHTTPClient`), returns its argument if it already is a `DTAlgodClient`, and returns the same `DTAlgodClient` each time it is called with the same client, so cached answers (`supportsDT()`, `simulateLimits()`) are shared. The source client may come from another copy of algosdk, since it is read by shape, but transactions and models passed to the new client must come from this copy.
+
+`DTAlgodClient.features` lists what the build supports, for code that finds the class at runtime on an algosdk that may be stock or an older fork build: `reads-at-round`, `versions`, `simulate-groups`, `parallel-groups`, `simulate-rounds`, `from`, `group-results`, `from-transactions`, `pack-rounds`, `validity-window`, `simulate-protocol`, `simulate-limits`.
+
+```typescript
+const DT = (algosdk as any).DTAlgodClient;
+if (DT?.features?.includes('group-results')) {
+  const client = DT.from(algod);
+}
+```
+
+## Reads at past rounds
+
+These reads take `.round(R)`; without it they read the latest round, as in algosdk:
+
+- `accountInformation(address)`
+- `accountAssetInformation(address, assetId)`
+- `accountAssetsInformation(address)`
+- `accountApplicationsInformation(address)`
+- `accountApplicationInformation(address, appId)`
+- `supply()`
+- `getAssetByID(assetId)`
+- `getApplicationByID(appId)`
+- `getApplicationBoxByName(appId, name)`
+- `getApplicationBoxes(appId)`
+
+```typescript
+const box = await algod
+  .getApplicationBoxByName(1234, boxName)
+  .round(45_000_000)
+  .do();
+
+const boxes = await algod
+  .getApplicationBoxes(1234)
+  .round(45_000_000)
+  .limit(100)
+  .include('values')
+  .do();
+```
+
+Stock algod ignores `round` on these routes and answers with the latest state. Where the response says which round it is for, the client checks it and throws a `DTUnsupportedError` (with `requestedRound` and `returnedRound`) on a mismatch. `getAssetByID` and `getApplicationByID` responses carry no round, so a stock node cannot be detected there: check `supportsDT()` first.
+
+When listing boxes at a past round, pass the same round on every page. The `next` cursor is exclusive: only names that sort strictly after it are returned (upstream's OpenAPI description says otherwise and is wrong). Listing at a past round walks every box the app has ever had under the prefix, deleted ones included, so narrow it with `.prefix()` where you can.
+
+## Versions: the rounds at which objects changed
+
+| Method                                       | Lists the rounds at which ... changed                                       |
+| -------------------------------------------- | --------------------------------------------------------------------------- |
+| `getApplicationBoxVersions(appId, name)`     | one box: created, written or deleted                                        |
+| `getApplicationBoxesVersions(appId)`         | any of an app's boxes, with the boxes that changed in each round            |
+| `getApplicationVersions(appId)`              | an application's parameters, including creation and deletion                |
+| `getAssetVersions(assetId)`                  | an asset's parameters, including creation and destruction                   |
+| `accountVersions(address)`                   | anything `accountInformation` returns; each version lists only what changed |
+| `accountAssetVersions(address, assetId)`     | the account's holding, and the asset's parameters if it created it          |
+| `accountApplicationVersions(address, appId)` | the account's local state, and the app's parameters if it created it        |
+
+A version is a round at which the stored value changed: rewriting an identical value is not a version, a deletion is. All of them take:
+
+- `.minRound(R)` and `.maxRound(R)`: the range, inclusive (default 0 to the latest round). A page with an explicit `maxRound` never changes and can be cached.
+- `.order('asc' | 'desc')`: oldest first (default) or newest first. For "the last N changes", use `.order('desc').limit(N)`.
+- `.limit(N)`: versions per page, default 100, at most 10,000, or 1,000 with values. A page also ends once its values reach 1 MB, so only a missing `nextToken` means there are no more pages.
+- `.next(token)`: the previous page's `nextToken`, passed back with the same other parameters. It stays valid as new blocks arrive.
+- `.include('values')`: each version's new value (absent on deletions).
+- `.iterate()`: an async iterator over every version, fetching pages as it goes.
+
+`accountVersions` also takes `.exclude('all' | 'none' | 'created-apps-params' | 'created-assets-params')`. Applying its versions after `minRound`, replacing objects by ID, to `accountInformation(address).round(minRound)` gives the account at any later round of the range.
+
+```typescript
+for await (const version of algod
+  .getApplicationBoxVersions(1234, boxName)
+  .include('values')
+  .iterate()) {
+  console.log(version.round, version.deleted, version.value);
+}
+
+const res = await algod
+  .getApplicationBoxesVersions(1234)
+  .order('desc')
+  .limit(10)
+  .do();
+for (const version of res.versions) {
+  console.log(
+    version.round,
+    version.boxes.map((b) => b.name)
+  );
+}
+```
+
+## Simulate
+
+`DTAlgodClient.simulateTransactions(request)` accepts a stock `SimulateRequest` or a `dtModels.DTSimulateRequest`, which adds the fork's fields. Each field can also be set on the request builder.
+
+### Several groups
+
+`txnGroups` may hold several groups, up to the node's `MaxAPISimulateGroups` (default 16). By default they run in order as consecutive groups of one simulated block:
+
+- each group sees the effects of the groups before it;
+- a transaction or lease used by an earlier group is a duplicate;
+- the groups share the block's byte limit, so a group that does not fit fails while a smaller later group may still fit;
+- a group that fails is rolled back and later groups still run, except after a failed post-evaluation check (placeholder PQ signatures with `fixSigners`) or a corrupted evaluator, after which every later group is reported as not simulated;
+- each group's failure is in its own `failureMessage` / `failedAt` (0-based), and `extraOpcodeBudget` applies to each group.
+
+With `.parallelGroups()` (or `parallelGroups: true`), every group is simulated alone against the state at the start round, concurrently. Groups then do not see each other's effects, duplicates are not detected across groups, and several groups may create the same app or asset ID.
+
+`simulateRawTransactions` takes one signed transaction, one group, or several groups (`Uint8Array[][]`).
+
+`DTSimulateRequest.fromTransactions(groups, fields)` builds a request from unsigned transactions, one array per group, such as `TransactionComposer.buildTransactions()` output. It sends empty signatures, defaults `allowEmptySignatures` to true, and assigns a group ID to a multi-transaction group that has none (it never recomputes one, so build new transactions for each request).
+
+```typescript
+const request = algosdk.dtModels.DTSimulateRequest.fromTransactions(
+  [group1Txns, group2Txns],
+  { allowUnnamedResources: true, parallelGroups: true }
+);
+const res = await algod.simulateTransactions(request).do();
+```
+
+### Several rounds
+
+With `.rounds([...])` (or `rounds` on the request), the request is simulated once per listed round, up to the node's `MaxAPISimulateRounds` (default 16) entries. 0 means the latest round. Results are in `roundResults`, one per entry in request order, each with `lastRound`, `txnGroups`, `initialStates`, `protocolOverride` and, when that round could not be simulated, `error` (the request as a whole still succeeds). The top-level `lastRound` is then 0 and `txnGroups` is empty, so `AtomicTransactionComposer.simulate`, which reads the top level, cannot be used with `rounds`: call the client directly. A non-time-travel node can only simulate its last few rounds.
+
+Simulating at round R evaluates the transactions as if in block R + 1, so without a validity window mode they need `firstValid <= R + 1 <= lastValid`, and a transaction is valid for at most 1000 rounds. `packSimulateRounds(rounds, { maxRounds, maxSpan })` packs a list of rounds into as few requests as possible under those rules. It returns `windows` (each with `rounds`, `firstValid` and `lastValid` to build that request's transactions with) and `positions` (where each input round's results are). Round 0 is rejected: look up the latest round with `status()` first.
+
+```typescript
+const { maxTxnGroups, maxRounds } = await algod.simulateLimits();
+const { windows, positions } = algosdk.packSimulateRounds(rounds, {
+  maxRounds,
+});
+const responses = await Promise.all(
+  windows.map((w) =>
+    algod
+      .simulateTransactions(
+        algosdk.dtModels.DTSimulateRequest.fromTransactions(
+          buildGroups(w.firstValid, w.lastValid), // up to maxTxnGroups groups
+          { allowUnnamedResources: true, parallelGroups: true }
+        )
+      )
+      .rounds(w.rounds)
+      .do()
+  )
+);
+positions.forEach(({ window, roundIndex }, i) => {
+  for (const outcome of responses[window].groupResults()[roundIndex]) {
+    if (outcome.ok) {
+      console.log(rounds[i], outcome.result.txnResults[0].txnResult.logs);
+    } else {
+      console.log(rounds[i], outcome.error.kind, outcome.error.message);
+    }
+  }
+});
+```
+
+### Validity window modes
+
+Both modes need `rounds`, and they cannot be combined. With either, `packSimulateRounds(rounds, { maxSpan: null })` packs by the round limit only.
+
+- `.skipValidityWindow()`: transactions are evaluated as sent at every round, outside their window. The round-range check and the check for a transaction already confirmed are skipped; leases, duplicates within the block, genesis ID and hash, well-formedness and fees are still checked. Programs see the original window, so `block`, `FirstValidTime` and inner transactions stay tied to it, and reading a block after the start round fails.
+- `.rewriteValidityWindow()`: at every round each top-level transaction's window is moved to the simulated block, keeping its width, and valid group IDs are recomputed. Signatures over changed transactions are dropped, so it needs `allowEmptySignatures`; logic signatures are kept. Transaction IDs change: match results by group index, not transaction ID, and give transactions that differ only by their window distinct notes, or the later one is a duplicate.
+
+### Later consensus protocol
+
+`.protocol(p)` runs the simulated round under a later consensus protocol, as if an upgrade to it took effect right after the start round: its programs, limits, fees and other parameters apply, to previously deployed programs too. `p` is a consensus version string, `v24` to `v43` for mainline ones, `latest` (the protocol of the block after the node's latest), or `future` (only with `EnableDeveloperAPI`). It must be later than the protocol the round really ran.
+
+`protocolOverride` on the response (on each round result, with `rounds`) has `from`, `to`, `applied` (false when `from` already is `to`) and `notes`: where the simulation differs from what the chain recorded, with codes `semantics-changed`, `no-heartbeat-challenges`, `no-load-history`, `block-incentive-fields`, `block-hash-fields`, `online-stake-includes-expired`, `account-incentive-fields` and `app-version-starts-at-upgrade`.
+
+```typescript
+const res = await algod
+  .simulateTransactions(
+    algosdk.dtModels.DTSimulateRequest.fromTransactions(groups, {
+      allowUnnamedResources: true,
+    })
+  )
+  .rounds([20_000_000, 45_000_000])
+  .rewriteValidityWindow()
+  .protocol('latest')
+  .do();
+for (const r of res.roundResults!) {
+  const po = r.protocolOverride;
+  console.log(r.lastRound, r.error ?? `${po!.from} -> ${po!.to}`);
+  for (const note of po?.notes ?? [])
+    console.log('  ', note.code, note.message);
+}
+```
+
+### Reading results
+
+`DTSimulateResponse` adds:
+
+- `groupResult(groupIndex, roundIndex = 0)`: one group at one round, as `{ ok: true, result }` or `{ ok: false, error }`;
+- `groupResults()`: every outcome, indexed `[roundIndex][groupIndex]`, with a single row when the request listed no rounds.
+
+The `error` is a `SimulateGroupError` with `kind`:
+
+- `round`: the round could not be simulated (the round result's `error`);
+- `group`: the group failed (`failureMessage`, and `failedAt` when the node blamed one transaction);
+- `not-simulated`: the group was skipped after an earlier group failed a post-evaluation check;
+- `missing`: the response has no result for the group.
+
+It also has `roundIndex`, `groupIndex`, `round`, and, for `group` and `not-simulated`, `result` with the transactions that ran before the failure.
+
+The node may raise the limits on unnamed resources (`allowUnnamedResources`) with its `SimulateResourceLimitMultiplier` setting, so the resources it reports may not fit in a group that can be submitted.
+
+## Simulate limits
+
+`simulateLimits()` reads `GET /v2/transactions/simulate/limits` once per client and returns a frozen `SimulateLimitsResponse`:
+
+| Field                     | Meaning                                                           |
+| ------------------------- | ----------------------------------------------------------------- |
+| `maxTxnGroups`            | groups per request                                                |
+| `maxRounds`               | `rounds` entries per request; 0 when `rounds` is off              |
+| `maxExtraOpcodeBudget`    | most `extraOpcodeBudget`, per group                               |
+| `resourceLimitMultiplier` | the node's `SimulateResourceLimitMultiplier`                      |
+| `timeTravel`              | `EnableTimeTravel` is on                                          |
+| `developerApi`            | `EnableDeveloperAPI` is on (`execTraceConfig`, protocol `future`) |
+| `reported`                | the node reported these; false for the fallback below             |
+
+A node without the endpoint (stock algod, or an older fork build) gets stock algod's limits instead (`SimulateLimitsResponse.stock()`), with `reported` false: one group per request and no `rounds`, so send one request per round with `round` set. `timeTravel` and `developerApi` are then unknown and read false, so do not gate on them unless `reported` is true. `getSimulateLimits()` is the uncached request, which throws `DTUnsupportedError` on a 404.
+
+## Running against stock algod
+
+`DTAlgodClient` works against a stock node for everything inherited from `AlgodClient`. For the additions:
+
+- `supportsDT()` probes a `/versions` route once per client and answers whether the node has time travel. Use it to fall back to an indexer.
+- A stock node's rejection of a fork feature, or a response that ignored one (a read for another round, `rounds` without one result per round, a validity window mode not echoed, `protocol` without `protocolOverride`), is thrown as a `DTUnsupportedError`. Catch it once and fall back, for example to one group per simulate request.
+- A time-travel node built before `getApplicationBoxesVersions` passes `supportsDT()` and answers that method with a 404, thrown as `DTUnsupportedError`.
+
+## Bug fixes to upstream code
+
+- `ABIArrayDynamicType.decode` and `ABITupleType.decode` read the length prefix and offsets from the start of the underlying `ArrayBuffer` instead of the start of the `Uint8Array` passed in. Decoding a subarray (for example a value sliced out of a log or box) read the wrong bytes. They now read at the view's `byteOffset`, and a dynamic array shorter than its 2-byte length prefix throws a clear error.
+
+## Releasing dtalgosdk
+
+dtalgosdk is published by hand; the upstream semantic-release workflow does not publish it, and it is disabled on the fork.
+
+1. Choose the version, `<algosdk version>-dt.<dt-algorand release>.<SDK release>`:
+   - the algosdk version the code is built on; change it when merging a new upstream release;
+   - the number of the latest dt-algorand release (`v5.0.4-dt2` is 2) whose API the SDK covers. It says what the SDK covers, not what it requires: the client detects missing node features at runtime. Keep the dot (`dt.2`, not `dt2`), so that npm compares it as a number and `dt.10` sorts after `dt.9`;
+   - the SDK's own release, `x.y.z`: bump `x` for a breaking change to the fork's API, `y` for features and `z` for fixes. Reset it to `0.0.1` when either of the parts before it changes.
+2. Set it in `package.json` and `package-lock.json` (`npm version <version> --no-git-tag-version`), and in the install snippets and versioning example in `README.md` and in this file.
+3. Update the browser snippets in `README.md`: the version in both URLs, and the `integrity` hash, from `npm run build` then `echo "sha384-$(openssl dgst -sha384 -binary dist/browser/algosdk.min.js | openssl base64 -A)"`.
+4. `npm test`, then `npm pack --dry-run` to check the contents (`dist/`, `src/`, `README.md`, `DTALGOSDK.md`, `LICENSE`). `npm pack` and `npm publish` run `prepare`, which builds `dist/`.
+5. Commit, tag (`git tag v<version>`) and push the branch and the tag.
+6. `npm publish --tag latest`. npm 11 refuses to publish a prerelease without a tag, and `latest` makes it the version `npm install dtalgosdk` gets.

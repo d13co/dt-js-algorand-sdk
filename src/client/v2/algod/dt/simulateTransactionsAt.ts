@@ -132,7 +132,7 @@ export default class SimulateTransactionsAt extends SimulateRawTransactions {
    * protocol the round really ran is simulated as it is, with `applied`
    * false.
    *
-   * @param protocol - A consensus version string, `v24` to `v42` for a
+   * @param protocol - A consensus version string, `v24` to `v43` for a
    * mainline one, `latest` (the protocol of the block after the node's latest
    * one) or `future` (vFuture, only on a node with `EnableDeveloperAPI`). An
    * empty string sends none.

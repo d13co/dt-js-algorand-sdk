@@ -1,6 +1,98 @@
-# js-algorand-sdk
+# dt-js-algorand-sdk
 
-[![npm version](https://badge.fury.io/js/algosdk.svg)](https://www.npmjs.com/package/algosdk)
+[![npm version](https://badge.fury.io/js/dtalgosdk.svg)](https://www.npmjs.com/package/dtalgosdk)
+
+## dtalgosdk: algosdk for time-travel algod
+
+This is `dtalgosdk`, a fork of [algosdk](https://www.npmjs.com/package/algosdk) v3.9.0 for a time-travel algod: [dt-algorand](https://github.com/d13co/dt-algorand/tree/dtalgorand), the go-algorand fork run with `EnableTimeTravel: true`, which keeps the state of every round since genesis. It is a drop-in replacement: everything in algosdk is unchanged, and the additions are new exports. The main changes:
+
+- **`DTAlgodClient`**, an `AlgodClient` subclass. `DTAlgodClient.from(algod)` wraps an existing client, such as algokit-utils' `algorand.client.algod`.
+- **Reads at past rounds**: `.round(R)` on account, asset, application, box and supply reads.
+- **History**: `...Versions` methods list the rounds at which an account, asset, application, box, or any of an app's boxes changed, with paging and values.
+- **Simulate** with several groups per request (in sequence or with `parallelGroups()`), at several rounds per request (`rounds()`), with the validity window skipped or moved to each round (`skipValidityWindow()`, `rewriteValidityWindow()`), and under a later consensus protocol (`protocol()`).
+- **Helpers**: `DTSimulateRequest.fromTransactions()` for unsigned transactions, `packSimulateRounds()` to split rounds into requests, `groupResults()` for each group's outcome or a typed `SimulateGroupError`, and `simulateLimits()` for the node's limits.
+- **Stock algod detection**: `supportsDT()`, and a `DTUnsupportedError` when a node lacks a feature, so code can fall back.
+- **Fix**: ABI dynamic arrays and tuples decode `Uint8Array` subarrays correctly.
+
+See **[DTALGOSDK.md](https://github.com/d13co/dt-js-algorand-sdk/blob/dtalgorand/DTALGOSDK.md)** for the detailed differences, API reference and examples. Source and issues: [d13co/dt-js-algorand-sdk](https://github.com/d13co/dt-js-algorand-sdk) (branch `dtalgorand`).
+
+### Installing dtalgosdk in place of algosdk
+
+Install it under the name `algosdk` with a package-manager override, so that your code and every dependency that uses algosdk (algokit-utils, use-wallet, ...) load the same single copy. Imports stay `from 'algosdk'`.
+
+npm (`package.json`):
+
+```json
+{
+  "dependencies": {
+    "algosdk": "npm:dtalgosdk@3.9.0-dt.2.0.0.1"
+  },
+  "overrides": {
+    "algosdk": "$algosdk"
+  }
+}
+```
+
+pnpm 10 and later (`pnpm-workspace.yaml`; pnpm 11 and later read overrides only from here):
+
+```yaml
+overrides:
+  algosdk: npm:dtalgosdk@3.9.0-dt.2.0.0.1
+```
+
+pnpm 9 (`package.json`; it warns about an unmet `algosdk` peer dependency, which is harmless):
+
+```json
+{
+  "pnpm": {
+    "overrides": {
+      "algosdk": "npm:dtalgosdk@3.9.0-dt.2.0.0.1"
+    }
+  }
+}
+```
+
+Yarn and Bun (`package.json`):
+
+```json
+{
+  "dependencies": {
+    "algosdk": "npm:dtalgosdk@3.9.0-dt.2.0.0.1"
+  },
+  "resolutions": {
+    "algosdk": "npm:dtalgosdk@3.9.0-dt.2.0.0.1"
+  }
+}
+```
+
+Yarn 4 refuses versions published less than a day ago (`npmMinimalAgeGate`). To install a new dtalgosdk release right away, add `npmPreapprovedPackages: ["dtalgosdk"]` to `.yarnrc.yml`.
+
+`npm ls algosdk` or `pnpm why algosdk` (`yarn why dtalgosdk` on Yarn) should then list only `dtalgosdk@3.9.0-dt.2.0.0.1`. Pin the exact version: dtalgosdk versions are prereleases, and ranges such as `^3.9.0` do not match them. A version reads `<algosdk version>-dt.<dt-algorand release>.<SDK release>`: `3.9.0-dt.2.0.0.1` is built on algosdk 3.9.0, covers the API of dt-algorand dt2 (`v5.0.4-dt2`), and is SDK release 0.0.1 for that pair.
+
+### Quick start
+
+```typescript
+import algosdk from 'algosdk';
+
+const algod = algosdk.DTAlgodClient.from(algorand.client.algod);
+
+// A box as it was at round 45,000,000.
+const box = await algod
+  .getApplicationBoxByName(appId, boxName)
+  .round(45_000_000)
+  .do();
+
+// The last 10 rounds at which any of the app's boxes changed.
+const { versions } = await algod
+  .getApplicationBoxesVersions(appId)
+  .order('desc')
+  .limit(10)
+  .do();
+```
+
+The rest of this README is upstream algosdk's, with the installation steps changed to install dtalgosdk.
+
+---
 
 AlgoSDK is the official JavaScript library for communicating with the Algorand network. It's designed for modern browsers and Node.js.
 
@@ -13,19 +105,21 @@ Existing codebases using v2 of this library will be incompatible with v3. The v3
 ### [Node.js](https://nodejs.org/en/download/)
 
 ```
-$ npm install algosdk
+$ npm install algosdk@npm:dtalgosdk@3.9.0-dt.2.0.0.1
 ```
+
+This installs dtalgosdk under the name `algosdk`. If other dependencies use algosdk, also add the override from [Installing dtalgosdk in place of algosdk](#installing-dtalgosdk-in-place-of-algosdk), so that there is only one copy.
 
 > This package provides TypeScript types, but you will need [TypeScript](https://www.typescriptlang.org/) version 4.2 or higher to use them properly.
 
 ### Browser
 
-Include a minified browser bundle directly in your HTML like so:
+Include a minified browser bundle directly in your HTML like so. It defines the global `algosdk`, which includes `DTAlgodClient`:
 
 ```html
 <script
-  src="https://unpkg.com/algosdk@v3.9.0/dist/browser/algosdk.min.js"
-  integrity="sha384-1ou0X6Dbc+DocuXmvYYLgmOXTRd/u6t8gINEfpvwKs9KrEy6uwGSZuzMZZVWKBxt"
+  src="https://unpkg.com/dtalgosdk@3.9.0-dt.2.0.0.1/dist/browser/algosdk.min.js"
+  integrity="sha384-rVZJ+aH65KfWc84DLSP/uLwpwaSDsQW1n1lPBRySIB95Xjv4tdQeczRY8AO7RxUT"
   crossorigin="anonymous"
 ></script>
 ```
@@ -34,8 +128,8 @@ or
 
 ```html
 <script
-  src="https://cdn.jsdelivr.net/npm/algosdk@v3.9.0/dist/browser/algosdk.min.js"
-  integrity="sha384-1ou0X6Dbc+DocuXmvYYLgmOXTRd/u6t8gINEfpvwKs9KrEy6uwGSZuzMZZVWKBxt"
+  src="https://cdn.jsdelivr.net/npm/dtalgosdk@3.9.0-dt.2.0.0.1/dist/browser/algosdk.min.js"
+  integrity="sha384-rVZJ+aH65KfWc84DLSP/uLwpwaSDsQW1n1lPBRySIB95Xjv4tdQeczRY8AO7RxUT"
   crossorigin="anonymous"
 ></script>
 ```
@@ -66,91 +160,6 @@ Documentation for this SDK is available here: https://algorand.github.io/js-algo
 Running examples requires access to a running node. Follow the instructions in Algorand's [developer resources](https://developer.algorand.org/docs/run-a-node/setup/install/) to install a node on your computer.
 
 **As portions of the codebase are written in TypeScript, example files cannot be run directly using `node`**. Please refer to the instructions described in the [examples/README.md](examples/README.md) file for more information regarding running the examples.
-
-## Time-travel fork
-
-This fork adds `DTAlgodClient`, an `AlgodClient` for a time-travel algod: reads at past rounds, the rounds at which objects changed, and simulate with several groups (`parallelGroups()`) at several rounds (`rounds()`), optionally with the transactions' validity windows skipped or moved to each round (`skipValidityWindow()`, `rewriteValidityWindow()`) and under a later consensus protocol (`protocol()`).
-
-### Using it in place of algosdk
-
-Packages such as algokit-utils must load the same copy of algosdk as your code, so replace `algosdk` everywhere with a package-manager override. With pnpm (in `pnpm-workspace.yaml`, or under `pnpm` in `package.json`):
-
-```yaml
-overrides:
-  # local checkout: run `npm run build` in it first, and after each change
-  algosdk: link:/path/to/js-algorand-sdk
-  # or a packed build (`npm pack` in the checkout)
-  # algosdk: file:./vendor/algosdk-3.8.0-dt.1.tgz
-```
-
-`pnpm why algosdk` should then list only the fork.
-
-### Batching read-only simulate calls
-
-```typescript
-import algosdk from 'algosdk';
-
-// Reuses the server, token and headers of an existing client.
-const algod = algosdk.DTAlgodClient.from(algorand.client.algod);
-
-// The node's limits: groups and rounds per request (cached per client).
-const { maxTxnGroups, maxRounds } = await algod.simulateLimits();
-
-// Every round of one request must lie in its transactions' validity window.
-// maxRounds is 0 on a node without rounds: see the note on stock algod below.
-const { windows, positions } = algosdk.packSimulateRounds(rounds, {
-  maxRounds,
-});
-const responses = await Promise.all(
-  windows.map((w) =>
-    algod
-      .simulateTransactions(
-        algosdk.dtModels.DTSimulateRequest.fromTransactions(
-          buildGroups(w.firstValid, w.lastValid), // Transaction[][], up to maxTxnGroups
-          { allowUnnamedResources: true, parallelGroups: true }
-        )
-      )
-      .rounds(w.rounds)
-      .do()
-  )
-);
-positions.forEach(({ window, roundIndex }, i) => {
-  for (const outcome of responses[window].groupResults()[roundIndex]) {
-    if (outcome.ok) {
-      console.log(rounds[i], outcome.result.txnResults[0].txnResult.logs);
-    } else {
-      console.log(rounds[i], outcome.error.kind, outcome.error.message);
-    }
-  }
-});
-```
-
-### Rounds far apart, under a later protocol
-
-A transaction is valid for at most 1000 rounds, so without help the rounds of one request must lie within 1000 rounds of each other. `rewriteValidityWindow()` moves each transaction's window to every simulated round (it drops their signatures, so it needs `allowEmptySignatures`); `skipValidityWindow()` evaluates them as sent instead. With either, `packSimulateRounds(rounds, { maxSpan: null })` packs by the round limit only. `protocol()` runs the rounds under a later consensus protocol (`v24` to `v42`, `latest`, or a version string), as if an upgrade took effect right after each round, and `protocolOverride` on each round result says how it applied:
-
-```typescript
-const res = await algod
-  .simulateTransactions(
-    algosdk.dtModels.DTSimulateRequest.fromTransactions(groups, {
-      allowUnnamedResources: true,
-    })
-  )
-  .rounds([20_000_000, 45_000_000])
-  .rewriteValidityWindow()
-  .protocol('latest')
-  .do();
-for (const r of res.roundResults!) {
-  const po = r.protocolOverride;
-  console.log(r.lastRound, r.error ?? `${po!.from} -> ${po!.to}`);
-  for (const note of po?.notes ?? [])
-    console.log('  ', note.code, note.message);
-}
-```
-
-The rewritten transactions get new IDs: match results by group index, not transaction ID, and give transactions that differ only by their window distinct notes.
-
-`simulateLimits()` reads the node's limits from `GET /v2/transactions/simulate/limits`: `maxTxnGroups`, `maxRounds` (0 when `rounds` is off), `maxExtraOpcodeBudget` (per group), `resourceLimitMultiplier`, `timeTravel` and `developerApi`. A node without the endpoint (stock algod, or an older fork build) gets stock algod's limits instead, with `reported` false: one group per request and no `rounds`, so send one request per round with `round` set. `timeTravel` and `developerApi` are then unknown, so don't gate on them unless `reported` is true. A node without these features answers with a `DTUnsupportedError`: catch it once and fall back to one group per simulate request. Code that may run on stock algosdk can find the client at runtime and check `DTAlgodClient.features` (for example `'group-results'`) before using it.
 
 ## SDK Development
 
@@ -192,9 +201,7 @@ make docker-test
 
 #### Browsers
 
-The test suites can also run in browsers. To do so, set the environment variable `TEST_BROWSER` to
-one of our supported browsers. Currently we support testing in `chrome` and `firefox`. When
-`TEST_BROWSER` is set, the mocha and SDK test suites will run in that browser.
+The test suites can also run in browsers. To do so, set the environment variable `TEST_BROWSER` to one of our supported browsers. Currently we support testing in `chrome` and `firefox`. When `TEST_BROWSER` is set, the mocha and SDK test suites will run in that browser.
 
 For example, to run mocha tests in Chrome:
 

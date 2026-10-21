@@ -1982,7 +1982,7 @@ export class DTSimulateRequest extends SimulateRequest {
    * If set, the simulated round runs this consensus protocol, as if an
    * upgrade to it took effect right after the start round: its programs,
    * limits, fees and other parameters apply, to programs deployed earlier
-   * too. A consensus version string, `v24` to `v42` for a mainline one,
+   * too. A consensus version string, `v24` to `v43` for a mainline one,
    * `latest` (the protocol of the block after the node's latest one) or
    * `future` (vFuture, only with `EnableDeveloperAPI`). It must be a later
    * protocol of the chain than the one the round really ran. The response's

@@ -1,7 +1,7 @@
 {
-  "name": "algosdk",
-  "version": "3.8.0-dt.2",
-  "description": "The official JavaScript SDK for Algorand",
+  "name": "dtalgosdk",
+  "version": "3.9.0-dt.2.0.0.1",
+  "description": "algosdk with time-travel algod support: reads at past rounds, change history, and multi-group, multi-round simulate",
   "main": "dist/cjs/index.js",
   "module": "dist/esm/index.js",
   "browser": {
@@ -38,15 +38,27 @@
   "types": "dist/types/index.d.ts",
   "files": [
     "dist/",
-    "src/"
+    "src/",
+    "DTALGOSDK.md"
   ],
   "directories": {
     "test": "tests"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/algorand/js-algorand-sdk.git"
+    "url": "git+https://github.com/d13co/dt-js-algorand-sdk.git"
   },
+  "homepage": "https://github.com/d13co/dt-js-algorand-sdk/blob/dtalgorand/DTALGOSDK.md",
+  "bugs": {
+    "url": "https://github.com/d13co/dt-js-algorand-sdk/issues"
+  },
+  "keywords": [
+    "algorand",
+    "algosdk",
+    "algod",
+    "time-travel",
+    "simulate"
+  ],
   "overrides": {
     "basic-ftp": ">=6.2.1"
   },
@@ -213,7 +225,10 @@
       ]
     ]
   },
-  "author": "Algorand, llc",
+  "author": "Bit D13 <bit@d13.co>",
+  "contributors": [
+    "Algorand, llc"
+  ],
   "license": "MIT",
   "engines": {
     "node": ">=22.0"

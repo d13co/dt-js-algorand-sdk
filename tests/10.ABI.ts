@@ -441,6 +441,29 @@ describe('ABI encoding', () => {
     });
   });
 
+  it('should decode a view into a larger buffer', () => {
+    // e.g. simulate logs that are subarrays of one response buffer
+    const cases: Array<[string, ABIValue]> = [
+      ['uint64[]', [BigInt(1), BigInt(2), BigInt(3)]],
+      ['(uint64,string,uint16[])', [BigInt(7), 'hello', [1, 2]]],
+      ['(bool,(string,byte[]),uint8)', [true, ['a', [1, 2, 3]], 9]],
+      ['string[]', ['x', 'yz']],
+    ];
+    for (const [typeString, value] of cases) {
+      const type = ABIType.from(typeString);
+      const encoded = type.encode(value);
+      const buffer = new Uint8Array(encoded.length + 10).fill(0xff);
+      buffer.set(encoded, 7);
+      const view = buffer.subarray(7, 7 + encoded.length);
+      assert.deepStrictEqual(type.decode(view), type.decode(encoded));
+    }
+    assert.throws(
+      () =>
+        ABIType.from('uint64[]').decode(new Uint8Array([0, 0, 1]).subarray(2)),
+      /too short/
+    );
+  });
+
   it('should fail for bad values during encoding', () => {
     assert.throws(() => new ABIUintType(8).encode(BigInt(-1)));
     assert.throws(() => new ABIUintType(512).encode(BigInt(2 ** 512)));

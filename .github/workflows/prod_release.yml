@@ -8,6 +8,7 @@ permissions:
 
 jobs:
   prod_release:
+    if: github.repository == 'algorand/js-algorand-sdk' # forks release with dtalgosdk.yml
     runs-on: ubuntu-latest
     steps:
       - name: Generate bot token

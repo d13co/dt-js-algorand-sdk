@@ -348,14 +348,20 @@ A node without the endpoint (stock algod, or an older fork build) gets stock alg
 
 ## Releasing dtalgosdk
 
-dtalgosdk is published by hand; the upstream semantic-release workflow does not publish it, and it is disabled on the fork.
+GitHub Actions publishes dtalgosdk, with [`.github/workflows/dtalgosdk.yml`](.github/workflows/dtalgosdk.yml). On every push and pull request to `dtalgorand` it runs the linters, the type checks and the tests. On a `v<version>` tag it also checks the release, publishes it to npm with provenance, and creates a GitHub release with the package tarball and the browser bundle. Upstream's workflows that release or open pull requests (`release.yml`, `prod_release.yml`, `codegen.yml`) run only on algorand/js-algorand-sdk.
 
 1. Choose the version, `<algosdk version>-dt.<dt-algorand release>.<SDK release>`:
    - the algosdk version the code is built on; change it when merging a new upstream release;
    - the number of the latest dt-algorand release (`v5.0.4-dt2` is 2) whose API the SDK covers. It says what the SDK covers, not what it requires: the client detects missing node features at runtime. Keep the dot (`dt.2`, not `dt2`), so that npm compares it as a number and `dt.10` sorts after `dt.9`;
    - the SDK's own release, `x.y.z`: bump `x` for a breaking change to the fork's API, `y` for features and `z` for fixes. Reset it to `0.0.1` when either of the parts before it changes.
-2. Set it in `package.json` and `package-lock.json` (`npm version <version> --no-git-tag-version`), and in the install snippets and versioning example in `README.md` and in this file.
-3. Update the browser snippets in `README.md`: the version in both URLs, and the `integrity` hash, from `npm run build` then `echo "sha384-$(openssl dgst -sha384 -binary dist/browser/algosdk.min.js | openssl base64 -A)"`.
-4. `npm test`, then `npm pack --dry-run` to check the contents (`dist/`, `src/`, `README.md`, `DTALGOSDK.md`, `LICENSE`). `npm pack` and `npm publish` run `prepare`, which builds `dist/`.
-5. Commit, tag (`git tag v<version>`) and push the branch and the tag.
-6. `npm publish --tag latest`. npm 11 refuses to publish a prerelease without a tag, and `latest` makes it the version `npm install dtalgosdk` gets.
+2. Set it and update the docs: `npm version <version> --no-git-tag-version`, `npm run build`, then `node scripts/ci/dtalgosdk-release.js update`. The script sets the version in the install snippets and CDN URLs in `README.md` and in this file, and the browser bundle's `integrity` hash in `README.md`.
+3. `npm test`, then `npm pack --dry-run` to check the contents (`dist/`, `src/`, `README.md`, `DTALGOSDK.md`, `LICENSE`).
+4. Commit and push `dtalgorand`, then tag the commit and push the tag: `git tag v<version>` and `git push d13co v<version>`.
+5. The workflow checks that the tag is on `dtalgorand` and matches the version in `package.json` and `package-lock.json`, and that the docs name that version and the bundle's hash (`node scripts/ci/dtalgosdk-release.js check v<version>` runs the same check locally). It then runs the tests and publishes with `npm publish --tag latest`: npm 11 publishes a prerelease only with an explicit tag, and `latest` makes it the version `npm install dtalgosdk` gets. If the version is already on npm, the workflow does not publish it again and only creates the GitHub release.
+
+### One-time setup
+
+- **Default branch.** Set it to `dtalgorand` (Settings → General). The guards that keep upstream's workflows off the fork exist only on this branch, and GitHub runs scheduled workflows such as `codegen.yml` from the default branch. It also makes the repository page show this branch's README.
+- **First version, by hand.** The workflow publishes only through npm trusted publishing, which is set up on a package that already exists. Publish the first version from a checkout: steps 1 to 3, then `npm publish --tag latest`, then push the tag (step 4). The workflow sees that the version is on npm, skips publishing, and creates the GitHub release.
+- **Trusted publisher.** Right after the first publish, add one for the workflow, either in the package's settings on npmjs.com (Trusted publishing → GitHub Actions: owner `d13co`, repository `dt-js-algorand-sdk`, workflow `dtalgosdk.yml`, environment `npm`, publishing allowed) or with npm 11.5.1 or later: `npm trust github dtalgosdk --file dtalgosdk.yml --repo d13co/dt-js-algorand-sdk --env npm --allow-publish`. Publishing is not allowed unless it is turned on. npm drops a new trusted publisher if nothing is published with it within 2 days, so set it up when the next release is close, or add it again later. Trusted publishing adds provenance to each version, and needs no token.
+- **Approval (optional).** The publish job runs in the GitHub environment `npm`, which GitHub creates on the first run. To approve each release by hand, add required reviewers to it under Settings → Environments.

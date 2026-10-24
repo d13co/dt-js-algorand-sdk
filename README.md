@@ -119,7 +119,7 @@ Include a minified browser bundle directly in your HTML like so. It defines the 
 ```html
 <script
   src="https://unpkg.com/dtalgosdk@3.9.0-dt.2.0.0.1/dist/browser/algosdk.min.js"
-  integrity="sha384-rVZJ+aH65KfWc84DLSP/uLwpwaSDsQW1n1lPBRySIB95Xjv4tdQeczRY8AO7RxUT"
+  integrity="sha384-aBSYhS4CwCOk9z6u/mqXmqa245YTF93ur9Nmrm3mOiXDtmntxbpDfvZYfHV3cmG+"
   crossorigin="anonymous"
 ></script>
 ```
@@ -129,7 +129,7 @@ or
 ```html
 <script
   src="https://cdn.jsdelivr.net/npm/dtalgosdk@3.9.0-dt.2.0.0.1/dist/browser/algosdk.min.js"
-  integrity="sha384-rVZJ+aH65KfWc84DLSP/uLwpwaSDsQW1n1lPBRySIB95Xjv4tdQeczRY8AO7RxUT"
+  integrity="sha384-aBSYhS4CwCOk9z6u/mqXmqa245YTF93ur9Nmrm3mOiXDtmntxbpDfvZYfHV3cmG+"
   crossorigin="anonymous"
 ></script>
 ```

@@ -1,0 +1,161 @@
+name: dtalgosdk
+
+# CI for the dtalgorand branch, and the npm release of dtalgosdk: pushing a
+# v<version> tag (v3.9.0-dt.2.0.0.1) on dtalgorand tests, packs and publishes it.
+# See "Releasing dtalgosdk" in DTALGOSDK.md.
+on:
+  push:
+    branches: [dtalgorand]
+    tags: ['v*-dt.*']
+  pull_request:
+    branches: [dtalgorand]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dtalgosdk-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+
+      - name: Check the tag is on dtalgorand
+        if: github.ref_type == 'tag'
+        run: |
+          git fetch --quiet origin dtalgorand
+          git merge-base --is-ancestor "$GITHUB_SHA" FETCH_HEAD || {
+            echo "::error::$GITHUB_REF_NAME is not on dtalgorand"
+            exit 1
+          }
+
+      - name: Use Node.js 24.x
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 24.x
+          cache: npm
+
+      # `prepare` builds dist/
+      - name: Install dependencies and build
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint && npm run format:check
+
+      - name: Check types
+        run: npm run check-types && npx tsc -p tests/compile
+
+      - name: Test
+        run: npm test
+
+      # npm pack always runs `prepare`, which rebuilds dist/ (the build is
+      # deterministic), so the check below hashes the bundle that is published.
+      - name: Pack
+        if: github.ref_type == 'tag'
+        run: npm pack
+
+      # On a tag, also checks the README's integrity hash against the packed bundle
+      - name: Check the version in package-lock.json, the docs and the tag
+        env:
+          TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: node scripts/ci/dtalgosdk-release.js check "$TAG"
+
+      - name: Upload package
+        if: github.ref_type == 'tag'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: package
+          path: |
+            dtalgosdk-*.tgz
+            dist/browser/algosdk.min.js
+          if-no-files-found: error
+
+  publish:
+    name: Publish to npm
+    needs: test
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    # The trusted publisher on npmjs.com names this environment. Add required
+    # reviewers to it on GitHub to approve each release by hand.
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/dtalgosdk/v/${{ steps.version.outputs.version }}
+    permissions:
+      contents: write # GitHub release
+      id-token: write # npm trusted publishing
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+
+      - name: Use Node.js 24.x
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 24.x
+          registry-url: https://registry.npmjs.org
+
+      # Trusted publishing (OIDC) needs npm 11.5.1 or later
+      - name: Check npm version
+        run: |
+          node -e '
+            const [a, b, c] = process.argv[1].split(".").map(Number);
+            if (a > 11 || (a === 11 && (b > 5 || (b === 5 && c >= 1)))) process.exit(0);
+            console.error("::error::npm " + process.argv[1] + " is older than 11.5.1, which trusted publishing needs");
+            process.exit(1);
+          ' "$(npm -v)"
+
+      - name: Read version
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Download package
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: package
+          path: package
+
+      # Authenticates with npm trusted publishing (OIDC), which also adds provenance;
+      # there is no token. dtalgosdk versions are prereleases, and npm 11 publishes
+      # a prerelease only with an explicit --tag.
+      - name: Publish
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if npm view "dtalgosdk@$VERSION" version >/dev/null 2>&1; then
+            echo "::notice::dtalgosdk@$VERSION is already on npm, not publishing it again"
+          else
+            npm publish "package/dtalgosdk-$VERSION.tgz" --tag latest
+          fi
+
+      - name: Create GitHub release
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "::notice::The $GITHUB_REF_NAME release already exists"
+            exit 0
+          fi
+          {
+            echo "npm: [dtalgosdk@$VERSION](https://www.npmjs.com/package/dtalgosdk/v/$VERSION). Install it as described in the [README](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/README.md#installing-dtalgosdk-in-place-of-algosdk); the changes from algosdk are in [DTALGOSDK.md](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/DTALGOSDK.md)."
+            prev=$(git describe --tags --abbrev=0 --match 'v*-dt.*' "$GITHUB_REF_NAME^" 2>/dev/null || true)
+            if [ -n "$prev" ]; then
+              echo
+              echo "## Changes since $prev"
+              echo
+              git log --first-parent --format='- %s (%h)' "$prev..$GITHUB_REF_NAME"
+            fi
+          } > notes.md
+          gh release create "$GITHUB_REF_NAME" \
+            "package/dtalgosdk-$VERSION.tgz" \
+            "package/dist/browser/algosdk.min.js#algosdk.min.js (browser bundle)" \
+            --verify-tag --latest --title "dtalgosdk $VERSION" --notes-file notes.md

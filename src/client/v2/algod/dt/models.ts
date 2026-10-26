@@ -2696,9 +2696,138 @@ export class DTSimulateResponse extends SimulateResponse {
 }
 
 /**
+ * The limits a node places on `POST /v2/query` requests
+ * ({@link SimulateLimitsResponse.query}). The values are the ones the node
+ * applies, after it clamps its configuration.
+ */
+export class QueryLimits implements Encodable {
+  private static encodingSchemaValue: Schema | undefined;
+
+  static get encodingSchema(): Schema {
+    if (!this.encodingSchemaValue) {
+      this.encodingSchemaValue = new NamedMapSchema([]);
+      (this.encodingSchemaValue as NamedMapSchema).pushEntries(
+        { key: 'max-calls', valueSchema: new Uint64Schema(), omitEmpty: false },
+        {
+          key: 'max-call-budget',
+          valueSchema: new Uint64Schema(),
+          omitEmpty: false,
+        },
+        {
+          key: 'max-call-log-bytes',
+          valueSchema: new Uint64Schema(),
+          omitEmpty: false,
+        },
+        {
+          key: 'max-response-bytes',
+          valueSchema: new Uint64Schema(),
+          omitEmpty: false,
+        },
+        { key: 'max-rounds', valueSchema: new Uint64Schema(), omitEmpty: false }
+      );
+    }
+    return this.encodingSchemaValue;
+  }
+
+  /** The most calls a request may hold (node config `MaxAPIQueryCalls`). */
+  public maxCalls: number;
+
+  /**
+   * The most opcode budget a call may ask for, and the budget of a call when
+   * the request sets none (node config `MaxAPIQueryCallBudget`).
+   */
+  public maxCallBudget: number;
+
+  /**
+   * The most bytes each program of a call may log, in up to 2048 logs. 0 means
+   * the protocol's limits: 1024 bytes in 32 logs (node config
+   * `MaxAPIQueryCallLogBytes`).
+   */
+  public maxCallLogBytes: number;
+
+  /**
+   * The most bytes of logs and errors a request may return, across its calls
+   * and rounds: a round listed twice counts twice, and each log counts
+   * `QUERY_LOG_OVERHEAD_BYTES` (48) more than its length. A request that goes
+   * over fails with a 400 (`isQueryResponseTooLarge`). 0 means no limit (node
+   * config `MaxAPIQueryResponseBytes`).
+   */
+  public maxResponseBytes: number;
+
+  /**
+   * The most entries a request may list in `rounds`, duplicates included
+   * (node config `MaxAPIQueryRounds`).
+   */
+  public maxRounds: number;
+
+  /**
+   * Creates a new `QueryLimits` object.
+   * @param maxCalls - The most calls a request may hold.
+   * @param maxCallBudget - The most opcode budget of a call, and its default.
+   * @param maxCallLogBytes - The most bytes each program of a call may log; 0
+   * means the protocol's limits.
+   * @param maxResponseBytes - The most bytes of logs and errors a request may
+   * return; 0 means no limit.
+   * @param maxRounds - The most entries a request may list in `rounds`.
+   */
+  constructor({
+    maxCalls,
+    maxCallBudget,
+    maxCallLogBytes,
+    maxResponseBytes,
+    maxRounds,
+  }: {
+    maxCalls: number | bigint;
+    maxCallBudget: number | bigint;
+    maxCallLogBytes: number | bigint;
+    maxResponseBytes: number | bigint;
+    maxRounds: number | bigint;
+  }) {
+    this.maxCalls = ensureSafeInteger(maxCalls);
+    this.maxCallBudget = ensureSafeInteger(maxCallBudget);
+    this.maxCallLogBytes = ensureSafeInteger(maxCallLogBytes);
+    this.maxResponseBytes = ensureSafeInteger(maxResponseBytes);
+    this.maxRounds = ensureSafeInteger(maxRounds);
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  getEncodingSchema(): Schema {
+    return QueryLimits.encodingSchema;
+  }
+
+  toEncodingData(): Map<string, unknown> {
+    return new Map<string, unknown>([
+      ['max-calls', this.maxCalls],
+      ['max-call-budget', this.maxCallBudget],
+      ['max-call-log-bytes', this.maxCallLogBytes],
+      ['max-response-bytes', this.maxResponseBytes],
+      ['max-rounds', this.maxRounds],
+    ]);
+  }
+
+  static fromEncodingData(data: unknown): QueryLimits {
+    if (!(data instanceof Map)) {
+      throw new Error(`Invalid decoded QueryLimits: ${data}`);
+    }
+    return new QueryLimits({
+      maxCalls: data.get('max-calls') ?? 0,
+      maxCallBudget: data.get('max-call-budget') ?? 0,
+      maxCallLogBytes: data.get('max-call-log-bytes') ?? 0,
+      maxResponseBytes: data.get('max-response-bytes') ?? 0,
+      maxRounds: data.get('max-rounds') ?? 0,
+    });
+  }
+}
+
+/**
  * The limits a node places on simulate requests, and the simulate features it
  * allows (`GET /v2/transactions/simulate/limits`, tag `dtalgorand`). The values
  * are the ones the node applies, after it clamps its configuration.
+ *
+ * `query` is undefined when the node has no `POST /v2/query` (stock algod, an
+ * older fork build, or queries disabled): fall back to simulate then.
+ * `maxExecTraceBytes` and `timeLimitSeconds` are undefined when the node did
+ * not report them (older fork builds).
  */
 export class SimulateLimitsResponse implements Encodable {
   private static encodingSchemaValue: Schema | undefined;
@@ -2736,6 +2865,21 @@ export class SimulateLimitsResponse implements Encodable {
           key: 'developer-api',
           valueSchema: new BooleanSchema(),
           omitEmpty: false,
+        },
+        {
+          key: 'max-exec-trace-bytes',
+          valueSchema: new OptionalSchema(new Uint64Schema()),
+          omitEmpty: true,
+        },
+        {
+          key: 'time-limit-seconds',
+          valueSchema: new OptionalSchema(new Uint64Schema()),
+          omitEmpty: true,
+        },
+        {
+          key: 'query',
+          valueSchema: new OptionalSchema(QueryLimits.encodingSchema),
+          omitEmpty: true,
         }
       );
     }
@@ -2802,6 +2946,29 @@ export class SimulateLimitsResponse implements Encodable {
   public developerApi: boolean;
 
   /**
+   * The most bytes of execution trace a simulate request may return with
+   * `execTraceConfig`; 0 means no limit (node config
+   * `MaxAPISimulateExecTraceBytes`). Undefined when the node did not report
+   * it.
+   */
+  public maxExecTraceBytes?: number;
+
+  /**
+   * How long, in seconds, the node evaluates a simulate or query request
+   * before giving up with a 504; 0 means no limit (node config
+   * `MaxAPISimulateTimeLimitSeconds`). Undefined when the node did not
+   * report it.
+   */
+  public timeLimitSeconds?: number;
+
+  /**
+   * The limits of `POST /v2/query` ({@link DTAlgodClient.query}). Undefined
+   * when the node has no query endpoint or has queries disabled: use
+   * simulate then.
+   */
+  public query?: QueryLimits;
+
+  /**
    * Whether the node reported these limits: true when decoded from its
    * response, false for {@link SimulateLimitsResponse.stock}, the fallback
    * for a node without the endpoint. Not part of the response's encoding.
@@ -2818,6 +2985,12 @@ export class SimulateLimitsResponse implements Encodable {
    * @param timeTravel - Whether any round since genesis can be simulated.
    * @param developerApi - Whether `execTraceConfig` and the protocol `future`
    * are allowed.
+   * @param maxExecTraceBytes - The most bytes of execution trace; 0 means no
+   * limit. Undefined when not reported.
+   * @param timeLimitSeconds - The time limit of a request; 0 means no limit.
+   * Undefined when not reported.
+   * @param query - The limits of `POST /v2/query`; undefined when the node has
+   * no queries.
    * @param reported - Whether the node reported these limits. Not encoded;
    * defaults to false, and decoding sets it to true.
    */
@@ -2828,6 +3001,9 @@ export class SimulateLimitsResponse implements Encodable {
     resourceLimitMultiplier,
     timeTravel,
     developerApi,
+    maxExecTraceBytes,
+    timeLimitSeconds,
+    query,
     reported = false,
   }: {
     maxTxnGroups: number | bigint;
@@ -2836,6 +3012,9 @@ export class SimulateLimitsResponse implements Encodable {
     resourceLimitMultiplier: number | bigint;
     timeTravel: boolean;
     developerApi: boolean;
+    maxExecTraceBytes?: number | bigint;
+    timeLimitSeconds?: number | bigint;
+    query?: QueryLimits;
     reported?: boolean;
   }) {
     this.maxTxnGroups = ensureSafeInteger(maxTxnGroups);
@@ -2844,6 +3023,15 @@ export class SimulateLimitsResponse implements Encodable {
     this.resourceLimitMultiplier = ensureSafeInteger(resourceLimitMultiplier);
     this.timeTravel = timeTravel;
     this.developerApi = developerApi;
+    this.maxExecTraceBytes =
+      typeof maxExecTraceBytes === 'undefined'
+        ? undefined
+        : ensureSafeInteger(maxExecTraceBytes);
+    this.timeLimitSeconds =
+      typeof timeLimitSeconds === 'undefined'
+        ? undefined
+        : ensureSafeInteger(timeLimitSeconds);
+    this.query = query;
     this.reported = reported;
   }
 
@@ -2860,6 +3048,14 @@ export class SimulateLimitsResponse implements Encodable {
       ['resource-limit-multiplier', this.resourceLimitMultiplier],
       ['time-travel', this.timeTravel],
       ['developer-api', this.developerApi],
+      ['max-exec-trace-bytes', this.maxExecTraceBytes],
+      ['time-limit-seconds', this.timeLimitSeconds],
+      [
+        'query',
+        typeof this.query !== 'undefined'
+          ? this.query.toEncodingData()
+          : undefined,
+      ],
     ]);
   }
 
@@ -2874,6 +3070,12 @@ export class SimulateLimitsResponse implements Encodable {
       resourceLimitMultiplier: data.get('resource-limit-multiplier') ?? 0,
       timeTravel: data.get('time-travel') ?? false,
       developerApi: data.get('developer-api') ?? false,
+      maxExecTraceBytes: data.get('max-exec-trace-bytes'),
+      timeLimitSeconds: data.get('time-limit-seconds'),
+      query:
+        typeof data.get('query') !== 'undefined'
+          ? QueryLimits.fromEncodingData(data.get('query'))
+          : undefined,
       reported: true,
     });
   }

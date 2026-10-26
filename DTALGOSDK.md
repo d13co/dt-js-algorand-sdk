@@ -29,7 +29,7 @@
 | Simulate: consensus protocol                      | the round's own                  | `protocol('v42' \| 'latest' \| ...)` to run under a later protocol                                                                 |
 | Simulate results                                  | `txnGroups`                      | also `roundResults`, `protocolOverride`, and `groupResult()` / `groupResults()` that return each group's outcome or a typed error  |
 | Request building                                  | `SimulateRequest`                | `DTSimulateRequest`, with `fromTransactions()` for unsigned transactions, and `packSimulateRounds()` to split rounds into requests |
-| Node limits                                       | none                             | `simulateLimits()`                                                                                                                 |
+| Node limits                                       | none                             | `simulateLimits()`, with the `query` limits                                                                                        |
 | Errors                                            | HTTP errors                      | `DTUnsupportedError` when the node lacks a feature, `SimulateGroupError` per failed group                                          |
 | ABI                                               |                                  | `ABIArrayDynamicType` and `ABITupleType` decode subarray views correctly (see [Bug fixes](#bug-fixes-to-upstream-code))            |
 
@@ -322,15 +322,20 @@ The node may raise the limits on unnamed resources (`allowUnnamedResources`) wit
 
 `simulateLimits()` reads `GET /v2/transactions/simulate/limits` once per client and returns a frozen `SimulateLimitsResponse`:
 
-| Field                     | Meaning                                                           |
-| ------------------------- | ----------------------------------------------------------------- |
-| `maxTxnGroups`            | groups per request                                                |
-| `maxRounds`               | `rounds` entries per request; 0 when `rounds` is off              |
-| `maxExtraOpcodeBudget`    | most `extraOpcodeBudget`, per group                               |
-| `resourceLimitMultiplier` | the node's `SimulateResourceLimitMultiplier`                      |
-| `timeTravel`              | `EnableTimeTravel` is on                                          |
-| `developerApi`            | `EnableDeveloperAPI` is on (`execTraceConfig`, protocol `future`) |
-| `reported`                | the node reported these; false for the fallback below             |
+| Field                     | Meaning                                                                                                                                                     |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `maxTxnGroups`            | groups per request                                                                                                                                          |
+| `maxRounds`               | `rounds` entries per request; 0 when `rounds` is off                                                                                                        |
+| `maxExtraOpcodeBudget`    | most `extraOpcodeBudget`, per group                                                                                                                         |
+| `resourceLimitMultiplier` | the node's `SimulateResourceLimitMultiplier`                                                                                                                |
+| `timeTravel`              | `EnableTimeTravel` is on                                                                                                                                    |
+| `developerApi`            | `EnableDeveloperAPI` is on (`execTraceConfig`, protocol `future`)                                                                                           |
+| `maxExecTraceBytes`       | most bytes of execution trace, 0 for no limit; undefined when not reported                                                                                  |
+| `timeLimitSeconds`        | how long the node evaluates a simulate or query request before a 504, 0 for no limit; undefined when not reported                                           |
+| `query`                   | `QueryLimits` of `POST /v2/query` (`maxCalls`, `maxCallBudget`, `maxCallLogBytes`, `maxResponseBytes`, `maxRounds`); undefined when the node has no queries |
+| `reported`                | the node reported these; false for the fallback below                                                                                                       |
+
+`maxExecTraceBytes`, `timeLimitSeconds` and `query` are absent from older fork builds' answers and undefined then; a 0 from the node means no limit, so they are never defaulted to 0. `query` is frozen too.
 
 A node without the endpoint (stock algod, or an older fork build) gets stock algod's limits instead (`SimulateLimitsResponse.stock()`), with `reported` false: one group per request and no `rounds`, so send one request per round with `round` set. `timeTravel` and `developerApi` are then unknown and read false, so do not gate on them unless `reported` is true. `getSimulateLimits()` is the uncached request, which throws `DTUnsupportedError` on a 404.
 

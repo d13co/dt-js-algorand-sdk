@@ -20,6 +20,7 @@ import {
   SimulateProtocolNote,
   SimulateProtocolNoteHit,
   SimulateLimitsResponse,
+  QueryLimits,
   packSimulateRounds,
 } from '../src/client/v2/algod/dt/index';
 import { AlgodClient } from '../src/client/v2/algod/algod';
@@ -573,6 +574,9 @@ describe('time travel', () => {
           resourceLimitMultiplier: 2,
           timeTravel: true,
           developerApi: false,
+          maxExecTraceBytes: undefined,
+          timeLimitSeconds: undefined,
+          query: undefined,
           reported: true,
         }
       );
@@ -652,6 +656,87 @@ describe('time travel', () => {
 
     it('is listed in features', () => {
       assert.ok(DTAlgodClient.features.includes('simulate-limits'));
+    });
+
+    // What a node with POST /v2/query answers (127.0.0.1:8081, 2026-10-26).
+    const withQuery = {
+      ...limits,
+      'max-exec-trace-bytes': 268435456,
+      'time-limit-seconds': 119,
+      query: {
+        'max-call-budget': 320000,
+        'max-call-log-bytes': 65536,
+        'max-calls': 1024,
+        'max-response-bytes': 67108864,
+        'max-rounds': 16,
+      },
+    };
+
+    it('decodes the query limits, frozen, and the newer fields', async () => {
+      const stub = new StubClient([ok(withQuery)]);
+      const got = await new DTAlgodClient(stub, '').simulateLimits();
+      assert.ok(got.query instanceof QueryLimits);
+      assert.deepStrictEqual(
+        { ...got.query },
+        {
+          maxCalls: 1024,
+          maxCallBudget: 320000,
+          maxCallLogBytes: 65536,
+          maxResponseBytes: 67108864,
+          maxRounds: 16,
+        }
+      );
+      assert.ok(Object.isFrozen(got.query));
+      assert.strictEqual(got.maxExecTraceBytes, 268435456);
+      assert.strictEqual(got.timeLimitSeconds, 119);
+    });
+
+    it('keeps 0 limits as 0, which means no limit', async () => {
+      const stub = new StubClient([
+        ok({
+          ...withQuery,
+          'max-exec-trace-bytes': 0,
+          'time-limit-seconds': 0,
+          query: {
+            ...withQuery.query,
+            'max-call-log-bytes': 0,
+            'max-response-bytes': 0,
+          },
+        }),
+      ]);
+      const got = await new DTAlgodClient(stub, '').simulateLimits();
+      assert.strictEqual(got.maxExecTraceBytes, 0);
+      assert.strictEqual(got.timeLimitSeconds, 0);
+      assert.strictEqual(got.query!.maxCallLogBytes, 0);
+      assert.strictEqual(got.query!.maxResponseBytes, 0);
+    });
+
+    it('leaves query and the newer fields undefined when absent', async () => {
+      const stub = new StubClient([ok(limits)]);
+      const got = await new DTAlgodClient(stub, '').simulateLimits();
+      assert.strictEqual(got.query, undefined);
+      assert.strictEqual(got.maxExecTraceBytes, undefined);
+      assert.strictEqual(got.timeLimitSeconds, undefined);
+      const stock = SimulateLimitsResponse.stock();
+      assert.strictEqual(stock.query, undefined);
+      assert.strictEqual(stock.maxExecTraceBytes, undefined);
+      assert.strictEqual(stock.timeLimitSeconds, undefined);
+      assert.ok(
+        !/query|max-exec-trace-bytes|time-limit-seconds/.test(
+          algosdk.encodeJSON(stock)
+        )
+      );
+    });
+
+    it('encodes the query limits as the node does', () => {
+      const decoded = algosdk.decodeJSON(
+        JSON.stringify(withQuery),
+        SimulateLimitsResponse
+      );
+      assert.deepStrictEqual(
+        JSON.parse(algosdk.encodeJSON(decoded)),
+        withQuery
+      );
     });
 
     it('does not encode reported', () => {

@@ -572,8 +572,14 @@ export class DTAlgodClient extends AlgodClient {
    * `reported` before gating on them, and use
    * {@link DTAlgodClient.supportsDT} for time travel.
    *
-   * The answer is cached on the client and shared, so it is frozen. Other
-   * errors, such as network failures, are rethrown and not cached.
+   * `query` has the limits of {@link DTAlgodClient.query}, and is undefined
+   * when the node has no query endpoint (or has queries disabled): use
+   * simulate then. `maxExecTraceBytes` and `timeLimitSeconds` are undefined
+   * when the node did not report them.
+   *
+   * The answer is cached on the client and shared, so it is frozen (its
+   * `query` too). Other errors, such as network failures, are rethrown and
+   * not cached.
    *
    * #### Example
    * ```typescript
@@ -598,7 +604,10 @@ export class DTAlgodClient extends AlgodClient {
           this.simulateLimitsResult = undefined;
           throw err;
         })
-        .then((limits) => Object.freeze(limits));
+        .then((limits) => {
+          if (limits.query) Object.freeze(limits.query);
+          return Object.freeze(limits);
+        });
     }
     return this.simulateLimitsResult;
   }

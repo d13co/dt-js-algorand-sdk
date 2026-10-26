@@ -3,6 +3,7 @@ import { HTTPClient, HTTPClientResponse } from '../../../client.js';
 import { encodeMsgpack, decodeMsgpack } from '../../../../encoding/encoding.js';
 import { setSimulateTransactionsHeaders } from '../simulateTransaction.js';
 import { ensureUint64 } from '../../../../utils/utils.js';
+import { ApplicationStateSchema } from '../models/types.js';
 import { QueryRequest, QueryRequestParams, QueryResponse } from './models.js';
 import { queryWithFeatures } from './errors.js';
 
@@ -87,8 +88,11 @@ export default class RunQuery extends JSONRequest<QueryResponse> {
 
   /**
    * Why the request is invalid in a way the node would reject as a whole, or
-   * undefined. Checked before sending, for a clearer error than the node's.
-   * The node's limits are not checked here.
+   * undefined: no calls, neither or both of a non-empty `program` and a
+   * non-zero `appId`, or with `appId`, a non-empty `clearProgram` or a
+   * non-zero `globalSchema` / `localSchema` (all-zero schemas are accepted,
+   * as the node does). Checked before sending, for a clearer error than the
+   * node's. The node's limits are not checked here.
    */
   private invalidReason(): string | undefined {
     const { program, clearProgram, globalSchema, localSchema, appId, calls } =
@@ -99,7 +103,15 @@ export default class RunQuery extends JSONRequest<QueryResponse> {
     if (hasProgram === hasApp) {
       return 'A query needs exactly one of program and appId';
     }
-    if (hasApp && (clearProgram || globalSchema || localSchema)) {
+    const nonZero = (schema?: ApplicationStateSchema) =>
+      schema !== undefined &&
+      (schema.numUint !== 0 || schema.numByteSlice !== 0);
+    if (
+      hasApp &&
+      ((clearProgram !== undefined && clearProgram.length > 0) ||
+        nonZero(globalSchema) ||
+        nonZero(localSchema))
+    ) {
       return 'clearProgram, globalSchema and localSchema need program, not appId';
     }
     return undefined;

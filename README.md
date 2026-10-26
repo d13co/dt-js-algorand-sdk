@@ -68,7 +68,7 @@ Yarn and Bun (`package.json`):
 
 Yarn 4 refuses versions published less than a day ago (`npmMinimalAgeGate`). To install a new dtalgosdk release right away, add `npmPreapprovedPackages: ["dtalgosdk"]` to `.yarnrc.yml`.
 
-`npm ls algosdk` or `pnpm why algosdk` (`yarn why dtalgosdk` on Yarn) should then list only `dtalgosdk@3.9.0-dt.2.0.1.0`. Pin the exact version: dtalgosdk versions are prereleases, and ranges such as `^3.9.0` do not match them. A version reads `<algosdk version>-dt.<dt-algorand release>.<SDK release>`: `3.9.0-dt.2.0.0.1` is built on algosdk 3.9.0, covers the API of dt-algorand dt2 (`v5.0.4-dt2`), and is SDK release 0.0.1 for that pair.
+`npm ls algosdk` or `pnpm why algosdk` (`yarn why dtalgosdk` on Yarn) should then list only `dtalgosdk@3.9.0-dt.2.0.1.0`. Pin the exact version: dtalgosdk versions are prereleases, and ranges such as `^3.9.0` do not match them. A version reads `<algosdk version>-dt.<dt-algorand release>.<SDK release>`: `3.9.0-dt.2.0.1.0` is built on algosdk 3.9.0, covers the API of dt-algorand dt2 (`v5.0.4-dt2`), and is SDK release 0.1.0 for that pair.
 
 ### Quick start
 
@@ -120,7 +120,7 @@ Include a minified browser bundle directly in your HTML like so. It defines the 
 ```html
 <script
   src="https://unpkg.com/dtalgosdk@3.9.0-dt.2.0.1.0/dist/browser/algosdk.min.js"
-  integrity="sha384-bWf+GXso/8jx/zY61+v1XUIMcihbII7tlVDxfdD0KANsm87FeH/xsZAEv2pjFwT1"
+  integrity="sha384-uGqERmcZzBl6zkJaZ9MG2v9s5Rn1W/9P+naAXn/rfJnHOmlx0k8vJJDZG/nVhU9V"
   crossorigin="anonymous"
 ></script>
 ```
@@ -130,7 +130,7 @@ or
 ```html
 <script
   src="https://cdn.jsdelivr.net/npm/dtalgosdk@3.9.0-dt.2.0.1.0/dist/browser/algosdk.min.js"
-  integrity="sha384-bWf+GXso/8jx/zY61+v1XUIMcihbII7tlVDxfdD0KANsm87FeH/xsZAEv2pjFwT1"
+  integrity="sha384-uGqERmcZzBl6zkJaZ9MG2v9s5Rn1W/9P+naAXn/rfJnHOmlx0k8vJJDZG/nVhU9V"
   crossorigin="anonymous"
 ></script>
 ```

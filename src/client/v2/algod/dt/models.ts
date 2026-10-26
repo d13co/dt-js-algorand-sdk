@@ -2952,7 +2952,8 @@ export class SimulateLimitsResponse implements Encodable {
    * The most bytes of execution trace a simulate request may return with
    * `execTraceConfig`; 0 means no limit (node config
    * `MaxAPISimulateExecTraceBytes`). Undefined when the node did not report
-   * it.
+   * it. Encoding leaves out a 0, so a JSON round trip of this object turns
+   * "no limit" into undefined.
    */
   public maxExecTraceBytes?: number;
 
@@ -2960,7 +2961,8 @@ export class SimulateLimitsResponse implements Encodable {
    * How long, in seconds, the node evaluates a simulate or query request
    * before giving up with a 504; 0 means no limit (node config
    * `MaxAPISimulateTimeLimitSeconds`). Undefined when the node did not
-   * report it.
+   * report it. Encoding leaves out a 0, so a JSON round trip of this object
+   * turns "no limit" into undefined.
    */
   public timeLimitSeconds?: number;
 
@@ -3145,7 +3147,8 @@ export class QueryCall implements Encodable {
 
   /**
    * The boxes the call references. App 0, or the called app's ID, is the
-   * called app; the node adds any other app to `foreignApps`.
+   * called app; the node adds any other app to `foreignApps`. The constructor
+   * takes names as bytes or base64 strings, as {@link BoxReference} does.
    */
   public boxes?: BoxReference[];
 
@@ -3156,6 +3159,7 @@ export class QueryCall implements Encodable {
    * @param foreignApps - The apps the call references.
    * @param foreignAssets - The assets the call references.
    * @param boxes - The boxes the call references; app 0 is the called app.
+   * Names are bytes or base64 strings, as for {@link BoxReference}.
    */
   constructor({
     args,

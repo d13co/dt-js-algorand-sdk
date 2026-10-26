@@ -88,7 +88,7 @@ Yarn 4 refuses versions published less than a day ago (`npmMinimalAgeGate`). To 
 
 Then check that only one copy is installed: `npm ls algosdk` or `pnpm why algosdk` (`yarn why dtalgosdk` on Yarn) should list `dtalgosdk@3.9.0-dt.2.0.1.0` and nothing else.
 
-Pin the exact version: dtalgosdk versions are prereleases, and ranges such as `^3.9.0` do not match them. A version reads `<algosdk version>-dt.<dt-algorand release>.<SDK release>`: `3.9.0-dt.2.0.0.1` is built on algosdk 3.9.0, covers the API of dt-algorand dt2 (`v5.0.4-dt2`), and is SDK release 0.0.1 for that pair.
+Pin the exact version: dtalgosdk versions are prereleases, and ranges such as `^3.9.0` do not match them. A version reads `<algosdk version>-dt.<dt-algorand release>.<SDK release>`: `3.9.0-dt.2.0.1.0` is built on algosdk 3.9.0, covers the API of dt-algorand dt2 (`v5.0.4-dt2`), and is SDK release 0.1.0 for that pair.
 
 To use a local checkout instead, run `npm run build` in it (and again after each change), then use it in place of the registry version. With pnpm, set the override to `link:/path/to/js-algorand-sdk`. With npm, put a tarball from `npm pack` in `dependencies` (`"algosdk": "file:./vendor/dtalgosdk-3.9.0-dt.2.0.1.0.tgz"`) and keep the override as `"$algosdk"`: npm rejects an override that differs from the direct dependency.
 
@@ -100,7 +100,7 @@ From the package root (`import algosdk from 'algosdk'`):
 - `DTUnsupportedError`, `SimulateGroupError`, and the types `SimulateGroupErrorKind`, `SimulateGroupOutcome`
 - `packSimulateRounds`, and the types `PackedSimulateRounds`, `SimulateRoundsWindow`
 - `DEFAULT_MAX_SIMULATE_GROUPS` (16), `DEFAULT_MAX_SIMULATE_ROUNDS` (16), `MAX_TXN_LIFE` (1000)
-- `isQueryResponseTooLarge`, `MAX_QUERY_REQUEST_BYTES` (1,000,000), `QUERY_LOG_OVERHEAD_BYTES` (48)
+- `isQueryResponseTooLarge`, `MAX_QUERY_REQUEST_BYTES` (1,000,000), `QUERY_LOG_OVERHEAD_BYTES` (48), and the type `RunQuery` (the builder `query()` returns)
 - the types `VersionsOrder`, `VersionsInclude`, `AccountVersionsExclude`
 - `dtModels`: the request and response models: `DTSimulateRequest`, `DTSimulateResponse`, `DTSimulationEvalOverrides`, `SimulateRoundResult`, `SimulateProtocolOverride`, `SimulateProtocolNote`, `SimulateProtocolNoteHit`, the type `SimulateProtocolNoteCode`, `SimulateLimitsResponse`, `QueryLimits`, `QueryRequest`, `QueryCall`, `QueryResponse`, `QueryRoundResult`, `QueryCallResult`, the types `QueryRequestParams`, `QueryCallParams`, `BoxChange`, and the `...Version` / `...VersionsResponse` models
 
@@ -329,17 +329,17 @@ The node may raise the limits on unnamed resources (`allowUnnamedResources`) wit
 - Each call is an app call alone in its group, in the block after each queried round, on the state that round left. There are no signatures, fees, minimum balances or leases, and every resource is available unnamed: references are only needed by programs before v9, which address resources by index.
 - Writes are dropped after each call, so calls do not see each other's effects. Inner transactions run but are not echoed, nor are state changes. A failed call does not affect the others.
 
-| Request field                 | Meaning                                                                                                                       |
-| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `program`                     | approval program of the app each call creates, bytes or base64 (as `compile().do().result`); extra pages follow from its size |
-| `clearProgram`                | its clear program; defaults to `pushint 1` at the version of `program`, which must then be v3 or later                        |
-| `globalSchema`, `localSchema` | its state schemas (`{ numUint, numByteSlice }`)                                                                               |
-| `appId`                       | the deployed app to call instead; not with the three fields above                                                             |
-| `sender`                      | sender of every call; defaults to the fee sink                                                                                |
-| `rounds` / `.rounds([...])`   | rounds to query, 0 for the latest; defaults to the latest; a round after the latest one fails the request                     |
-| `protocol` / `.protocol(p)`   | protocol to run under: `latest` by default, a later version, `round` for the chain's own, `future` with the developer API     |
-| `budget`                      | opcode budget of each call, shared with the apps it calls; defaults to and is capped by `maxCallBudget`                       |
-| `calls`                       | at least one; each with `args` (bytes), `accounts`, `foreignApps`, `foreignAssets`, `boxes` (app 0 is the called app)         |
+| Request field                 | Meaning                                                                                                                                         |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `program`                     | approval program of the app each call creates, bytes or base64 (as `compile().do().result`); extra pages follow from its size                   |
+| `clearProgram`                | its clear program; defaults to `pushint 1` at the version of `program`, which must then be v3 or later                                          |
+| `globalSchema`, `localSchema` | its state schemas (`{ numUint, numByteSlice }`)                                                                                                 |
+| `appId`                       | the deployed app to call instead; not with the three fields above                                                                               |
+| `sender`                      | sender of every call; defaults to the fee sink                                                                                                  |
+| `rounds` / `.rounds([...])`   | rounds to query, 0 for the latest; defaults to the latest; a round after the latest one fails the request                                       |
+| `protocol` / `.protocol(p)`   | protocol to run under: `latest` by default, a later version, `round` for the chain's own, `future` with the developer API                       |
+| `budget`                      | opcode budget of each call, shared with the apps it calls; defaults to and is capped by `maxCallBudget`                                         |
+| `calls`                       | at least one; each with `args` (bytes), `accounts`, `foreignApps`, `foreignAssets`, `boxes` (app 0 is the called app; names as bytes or base64) |
 
 The request and its calls may be models (`dtModels.QueryRequest`, `QueryCall`) or plain objects; ids and rounds take `number` or `bigint`, addresses strings or `Address`.
 
@@ -408,6 +408,8 @@ if (!query) {
         await algod
           .query({ program, calls: calls.slice(c, c + query.maxCalls) })
           .rounds(rounds.slice(r, r + query.maxRounds))
+          // The chain's own rules: a program newer than an old round's
+          // protocol then fails in every call's `error` at that round.
           .protocol('round')
           .do(undefined, { signal }) // abortable
       );

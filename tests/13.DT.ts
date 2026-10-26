@@ -913,7 +913,7 @@ describe('time travel', () => {
         [
           {
             appId: 5,
-            globalSchema: { numUint: 0, numByteSlice: 0 },
+            globalSchema: { numUint: 0, numByteSlice: 1 },
             calls: [{}],
           },
           /need program/,
@@ -932,6 +932,21 @@ describe('time travel', () => {
         await assert.rejects(client.query(request).do(), message);
       }
       assert.strictEqual(stub.calls.length, 0);
+    });
+
+    it('sends all-zero schemas and an empty clear program with appId', async () => {
+      const stub = new StubClient([answer([100])]);
+      await new DTAlgodClient(stub, '')
+        .query({
+          appId: 5,
+          clearProgram: new Uint8Array(),
+          globalSchema: { numUint: 0, numByteSlice: 0 },
+          localSchema: { numUint: 0, numByteSlice: 0 },
+          calls: [{}],
+        })
+        .do();
+      assert.strictEqual(stub.calls.length, 1);
+      assert.deepStrictEqual(sentBody(stub), { 'app-id': 5, calls: [{}] });
     });
 
     it('decodes a response captured from a live node', async () => {
@@ -1218,6 +1233,11 @@ describe('time travel', () => {
       );
       assert.strictEqual(algosdk.MAX_QUERY_REQUEST_BYTES, 1_000_000);
       assert.strictEqual(algosdk.QUERY_LOG_OVERHEAD_BYTES, 48);
+      const builder: algosdk.RunQuery = new DTAlgodClient(
+        new StubClient([]),
+        ''
+      ).query({ appId: 1, calls: [{}] });
+      assert.strictEqual(builder.path(), '/v2/query');
     });
   });
 

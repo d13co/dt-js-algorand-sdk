@@ -10,5 +10,6 @@ export {
 } from './errors.js';
 export { VersionsOrder, VersionsInclude } from './versionsRequest.js';
 export { AccountVersionsExclude } from './accountVersions.js';
+export type { default as RunQuery } from './query.js';
 export * from './models.js';
 export * from './packRounds.js';

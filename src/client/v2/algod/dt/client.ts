@@ -20,8 +20,13 @@ import GetApplicationBoxVersions from './getApplicationBoxVersions.js';
 import GetApplicationBoxesVersions from './getApplicationBoxesVersions.js';
 import SimulateTransactionsAt from './simulateTransactionsAt.js';
 import GetSimulateLimits from './getSimulateLimits.js';
+import RunQuery from './query.js';
 import { DTUnsupportedError } from './errors.js';
-import { SimulateLimitsResponse } from './models.js';
+import {
+  QueryRequest,
+  QueryRequestParams,
+  SimulateLimitsResponse,
+} from './models.js';
 import {
   SimulateRequest,
   SimulateRequestTransactionGroup,
@@ -65,7 +70,9 @@ export class DTAlgodClient extends AlgodClient {
    *   in `simulateTransactions`, and `maxSpan: null` in `packSimulateRounds`;
    * - `simulate-protocol`: `protocol()` in `simulateTransactions`, and
    *   `protocolOverride` on the response and its round results;
-   * - `simulate-limits`: `simulateLimits()` and `getSimulateLimits()`.
+   * - `simulate-limits`: `simulateLimits()` and `getSimulateLimits()`;
+   * - `query`: `query()`, and `query` (plus `maxExecTraceBytes`,
+   *   `timeLimitSeconds`) on `simulateLimits()`.
    *
    * #### Example
    * ```typescript
@@ -88,6 +95,7 @@ export class DTAlgodClient extends AlgodClient {
     'validity-window',
     'simulate-protocol',
     'simulate-limits',
+    'query',
   ]);
 
   /** The clients made by {@link DTAlgodClient.from}, by source client. */
@@ -542,6 +550,61 @@ export class DTAlgodClient extends AlgodClient {
         ),
       })
     );
+  }
+
+  /**
+   * Run read-only TEAL calls at one or more rounds (`POST /v2/query`): one
+   * program (each call creates an app running it) or one deployed app (each
+   * call is a NoOp call of `appId`), many calls with their own args and
+   * references, at every listed round (0 is the latest; the latest by
+   * default). Each call is an app call alone in its group, in the block after
+   * the round, on the state that round left. There are no signatures, fees,
+   * minimum balances or leases, every resource is available unnamed, writes
+   * are dropped after each call, and a failed call does not affect the
+   * others. The response has, per round, the logs, cost and error of each
+   * call; inner transactions and state changes are not echoed.
+   *
+   * Unlike simulate, the default protocol is `latest`, not the protocol the
+   * round really ran: past rounds then report a `protocolOverride` with
+   * notes. Pass `protocol('round')` for the chain's own rules.
+   *
+   * Only fork nodes with queries on have it: the `query` of
+   * {@link DTAlgodClient.simulateLimits} is undefined otherwise, and has the
+   * limits to split requests by (`maxCalls`, `maxRounds`, `maxCallBudget`,
+   * `maxCallLogBytes`, `maxResponseBytes`). A node without the endpoint (404)
+   * or with queries disabled is thrown as a {@link DTUnsupportedError}. Results
+   * over `maxResponseBytes` fail with a 400 that `isQueryResponseTooLarge`
+   * recognizes; split the request and retry. A busy node answers 503 with
+   * `Retry-After`, and a request over the node's time limit 504.
+   *
+   * #### Example
+   * ```typescript
+   * const { query } = await algodClient.simulateLimits();
+   * if (query) {
+   *   const res = await algodClient
+   *     .query({
+   *       program: (await algodClient.compile(source).do()).result,
+   *       calls: [{ args: [new TextEncoder().encode('hi')] }, {}],
+   *     })
+   *     .rounds([0, 50000000])
+   *     .do();
+   *   for (const r of res.rounds) {
+   *     console.log(r.round, r.error ?? r.calls.map((c) => c.error ?? c.logs));
+   *   }
+   *
+   *   // A deployed app, at the latest round.
+   *   const app = await algodClient
+   *     .query({ appId: 760937186, calls: [{ args: [selector] }] })
+   *     .do();
+   * }
+   * ```
+   *
+   * @param request - The request, as a {@link QueryRequest} or a plain
+   * object with its fields.
+   * @category POST
+   */
+  query(request: QueryRequest | QueryRequestParams) {
+    return new RunQuery(this.c, request);
   }
 
   /**

@@ -11,6 +11,8 @@ import assert from 'assert';
 import {
   DTAlgodClient,
   DTSimulateRequest,
+  DTUnsupportedError,
+  QueryLimits,
 } from '../src/client/v2/algod/dt/index';
 import { SimulateRequestTransactionGroup } from '../src/client/v2/algod/models/types';
 import { makePaymentTxnWithSuggestedParamsFromObject } from '../src/makeTxn';
@@ -19,6 +21,7 @@ import { Transaction } from '../src/transaction';
 import { SuggestedParams } from '../src/types/transactions/base';
 import { encodeMsgpack } from '../src/encoding/encoding';
 import generateAccount from '../src/account';
+import { encodeUint64 } from '../src/encoding/uint64';
 
 const env = typeof process !== 'undefined' ? process.env : {};
 const server = env.DT_ALGOD_SERVER;
@@ -285,6 +288,111 @@ describe('time travel against a live node', function liveSuite() {
         .limit(3)
         .do();
       assert.ok(app.versions.length > 0);
+    });
+  });
+
+  describe('query', () => {
+    // #pragma version 10; global Round; itob; log; txn ApplicationArgs 0; log; int 1
+    const PROGRAM = 'CjIGFrA2GgCwgQE=';
+    const hi = new TextEncoder().encode('hi');
+    let limits: QueryLimits;
+
+    before(async function needsQuery() {
+      if (!c) this.skip();
+      const { query } = await c.simulateLimits();
+      // A node without POST /v2/query, or with queries disabled.
+      if (!query) this.skip();
+      limits = query!;
+    });
+
+    it('reports its query limits', () => {
+      assert.ok(limits.maxCalls >= 1);
+      assert.ok(limits.maxRounds >= 1);
+      assert.ok(limits.maxCallBudget >= 700);
+    });
+
+    it('runs a program at several rounds', async () => {
+      const res = await c
+        .query({ program: PROGRAM, calls: [{ args: [hi] }, {}] })
+        .rounds([0, PAST, PAST])
+        .do();
+      assert.strictEqual(res.rounds.length, 3);
+      const [now, past, again] = res.rounds;
+      assert.ok(now.round > PAST && now.round <= res.lastRound);
+      assert.strictEqual(past.round, PAST);
+      for (const r of res.rounds) {
+        assert.strictEqual(r.error, undefined);
+        assert.strictEqual(r.calls.length, 2);
+        const [ok, failed] = r.calls;
+        // Calls run in the block after the queried round.
+        assert.ok(sameBytes(ok.logs[0], encodeUint64(r.round + 1n)));
+        assert.ok(sameBytes(ok.logs[1], hi));
+        assert.strictEqual(ok.error, undefined);
+        assert.ok(ok.cost > 0);
+        assert.match(failed.error!, /ApplicationArgs/);
+        assert.strictEqual(failed.logs.length, 1);
+      }
+      assert.deepStrictEqual(again, past);
+      // The default protocol is latest, not the round's own.
+      assert.strictEqual(past.protocolOverride?.applied, true);
+    });
+
+    it("runs under the round's own protocol with protocol('round')", async () => {
+      const res = await c
+        .query({ program: PROGRAM, calls: [{ args: [hi] }] })
+        .rounds([PAST])
+        .protocol('round')
+        .do();
+      const [r] = res.rounds;
+      assert.strictEqual(r.protocolOverride, undefined);
+      assert.strictEqual(r.calls[0].error, undefined);
+    });
+
+    it('calls a deployed app', async () => {
+      const res = await c
+        .query({ appId: XGOV, calls: [{}] })
+        .rounds([0, PAST])
+        .do();
+      assert.strictEqual(res.rounds.length, 2);
+      for (const r of res.rounds) {
+        assert.strictEqual(r.error, undefined);
+        assert.strictEqual(r.calls.length, 1);
+        assert.strictEqual(typeof r.calls[0].cost, 'number');
+        assert.ok(Array.isArray(r.calls[0].logs));
+      }
+      // The app did not exist yet: the call fails, not the request.
+      assert.strictEqual(typeof res.rounds[1].calls[0].error, 'string');
+      const nfd = await c.query({ appId: NFD, calls: [{}] }).do();
+      assert.strictEqual(nfd.rounds[0].calls.length, 1);
+    });
+
+    it("passes the node's rejections through as 400s", async () => {
+      const rejected = async (call: Promise<unknown>, message: RegExp) =>
+        assert.rejects(
+          call,
+          (err) =>
+            !(err instanceof DTUnsupportedError) &&
+            (err as { status?: number }).status === 400 &&
+            message.test(
+              (err as { response?: { text?: string } }).response?.text ?? ''
+            )
+        );
+      await rejected(
+        c
+          .query({
+            program: PROGRAM,
+            calls: Array.from({ length: limits.maxCalls + 1 }, () => ({})),
+          })
+          .do(),
+        /too many calls/
+      );
+      await rejected(
+        c
+          .query({ program: PROGRAM, calls: [{}] })
+          .rounds([latest + 1000n])
+          .do(),
+        /after the latest round/
+      );
     });
   });
 

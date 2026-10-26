@@ -10,7 +10,8 @@ This is `dtalgosdk`, a fork of [algosdk](https://www.npmjs.com/package/algosdk) 
 - **Reads at past rounds**: `.round(R)` on account, asset, application, box and supply reads.
 - **History**: `...Versions` methods list the rounds at which an account, asset, application, box, or any of an app's boxes changed, with paging and values.
 - **Simulate** with several groups per request (in sequence or with `parallelGroups()`), at several rounds per request (`rounds()`), with the validity window skipped or moved to each round (`skipValidityWindow()`, `rewriteValidityWindow()`), and under a later consensus protocol (`protocol()`).
-- **Helpers**: `DTSimulateRequest.fromTransactions()` for unsigned transactions, `packSimulateRounds()` to split rounds into requests, `groupResults()` for each group's outcome or a typed `SimulateGroupError`, and `simulateLimits()` for the node's limits.
+- **Query**: `query()` runs read-only TEAL calls (one program or deployed app, many calls) at several rounds per request through the fork's `POST /v2/query`, returning each call's logs, cost and error per round, without transactions, signatures or fees.
+- **Helpers**: `DTSimulateRequest.fromTransactions()` for unsigned transactions, `packSimulateRounds()` to split rounds into requests, `groupResults()` for each group's outcome or a typed `SimulateGroupError`, `simulateLimits()` for the node's limits (including its query limits), and `isQueryResponseTooLarge()` to split a query whose results are over the node's limit.
 - **Stock algod detection**: `supportsDT()`, and a `DTUnsupportedError` when a node lacks a feature, so code can fall back.
 - **Fix**: ABI dynamic arrays and tuples decode `Uint8Array` subarrays correctly.
 

@@ -1,7 +1,7 @@
 {
   "name": "dtalgosdk",
   "version": "3.9.0-dt.2.0.0.1",
-  "description": "algosdk with time-travel algod support: reads at past rounds, change history, and multi-group, multi-round simulate",
+  "description": "algosdk with time-travel algod support: reads at past rounds, change history, multi-group, multi-round simulate, and read-only TEAL queries",
   "main": "dist/cjs/index.js",
   "module": "dist/esm/index.js",
   "browser": {
@@ -57,7 +57,8 @@
     "algosdk",
     "algod",
     "time-travel",
-    "simulate"
+    "simulate",
+    "query"
   ],
   "overrides": {
     "basic-ftp": ">=6.2.1"

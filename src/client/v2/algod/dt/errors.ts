@@ -12,7 +12,9 @@ import { SimulateTransactionGroupResult } from '../models/types.js';
  * `protocol`) or answered without applying them (`rounds` without one result
  * per listed round, a validity window mode not echoed, `protocol` without a
  * `protocol-override`), or it has no simulate limits endpoint
- * (`getSimulateLimits`).
+ * (`getSimulateLimits`), or it has no query endpoint (`query`: a 404 from
+ * stock algod or an older fork build) or has queries disabled (a 400 saying
+ * so, from a node with `MaxAPIQueryCalls` 0).
  */
 export class DTUnsupportedError extends Error {
   /** The round that was asked for, when the error comes from a round check. */
@@ -305,4 +307,67 @@ export class SimulateGroupError extends Error {
     this.failedAt = failedAt;
     this.result = result;
   }
+}
+
+/**
+ * The most bytes a `POST /v2/query` request body may have: a fixed limit of
+ * the node, the same as simulate's, that `simulateLimits()` does not report.
+ * A planning hint for splitting requests (`encodeMsgpack(request).length`);
+ * the client does not check it.
+ */
+export const MAX_QUERY_REQUEST_BYTES = 1_000_000;
+
+/**
+ * What each log counts toward the node's `QueryLimits.maxResponseBytes`
+ * besides its own length.
+ */
+export const QUERY_LOG_OVERHEAD_BYTES = 48;
+
+/**
+ * Runs a query request, turning a node without queries into a
+ * {@link DTUnsupportedError}: a 404 (stock algod, or a fork build without
+ * `POST /v2/query`), or a 400 saying queries are disabled. Other errors pass
+ * through unchanged.
+ * @param request - The request.
+ */
+export async function queryWithFeatures(request: Promise<HTTPClientResponse>) {
+  try {
+    return await request;
+  } catch (err) {
+    const { status, text } = describe(err);
+    if (status === 404) {
+      throw new DTUnsupportedError(
+        'The node has no query endpoint; it is stock algod or a fork build without POST /v2/query',
+        { cause: err }
+      );
+    }
+    if (status === 400 && /query is disabled on this node/.test(text)) {
+      throw new DTUnsupportedError(
+        'The node has queries disabled (MaxAPIQueryCalls is 0)',
+        { cause: err }
+      );
+    }
+    throw err;
+  }
+}
+
+/**
+ * Whether an error thrown by a query request means its results are over the
+ * node's `QueryLimits.maxResponseBytes`: a 400 saying
+ * `query response too large`. Split the request (fewer calls or rounds) and
+ * retry.
+ *
+ * #### Example
+ * ```typescript
+ * try {
+ *   return await algodClient.query(request).do();
+ * } catch (err) {
+ *   if (!algosdk.isQueryResponseTooLarge(err)) throw err;
+ *   // send the calls in two halves
+ * }
+ * ```
+ */
+export function isQueryResponseTooLarge(err: unknown): boolean {
+  const { status, text } = describe(err);
+  return status === 400 && /query response too large/.test(text);
 }

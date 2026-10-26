@@ -27,8 +27,10 @@ import {
   Account,
   Application,
   ApplicationLocalState,
+  ApplicationStateSchema,
   Asset,
   AssetHolding,
+  BoxReference,
   SimulateRequest,
   SimulateInitialStates,
   SimulateRequestTransactionGroup,
@@ -37,6 +39,7 @@ import {
   SimulateTraceConfig,
   SimulationEvalOverrides,
 } from '../models/types.js';
+import { Address } from '../../../../encoding/address.js';
 import { Transaction } from '../../../../transaction.js';
 import { SignedTransaction } from '../../../../signedTransaction.js';
 import { assignGroupID } from '../../../../group.js';
@@ -2962,7 +2965,7 @@ export class SimulateLimitsResponse implements Encodable {
   public timeLimitSeconds?: number;
 
   /**
-   * The limits of `POST /v2/query` ({@link DTAlgodClient.query}). Undefined
+   * The limits of `POST /v2/query` (`DTAlgodClient.query`). Undefined
    * when the node has no query endpoint or has queries disabled: use
    * simulate then.
    */
@@ -3077,6 +3080,713 @@ export class SimulateLimitsResponse implements Encodable {
           ? QueryLimits.fromEncodingData(data.get('query'))
           : undefined,
       reported: true,
+    });
+  }
+}
+
+/**
+ * One call of a query ({@link QueryRequest.calls}): the args and references of
+ * its app call. Every resource is available to the call unnamed, so the
+ * references are only needed by programs before v9, which address accounts,
+ * apps and assets by index.
+ */
+export class QueryCall implements Encodable {
+  private static encodingSchemaValue: Schema | undefined;
+
+  static get encodingSchema(): Schema {
+    if (!this.encodingSchemaValue) {
+      this.encodingSchemaValue = new NamedMapSchema([]);
+      (this.encodingSchemaValue as NamedMapSchema).pushEntries(
+        {
+          key: 'args',
+          valueSchema: new OptionalSchema(
+            new ArraySchema(new ByteArraySchema())
+          ),
+          omitEmpty: true,
+        },
+        {
+          key: 'accounts',
+          valueSchema: new OptionalSchema(new ArraySchema(new StringSchema())),
+          omitEmpty: true,
+        },
+        {
+          key: 'foreign-apps',
+          valueSchema: new OptionalSchema(new ArraySchema(new Uint64Schema())),
+          omitEmpty: true,
+        },
+        {
+          key: 'foreign-assets',
+          valueSchema: new OptionalSchema(new ArraySchema(new Uint64Schema())),
+          omitEmpty: true,
+        },
+        {
+          key: 'boxes',
+          valueSchema: new OptionalSchema(
+            new ArraySchema(BoxReference.encodingSchema)
+          ),
+          omitEmpty: true,
+        }
+      );
+    }
+    return this.encodingSchemaValue;
+  }
+
+  /** The application args. */
+  public args?: Uint8Array[];
+
+  /** The accounts the call references (`Txn.Accounts`). */
+  public accounts?: Address[];
+
+  /** The apps the call references (`Txn.Applications`). */
+  public foreignApps?: bigint[];
+
+  /** The assets the call references (`Txn.Assets`). */
+  public foreignAssets?: bigint[];
+
+  /**
+   * The boxes the call references. App 0, or the called app's ID, is the
+   * called app; the node adds any other app to `foreignApps`.
+   */
+  public boxes?: BoxReference[];
+
+  /**
+   * Creates a new `QueryCall` object.
+   * @param args - The application args, as bytes.
+   * @param accounts - The accounts the call references.
+   * @param foreignApps - The apps the call references.
+   * @param foreignAssets - The assets the call references.
+   * @param boxes - The boxes the call references; app 0 is the called app.
+   */
+  constructor({
+    args,
+    accounts,
+    foreignApps,
+    foreignAssets,
+    boxes,
+  }: {
+    args?: Uint8Array[];
+    accounts?: (string | Address)[];
+    foreignApps?: (number | bigint)[];
+    foreignAssets?: (number | bigint)[];
+    boxes?: (
+      | BoxReference
+      | { app: number | bigint; name: string | Uint8Array }
+    )[];
+  } = {}) {
+    this.args = args;
+    this.accounts =
+      typeof accounts === 'undefined'
+        ? undefined
+        : accounts.map((a) =>
+            typeof a === 'string' ? Address.fromString(a) : a
+          );
+    this.foreignApps =
+      typeof foreignApps === 'undefined'
+        ? undefined
+        : foreignApps.map(ensureUint64);
+    this.foreignAssets =
+      typeof foreignAssets === 'undefined'
+        ? undefined
+        : foreignAssets.map(ensureUint64);
+    this.boxes =
+      typeof boxes === 'undefined'
+        ? undefined
+        : boxes.map((b) =>
+            b instanceof BoxReference ? b : new BoxReference(b)
+          );
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  getEncodingSchema(): Schema {
+    return QueryCall.encodingSchema;
+  }
+
+  toEncodingData(): Map<string, unknown> {
+    return new Map<string, unknown>([
+      ['args', this.args],
+      [
+        'accounts',
+        typeof this.accounts !== 'undefined'
+          ? this.accounts.map((v) => v.toString())
+          : undefined,
+      ],
+      ['foreign-apps', this.foreignApps],
+      ['foreign-assets', this.foreignAssets],
+      [
+        'boxes',
+        typeof this.boxes !== 'undefined'
+          ? this.boxes.map((v) => v.toEncodingData())
+          : undefined,
+      ],
+    ]);
+  }
+
+  static fromEncodingData(data: unknown): QueryCall {
+    if (!(data instanceof Map)) {
+      throw new Error(`Invalid decoded QueryCall: ${data}`);
+    }
+    return new QueryCall({
+      args: data.get('args'),
+      accounts: data.get('accounts'),
+      foreignApps: data.get('foreign-apps'),
+      foreignAssets: data.get('foreign-assets'),
+      boxes:
+        typeof data.get('boxes') !== 'undefined'
+          ? data
+              .get('boxes')
+              .map((v: unknown) => BoxReference.fromEncodingData(v))
+          : undefined,
+    });
+  }
+}
+
+/** What {@link QueryCall}'s constructor takes. */
+export type QueryCallParams = ConstructorParameters<typeof QueryCall>[0];
+
+/** A state schema, as a model or a plain object. */
+type StateSchemaParams =
+  | ApplicationStateSchema
+  | ConstructorParameters<typeof ApplicationStateSchema>[0];
+
+function toStateSchema(
+  schema: StateSchemaParams | undefined
+): ApplicationStateSchema | undefined {
+  if (typeof schema === 'undefined' || schema instanceof ApplicationStateSchema)
+    return schema;
+  return new ApplicationStateSchema(schema);
+}
+
+/**
+ * A request of `POST /v2/query` (`DTAlgodClient.query`): read-only TEAL
+ * calls at one or more rounds. Exactly one of `program` and `appId` is
+ * required.
+ *
+ * Each call is an app call alone in its group, in the block after each queried
+ * round, on the state that round left: an app create running `program` (at
+ * the app ID the next block would give it), or a NoOp call of `appId`. There
+ * are no signatures, fees, minimum balances or leases, and every resource is
+ * available unnamed. Writes are dropped after each call, so calls do not see
+ * each other's effects; inner transactions run but are not echoed. A failed
+ * call does not affect the others.
+ *
+ * Unlike simulate, the default protocol is `latest`, not the protocol the
+ * round really ran: pass `protocol: 'round'` for the chain's own rules.
+ */
+export class QueryRequest implements Encodable {
+  private static encodingSchemaValue: Schema | undefined;
+
+  static get encodingSchema(): Schema {
+    if (!this.encodingSchemaValue) {
+      this.encodingSchemaValue = new NamedMapSchema([]);
+      (this.encodingSchemaValue as NamedMapSchema).pushEntries(
+        {
+          key: 'program',
+          valueSchema: new OptionalSchema(new ByteArraySchema()),
+          omitEmpty: true,
+        },
+        {
+          key: 'clear-program',
+          valueSchema: new OptionalSchema(new ByteArraySchema()),
+          omitEmpty: true,
+        },
+        {
+          key: 'global-schema',
+          valueSchema: new OptionalSchema(
+            ApplicationStateSchema.encodingSchema
+          ),
+          omitEmpty: true,
+        },
+        {
+          key: 'local-schema',
+          valueSchema: new OptionalSchema(
+            ApplicationStateSchema.encodingSchema
+          ),
+          omitEmpty: true,
+        },
+        {
+          key: 'app-id',
+          valueSchema: new OptionalSchema(new Uint64Schema()),
+          omitEmpty: true,
+        },
+        {
+          key: 'sender',
+          valueSchema: new OptionalSchema(new StringSchema()),
+          omitEmpty: true,
+        },
+        {
+          key: 'rounds',
+          valueSchema: new OptionalSchema(new ArraySchema(new Uint64Schema())),
+          omitEmpty: true,
+        },
+        {
+          key: 'protocol',
+          valueSchema: new OptionalSchema(new StringSchema()),
+          omitEmpty: true,
+        },
+        {
+          key: 'budget',
+          valueSchema: new OptionalSchema(new Uint64Schema()),
+          omitEmpty: true,
+        },
+        {
+          key: 'calls',
+          valueSchema: new ArraySchema(QueryCall.encodingSchema),
+          omitEmpty: false,
+        }
+      );
+    }
+    return this.encodingSchemaValue;
+  }
+
+  /**
+   * The approval program of the app each call creates. Extra program pages
+   * follow from its length. Not with `appId`.
+   */
+  public program?: Uint8Array;
+
+  /**
+   * The clear state program of the app each call creates. Defaults to
+   * `pushint 1` at the version of `program`, which must then be v3 or later.
+   * Only with `program`.
+   */
+  public clearProgram?: Uint8Array;
+
+  /** The global state schema of the app each call creates. Only with `program`. */
+  public globalSchema?: ApplicationStateSchema;
+
+  /** The local state schema of the app each call creates. Only with `program`. */
+  public localSchema?: ApplicationStateSchema;
+
+  /** The deployed app each call calls, with OnCompletion NoOp. Not with `program`. */
+  public appId?: bigint;
+
+  /** The sender of every call. Defaults to the fee sink of the queried round. */
+  public sender?: Address;
+
+  /**
+   * The rounds to query, at most the node's `maxRounds` entries, duplicates
+   * included; 0 is the latest round. Defaults to the latest round. A round
+   * after the latest one fails the request.
+   */
+  public rounds?: bigint[];
+
+  /**
+   * The protocol the block after each queried round runs, as in simulate:
+   * `latest` (the default, unlike simulate), a consensus version or `vNN`
+   * name of a later protocol, or `round` for the protocol the chain really
+   * ran. `future` needs the node's developer API.
+   */
+  public protocol?: string;
+
+  /**
+   * The opcode budget of each call, shared by the app it runs and the apps it
+   * calls. Defaults to, and may be at most, the node's `maxCallBudget`.
+   */
+  public budget?: number;
+
+  /** The calls, at most the node's `maxCalls`. */
+  public calls: QueryCall[];
+
+  /**
+   * Creates a new `QueryRequest` object.
+   * @param program - The approval program of the app each call creates, as
+   * bytes or base64 (as `compile().do()` returns it).
+   * @param clearProgram - Its clear state program, as bytes or base64.
+   * @param globalSchema - Its global state schema.
+   * @param localSchema - Its local state schema.
+   * @param appId - The deployed app each call calls instead.
+   * @param sender - The sender of every call.
+   * @param rounds - The rounds to query; 0 is the latest.
+   * @param protocol - The protocol to run under; defaults to `latest`.
+   * @param budget - The opcode budget of each call.
+   * @param calls - The calls, as models or plain objects.
+   */
+  constructor({
+    program,
+    clearProgram,
+    globalSchema,
+    localSchema,
+    appId,
+    sender,
+    rounds,
+    protocol,
+    budget,
+    calls,
+  }: {
+    program?: string | Uint8Array;
+    clearProgram?: string | Uint8Array;
+    globalSchema?: StateSchemaParams;
+    localSchema?: StateSchemaParams;
+    appId?: number | bigint;
+    sender?: string | Address;
+    rounds?: (number | bigint)[];
+    protocol?: string;
+    budget?: number | bigint;
+    calls: (QueryCall | QueryCallParams)[];
+  }) {
+    this.program =
+      typeof program === 'string' ? base64ToBytes(program) : program;
+    this.clearProgram =
+      typeof clearProgram === 'string'
+        ? base64ToBytes(clearProgram)
+        : clearProgram;
+    this.globalSchema = toStateSchema(globalSchema);
+    this.localSchema = toStateSchema(localSchema);
+    this.appId = typeof appId === 'undefined' ? undefined : ensureUint64(appId);
+    this.sender =
+      typeof sender === 'string' ? Address.fromString(sender) : sender;
+    this.rounds =
+      typeof rounds === 'undefined' ? undefined : rounds.map(ensureUint64);
+    this.protocol = protocol;
+    this.budget =
+      typeof budget === 'undefined' ? undefined : ensureSafeInteger(budget);
+    this.calls = calls.map((c) =>
+      c instanceof QueryCall ? c : new QueryCall(c)
+    );
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  getEncodingSchema(): Schema {
+    return QueryRequest.encodingSchema;
+  }
+
+  toEncodingData(): Map<string, unknown> {
+    return new Map<string, unknown>([
+      ['program', this.program],
+      ['clear-program', this.clearProgram],
+      [
+        'global-schema',
+        typeof this.globalSchema !== 'undefined'
+          ? this.globalSchema.toEncodingData()
+          : undefined,
+      ],
+      [
+        'local-schema',
+        typeof this.localSchema !== 'undefined'
+          ? this.localSchema.toEncodingData()
+          : undefined,
+      ],
+      ['app-id', this.appId],
+      [
+        'sender',
+        typeof this.sender !== 'undefined' ? this.sender.toString() : undefined,
+      ],
+      ['rounds', this.rounds],
+      ['protocol', this.protocol],
+      ['budget', this.budget],
+      ['calls', this.calls.map((v) => v.toEncodingData())],
+    ]);
+  }
+
+  static fromEncodingData(data: unknown): QueryRequest {
+    if (!(data instanceof Map)) {
+      throw new Error(`Invalid decoded QueryRequest: ${data}`);
+    }
+    return new QueryRequest({
+      program: data.get('program'),
+      clearProgram: data.get('clear-program'),
+      globalSchema:
+        typeof data.get('global-schema') !== 'undefined'
+          ? ApplicationStateSchema.fromEncodingData(data.get('global-schema'))
+          : undefined,
+      localSchema:
+        typeof data.get('local-schema') !== 'undefined'
+          ? ApplicationStateSchema.fromEncodingData(data.get('local-schema'))
+          : undefined,
+      appId: data.get('app-id'),
+      sender: data.get('sender'),
+      rounds: data.get('rounds'),
+      protocol: data.get('protocol'),
+      budget: data.get('budget'),
+      calls: (data.get('calls') ?? []).map((v: unknown) =>
+        QueryCall.fromEncodingData(v)
+      ),
+    });
+  }
+}
+
+/** What {@link QueryRequest}'s constructor takes. */
+export type QueryRequestParams = ConstructorParameters<typeof QueryRequest>[0];
+
+/**
+ * The result of one call of a query at one round.
+ */
+export class QueryCallResult implements Encodable {
+  private static encodingSchemaValue: Schema | undefined;
+
+  static get encodingSchema(): Schema {
+    if (!this.encodingSchemaValue) {
+      this.encodingSchemaValue = new NamedMapSchema([]);
+      (this.encodingSchemaValue as NamedMapSchema).pushEntries(
+        {
+          key: 'logs',
+          valueSchema: new ArraySchema(new ByteArraySchema()),
+          omitEmpty: true,
+        },
+        { key: 'cost', valueSchema: new Uint64Schema(), omitEmpty: true },
+        {
+          key: 'error',
+          valueSchema: new OptionalSchema(new StringSchema()),
+          omitEmpty: true,
+        }
+      );
+    }
+    return this.encodingSchemaValue;
+  }
+
+  /**
+   * The logs of the called app, also when the call failed part way. Logs of
+   * the apps it called are not included.
+   */
+  public logs: Uint8Array[];
+
+  /** The opcode budget the call used, the apps it called included. */
+  public cost: number;
+
+  /**
+   * The call's error, if it failed: the bare evaluation error, such as
+   * `logic eval error: ...`, without simulate's `transaction N:` prefix.
+   */
+  public error?: string;
+
+  /**
+   * Creates a new `QueryCallResult` object.
+   * @param logs - The logs of the called app.
+   * @param cost - The opcode budget the call used.
+   * @param error - The call's error, if it failed.
+   */
+  constructor({
+    logs,
+    cost,
+    error,
+  }: {
+    logs: Uint8Array[];
+    cost: number | bigint;
+    error?: string;
+  }) {
+    this.logs = logs;
+    this.cost = ensureSafeInteger(cost);
+    this.error = error;
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  getEncodingSchema(): Schema {
+    return QueryCallResult.encodingSchema;
+  }
+
+  toEncodingData(): Map<string, unknown> {
+    return new Map<string, unknown>([
+      ['logs', this.logs],
+      ['cost', this.cost],
+      ['error', this.error],
+    ]);
+  }
+
+  static fromEncodingData(data: unknown): QueryCallResult {
+    if (!(data instanceof Map)) {
+      throw new Error(`Invalid decoded QueryCallResult: ${data}`);
+    }
+    return new QueryCallResult({
+      logs: data.get('logs') ?? [],
+      cost: data.get('cost') ?? 0,
+      error: data.get('error'),
+    });
+  }
+}
+
+/**
+ * The calls of a query at one round: one entry of
+ * {@link QueryResponse.rounds}.
+ */
+export class QueryRoundResult implements Encodable {
+  private static encodingSchemaValue: Schema | undefined;
+
+  static get encodingSchema(): Schema {
+    if (!this.encodingSchemaValue) {
+      this.encodingSchemaValue = new NamedMapSchema([]);
+      (this.encodingSchemaValue as NamedMapSchema).pushEntries(
+        { key: 'round', valueSchema: new Uint64Schema(), omitEmpty: true },
+        {
+          key: 'protocol',
+          valueSchema: new OptionalSchema(
+            SimulateProtocolOverride.encodingSchema
+          ),
+          omitEmpty: true,
+        },
+        {
+          key: 'error',
+          valueSchema: new OptionalSchema(new StringSchema()),
+          omitEmpty: true,
+        },
+        {
+          key: 'calls',
+          valueSchema: new ArraySchema(QueryCallResult.encodingSchema),
+          omitEmpty: true,
+        }
+      );
+    }
+    return this.encodingSchemaValue;
+  }
+
+  /**
+   * The queried round, with 0 resolved to the latest round: the calls ran in
+   * the block after it, on the state it left.
+   */
+  public round: bigint;
+
+  /**
+   * How the protocol applied at this round (wire key `protocol`; named
+   * `protocolOverride` as on {@link SimulateRoundResult}, and so as not to be
+   * confused with the request's `protocol` string). Set when another
+   * protocol than the round's own applied, which is the default (`latest`)
+   * for any round before the latest protocol upgrade, and whenever the
+   * request set `protocol`, except `round`.
+   */
+  public protocolOverride?: SimulateProtocolOverride;
+
+  /** Why the round could not be queried. There are no calls then. */
+  public error?: string;
+
+  /** One result per call of the request, in order. Empty when `error` is set. */
+  public calls: QueryCallResult[];
+
+  /**
+   * Creates a new `QueryRoundResult` object.
+   * @param round - The queried round.
+   * @param protocolOverride - How the protocol applied at this round.
+   * @param error - Why the round could not be queried.
+   * @param calls - One result per call of the request.
+   */
+  constructor({
+    round,
+    protocolOverride,
+    error,
+    calls,
+  }: {
+    round: number | bigint;
+    protocolOverride?: SimulateProtocolOverride;
+    error?: string;
+    calls: QueryCallResult[];
+  }) {
+    this.round = ensureBigInt(round);
+    this.protocolOverride = protocolOverride;
+    this.error = error;
+    this.calls = calls;
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  getEncodingSchema(): Schema {
+    return QueryRoundResult.encodingSchema;
+  }
+
+  toEncodingData(): Map<string, unknown> {
+    return new Map<string, unknown>([
+      ['round', this.round],
+      [
+        'protocol',
+        typeof this.protocolOverride !== 'undefined'
+          ? this.protocolOverride.toEncodingData()
+          : undefined,
+      ],
+      ['error', this.error],
+      ['calls', this.calls.map((v) => v.toEncodingData())],
+    ]);
+  }
+
+  static fromEncodingData(data: unknown): QueryRoundResult {
+    if (!(data instanceof Map)) {
+      throw new Error(`Invalid decoded QueryRoundResult: ${data}`);
+    }
+    return new QueryRoundResult({
+      round: data.get('round') ?? 0,
+      protocolOverride:
+        typeof data.get('protocol') !== 'undefined'
+          ? SimulateProtocolOverride.fromEncodingData(data.get('protocol'))
+          : undefined,
+      error: data.get('error'),
+      calls: (data.get('calls') ?? []).map((v: unknown) =>
+        QueryCallResult.fromEncodingData(v)
+      ),
+    });
+  }
+}
+
+/**
+ * The response of `POST /v2/query` (`DTAlgodClient.query`): one entry in
+ * `rounds` per entry of the request's `rounds`, in order (one for the latest
+ * round when it listed none), each with one result per call, in order.
+ *
+ * #### Example
+ * ```typescript
+ * const res = await algodClient.query(request).do();
+ * res.rounds.forEach((r, i) => {
+ *   r.calls.forEach((c, j) => {
+ *     console.log(r.round, j, r.error ?? c.error ?? c.logs);
+ *   });
+ * });
+ * ```
+ */
+export class QueryResponse implements Encodable {
+  private static encodingSchemaValue: Schema | undefined;
+
+  static get encodingSchema(): Schema {
+    if (!this.encodingSchemaValue) {
+      this.encodingSchemaValue = new NamedMapSchema([]);
+      (this.encodingSchemaValue as NamedMapSchema).pushEntries(
+        { key: 'last-round', valueSchema: new Uint64Schema(), omitEmpty: true },
+        {
+          key: 'rounds',
+          valueSchema: new ArraySchema(QueryRoundResult.encodingSchema),
+          omitEmpty: true,
+        }
+      );
+    }
+    return this.encodingSchemaValue;
+  }
+
+  /** The node's latest round when the request started. */
+  public lastRound: bigint;
+
+  /** One result per entry of the request's `rounds`, in order. */
+  public rounds: QueryRoundResult[];
+
+  /**
+   * Creates a new `QueryResponse` object.
+   * @param lastRound - The node's latest round when the request started.
+   * @param rounds - One result per entry of the request's `rounds`.
+   */
+  constructor({
+    lastRound,
+    rounds,
+  }: {
+    lastRound: number | bigint;
+    rounds: QueryRoundResult[];
+  }) {
+    this.lastRound = ensureBigInt(lastRound);
+    this.rounds = rounds;
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  getEncodingSchema(): Schema {
+    return QueryResponse.encodingSchema;
+  }
+
+  toEncodingData(): Map<string, unknown> {
+    return new Map<string, unknown>([
+      ['last-round', this.lastRound],
+      ['rounds', this.rounds.map((v) => v.toEncodingData())],
+    ]);
+  }
+
+  static fromEncodingData(data: unknown): QueryResponse {
+    if (!(data instanceof Map)) {
+      throw new Error(`Invalid decoded QueryResponse: ${data}`);
+    }
+    return new QueryResponse({
+      lastRound: data.get('last-round') ?? 0,
+      rounds: (data.get('rounds') ?? []).map((v: unknown) =>
+        QueryRoundResult.fromEncodingData(v)
+      ),
     });
   }
 }

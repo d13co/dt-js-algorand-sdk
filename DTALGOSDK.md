@@ -11,6 +11,7 @@
 - [Reads at past rounds](#reads-at-past-rounds)
 - [Versions: the rounds at which objects changed](#versions-the-rounds-at-which-objects-changed)
 - [Simulate](#simulate)
+- [Query](#query)
 - [Simulate limits](#simulate-limits)
 - [Running against stock algod](#running-against-stock-algod)
 - [Bug fixes to upstream code](#bug-fixes-to-upstream-code)
@@ -18,20 +19,21 @@
 
 ## Summary
 
-| Area                                              | algosdk                          | dtalgosdk                                                                                                                          |
-| ------------------------------------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| Client                                            | `Algodv2` / `AlgodClient`        | also `DTAlgodClient`, a subclass, with `DTAlgodClient.from(existingAlgod)`                                                         |
-| Account, asset, application, box and supply reads | latest round only                | `.round(R)` on each read                                                                                                           |
-| History                                           | none (use an indexer)            | `...Versions` methods: the rounds at which an account, asset, application, box or any of an app's boxes changed, with paging       |
-| Simulate: groups per request                      | one                              | several (node's `MaxAPISimulateGroups`, default 16), in sequence or with `parallelGroups()`                                        |
-| Simulate: rounds per request                      | one (`round`)                    | several with `rounds([...])` (node's `MaxAPISimulateRounds`, default 16)                                                           |
-| Simulate: validity window                         | must contain the simulated round | `skipValidityWindow()` or `rewriteValidityWindow()` to simulate rounds far apart                                                   |
-| Simulate: consensus protocol                      | the round's own                  | `protocol('v42' \| 'latest' \| ...)` to run under a later protocol                                                                 |
-| Simulate results                                  | `txnGroups`                      | also `roundResults`, `protocolOverride`, and `groupResult()` / `groupResults()` that return each group's outcome or a typed error  |
-| Request building                                  | `SimulateRequest`                | `DTSimulateRequest`, with `fromTransactions()` for unsigned transactions, and `packSimulateRounds()` to split rounds into requests |
-| Node limits                                       | none                             | `simulateLimits()`, with the `query` limits                                                                                        |
-| Errors                                            | HTTP errors                      | `DTUnsupportedError` when the node lacks a feature, `SimulateGroupError` per failed group                                          |
-| ABI                                               |                                  | `ABIArrayDynamicType` and `ABITupleType` decode subarray views correctly (see [Bug fixes](#bug-fixes-to-upstream-code))            |
+| Area                                              | algosdk                                              | dtalgosdk                                                                                                                          |
+| ------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Client                                            | `Algodv2` / `AlgodClient`                            | also `DTAlgodClient`, a subclass, with `DTAlgodClient.from(existingAlgod)`                                                         |
+| Account, asset, application, box and supply reads | latest round only                                    | `.round(R)` on each read                                                                                                           |
+| History                                           | none (use an indexer)                                | `...Versions` methods: the rounds at which an account, asset, application, box or any of an app's boxes changed, with paging       |
+| Simulate: groups per request                      | one                                                  | several (node's `MaxAPISimulateGroups`, default 16), in sequence or with `parallelGroups()`                                        |
+| Simulate: rounds per request                      | one (`round`)                                        | several with `rounds([...])` (node's `MaxAPISimulateRounds`, default 16)                                                           |
+| Simulate: validity window                         | must contain the simulated round                     | `skipValidityWindow()` or `rewriteValidityWindow()` to simulate rounds far apart                                                   |
+| Simulate: consensus protocol                      | the round's own                                      | `protocol('v42' \| 'latest' \| ...)` to run under a later protocol                                                                 |
+| Simulate results                                  | `txnGroups`                                          | also `roundResults`, `protocolOverride`, and `groupResult()` / `groupResults()` that return each group's outcome or a typed error  |
+| Request building                                  | `SimulateRequest`                                    | `DTSimulateRequest`, with `fromTransactions()` for unsigned transactions, and `packSimulateRounds()` to split rounds into requests |
+| Read-only TEAL calls                              | simulate with signed or empty-signature transactions | `query()`: one program or app, many calls, at many rounds, logs and cost per call                                                  |
+| Node limits                                       | none                                                 | `simulateLimits()`, with the `query` limits                                                                                        |
+| Errors                                            | HTTP errors                                          | `DTUnsupportedError` when the node lacks a feature, `SimulateGroupError` per failed group                                          |
+| ABI                                               |                                                      | `ABIArrayDynamicType` and `ABITupleType` decode subarray views correctly (see [Bug fixes](#bug-fixes-to-upstream-code))            |
 
 ## Installing in place of algosdk
 
@@ -98,14 +100,15 @@ From the package root (`import algosdk from 'algosdk'`):
 - `DTUnsupportedError`, `SimulateGroupError`, and the types `SimulateGroupErrorKind`, `SimulateGroupOutcome`
 - `packSimulateRounds`, and the types `PackedSimulateRounds`, `SimulateRoundsWindow`
 - `DEFAULT_MAX_SIMULATE_GROUPS` (16), `DEFAULT_MAX_SIMULATE_ROUNDS` (16), `MAX_TXN_LIFE` (1000)
+- `isQueryResponseTooLarge`, `MAX_QUERY_REQUEST_BYTES` (1,000,000), `QUERY_LOG_OVERHEAD_BYTES` (48)
 - the types `VersionsOrder`, `VersionsInclude`, `AccountVersionsExclude`
-- `dtModels`: the request and response models: `DTSimulateRequest`, `DTSimulateResponse`, `DTSimulationEvalOverrides`, `SimulateRoundResult`, `SimulateProtocolOverride`, `SimulateProtocolNote`, `SimulateProtocolNoteHit`, the type `SimulateProtocolNoteCode`, `SimulateLimitsResponse`, `BoxChange`, and the `...Version` / `...VersionsResponse` models
+- `dtModels`: the request and response models: `DTSimulateRequest`, `DTSimulateResponse`, `DTSimulationEvalOverrides`, `SimulateRoundResult`, `SimulateProtocolOverride`, `SimulateProtocolNote`, `SimulateProtocolNoteHit`, the type `SimulateProtocolNoteCode`, `SimulateLimitsResponse`, `QueryLimits`, `QueryRequest`, `QueryCall`, `QueryResponse`, `QueryRoundResult`, `QueryCallResult`, the types `QueryRequestParams`, `QueryCallParams`, `BoxChange`, and the `...Version` / `...VersionsResponse` models
 
 `algosdk/client/algod` exports the same, with the models at its top level.
 
 ## DTAlgodClient
 
-`DTAlgodClient` extends `AlgodClient` and takes the same constructor arguments. It overrides the reads that gain a `.round()`, `simulateTransactions` and `simulateRawTransactions`, and adds the versions, limits and detection methods. Every other method is inherited unchanged.
+`DTAlgodClient` extends `AlgodClient` and takes the same constructor arguments. It overrides the reads that gain a `.round()`, `simulateTransactions` and `simulateRawTransactions`, and adds the versions, query, limits and detection methods. Every other method is inherited unchanged.
 
 ```typescript
 const algod = new algosdk.DTAlgodClient(token, server, port);
@@ -119,7 +122,7 @@ const algod = algosdk.DTAlgodClient.from(algorand.client.algod);
 
 `from` sends requests through the existing client's HTTP client (same server, token, headers and custom `BaseHTTPClient`), returns its argument if it already is a `DTAlgodClient`, and returns the same `DTAlgodClient` each time it is called with the same client, so cached answers (`supportsDT()`, `simulateLimits()`) are shared. The source client may come from another copy of algosdk, since it is read by shape, but transactions and models passed to the new client must come from this copy.
 
-`DTAlgodClient.features` lists what the build supports, for code that finds the class at runtime on an algosdk that may be stock or an older fork build: `reads-at-round`, `versions`, `simulate-groups`, `parallel-groups`, `simulate-rounds`, `from`, `group-results`, `from-transactions`, `pack-rounds`, `validity-window`, `simulate-protocol`, `simulate-limits`.
+`DTAlgodClient.features` lists what the build supports, for code that finds the class at runtime on an algosdk that may be stock or an older fork build: `reads-at-round`, `versions`, `simulate-groups`, `parallel-groups`, `simulate-rounds`, `from`, `group-results`, `from-transactions`, `pack-rounds`, `validity-window`, `simulate-protocol`, `simulate-limits`, `query`.
 
 ```typescript
 const DT = (algosdk as any).DTAlgodClient;
@@ -318,6 +321,101 @@ It also has `roundIndex`, `groupIndex`, `round`, and, for `group` and `not-simul
 
 The node may raise the limits on unnamed resources (`allowUnnamedResources`) with its `SimulateResourceLimitMultiplier` setting, so the resources it reports may not fit in a group that can be submitted.
 
+## Query
+
+`DTAlgodClient.query(request)` runs read-only TEAL calls through the fork's `POST /v2/query`: one program or one deployed app, many calls, at many rounds, in one request, with no transactions to build. It is what a "ghost" simulate (an app create that logs its results) does, without signatures, fees, validity windows or group limits.
+
+- With `program`, each call creates an app running it (at the app ID the next block would give it); with `appId`, each call is a NoOp call of that deployed app. Exactly one of them is required.
+- Each call is an app call alone in its group, in the block after each queried round, on the state that round left. There are no signatures, fees, minimum balances or leases, and every resource is available unnamed: references are only needed by programs before v9, which address resources by index.
+- Writes are dropped after each call, so calls do not see each other's effects. Inner transactions run but are not echoed, nor are state changes. A failed call does not affect the others.
+
+| Request field                 | Meaning                                                                                                                       |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `program`                     | approval program of the app each call creates, bytes or base64 (as `compile().do().result`); extra pages follow from its size |
+| `clearProgram`                | its clear program; defaults to `pushint 1` at the version of `program`, which must then be v3 or later                        |
+| `globalSchema`, `localSchema` | its state schemas (`{ numUint, numByteSlice }`)                                                                               |
+| `appId`                       | the deployed app to call instead; not with the three fields above                                                             |
+| `sender`                      | sender of every call; defaults to the fee sink                                                                                |
+| `rounds` / `.rounds([...])`   | rounds to query, 0 for the latest; defaults to the latest; a round after the latest one fails the request                     |
+| `protocol` / `.protocol(p)`   | protocol to run under: `latest` by default, a later version, `round` for the chain's own, `future` with the developer API     |
+| `budget`                      | opcode budget of each call, shared with the apps it calls; defaults to and is capped by `maxCallBudget`                       |
+| `calls`                       | at least one; each with `args` (bytes), `accounts`, `foreignApps`, `foreignAssets`, `boxes` (app 0 is the called app)         |
+
+The request and its calls may be models (`dtModels.QueryRequest`, `QueryCall`) or plain objects; ids and rounds take `number` or `bigint`, addresses strings or `Address`.
+
+```typescript
+const res = await algod
+  .query({
+    program: (await algod.compile(source).do()).result,
+    calls: [{ args: [selector, arg1] }, { args: [selector, arg2] }],
+  })
+  .rounds([0, 50_000_000])
+  .do();
+for (const r of res.rounds) {
+  r.calls.forEach((call, i) =>
+    console.log(r.round, i, r.error ?? call.error ?? call.logs)
+  );
+}
+```
+
+### Results
+
+`res.rounds` has one entry per entry of `rounds`, in order (one for the latest round when none were listed); `res.lastRound` is the node's latest round when the request started. Each entry has:
+
+- `round`: the queried round, with 0 resolved to the latest round;
+- `error`: why the round could not be queried, with no `calls` then;
+- `calls`: one result per call, in order, each with `logs` (the called app's logs, also those written before a failure), `cost` (the opcode budget used, the apps it called included) and `error`;
+- `protocolOverride`: how the protocol applied (as in simulate; wire key `protocol`).
+
+The client checks that the response has one entry per round, for the round asked for, and one result per call, and throws an `Error` otherwise. `doRaw()` returns the msgpack body unchecked.
+
+### Differences from simulate
+
+Code that falls back from query to simulate (or back) must handle these:
+
+- **Default protocol**: query runs under `latest` by default, so a past round runs today's rules and reports a `protocolOverride` with `applied` true and notes; simulate runs the round's own protocol. Pass `.protocol('round')` to query for the chain's own rules, or `.protocol('latest')` to simulate for today's.
+- **Budget**: a query call gets at most `maxCallBudget` (320,000 by default), while a simulate group can get `maxExtraOpcodeBudget` plus the budget of its transactions. Compare a call's needs with `maxCallBudget` before choosing query.
+- **Errors**: a query call's `error` is the bare evaluation error (`logic eval error: ...`); simulate's `failureMessage` is prefixed (`transaction N: ...`).
+- **Logs**: query returns only the called app's logs, with no inner transaction or state echo. `maxCallLogBytes` can raise the log limit per program above the protocol's 1024 bytes in 32 logs.
+
+### Limits and errors
+
+`(await algod.simulateLimits()).query` has the node's `QueryLimits`, or is undefined when the node has no query endpoint or has queries disabled:
+
+- `maxCalls` calls and `maxRounds` round entries (duplicates included) per request;
+- `maxCallBudget`, the most (and default) budget per call;
+- `maxCallLogBytes`, the most bytes each program of a call may log, in up to 2048 logs (0 for the protocol's limits);
+- `maxResponseBytes`, the most bytes of logs and errors a request may return (0 for no limit). Each log counts `QUERY_LOG_OVERHEAD_BYTES` (48) more than its length, and a round listed twice counts twice.
+
+The request body may be at most `MAX_QUERY_REQUEST_BYTES` (1,000,000) bytes of msgpack (`encodeMsgpack(request).length`), a fixed limit of the node that the limits endpoint does not report. The client checks none of these.
+
+- A node without the endpoint (404: stock algod, or a fork build without it) or with queries disabled (a 400 saying so) is thrown as a `DTUnsupportedError`.
+- Results over `maxResponseBytes` fail with a 400 that `isQueryResponseTooLarge(err)` recognizes: split the request and retry.
+- Other 400s (too many calls or rounds, a round after the latest, an unknown protocol, a bad address) pass through.
+- A busy node answers 503 with `Retry-After` (query shares simulate's limiter), and a request over `timeLimitSeconds` 504.
+
+Detect query and fall back, splitting calls by `maxCalls` and rounds by `maxRounds` (the SDK ships no chunker):
+
+```typescript
+const { query } = await algod.simulateLimits();
+if (!query) {
+  // simulate instead
+} else {
+  const results = [];
+  for (let r = 0; r < rounds.length; r += query.maxRounds) {
+    for (let c = 0; c < calls.length; c += query.maxCalls) {
+      results.push(
+        await algod
+          .query({ program, calls: calls.slice(c, c + query.maxCalls) })
+          .rounds(rounds.slice(r, r + query.maxRounds))
+          .protocol('round')
+          .do(undefined, { signal }) // abortable
+      );
+    }
+  }
+}
+```
+
 ## Simulate limits
 
 `simulateLimits()` reads `GET /v2/transactions/simulate/limits` once per client and returns a frozen `SimulateLimitsResponse`:
@@ -345,6 +443,7 @@ A node without the endpoint (stock algod, or an older fork build) gets stock alg
 
 - `supportsDT()` probes a `/versions` route once per client and answers whether the node has time travel. Use it to fall back to an indexer.
 - A stock node's rejection of a fork feature, or a response that ignored one (a read for another round, `rounds` without one result per round, a validity window mode not echoed, `protocol` without `protocolOverride`), is thrown as a `DTUnsupportedError`. Catch it once and fall back, for example to one group per simulate request.
+- `query()` on a node without `POST /v2/query` (404) or with queries disabled is thrown as a `DTUnsupportedError`. Check `(await simulateLimits()).query` first, and simulate when it is undefined.
 - A time-travel node built before `getApplicationBoxesVersions` passes `supportsDT()` and answers that method with a 404, thrown as `DTUnsupportedError`.
 
 ## Bug fixes to upstream code

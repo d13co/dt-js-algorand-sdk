@@ -1,6 +1,10 @@
 /* eslint-env mocha */
 import assert from 'assert';
 import {
+  encode as msgpackEncode,
+  decode as msgpackDecode,
+} from 'algorand-msgpack';
+import {
   BaseHTTPClient,
   BaseHTTPClientResponse,
   Query,
@@ -21,6 +25,13 @@ import {
   SimulateProtocolNoteHit,
   SimulateLimitsResponse,
   QueryLimits,
+  QueryRequest,
+  QueryRequestParams,
+  QueryCall,
+  QueryResponse,
+  QueryRoundResult,
+  QueryCallResult,
+  isQueryResponseTooLarge,
   packSimulateRounds,
 } from '../src/client/v2/algod/dt/index';
 import { AlgodClient } from '../src/client/v2/algod/algod';
@@ -746,6 +757,467 @@ describe('time travel', () => {
         algosdk.decodeJSON(encoded, SimulateLimitsResponse).reported,
         true
       );
+    });
+  });
+
+  describe('query', () => {
+    // #pragma version 10; global Round; itob; log; txn ApplicationArgs 0; log; int 1
+    const PROGRAM = 'CjIGFrA2GgCwgQE=';
+    const programBytes = algosdk.base64ToBytes(PROGRAM);
+    const utf8 = (s: string) => new TextEncoder().encode(s);
+    const ADDR = 'Y76M3MSY6DKBRHBL7C3NNDXGS5IIMQVQVUAB6MP4XEMMGVF2QWNPL226CA';
+    const ADDR2 = algosdk.Address.zeroAddress().toString();
+
+    /** A msgpack answer built from a plain object with the node's keys. */
+    const raw = (body: unknown) => () => ({
+      status: 200,
+      body: msgpackEncode(body),
+    });
+
+    /** The request body the stub received, decoded as plain msgpack. */
+    const sentBody = (stub: StubClient, i = 0) =>
+      msgpackDecode(stub.calls[i].body!) as Record<string, unknown>;
+
+    const callResult = (
+      round: number,
+      extra: Record<string, unknown> = {}
+    ) => ({
+      cost: 6,
+      logs: [utf8(`r${round}`)],
+      ...extra,
+    });
+
+    const answer = (rounds: number[], calls = 1, lastRound = 100) =>
+      raw({
+        'last-round': lastRound,
+        rounds: rounds.map((round) => ({
+          round,
+          calls: Array.from({ length: calls }, () => callResult(round)),
+        })),
+      });
+
+    // Captured from a MainNet node (127.0.0.1:8081) with ?format=msgpack:
+    // PROGRAM at rounds [50000000], protocol round, calls
+    // [{args: ['hi']}, {args: ['']}, {}].
+    const LIVE =
+      'gqpsYXN0LXJvdW5kzgP0bwKmcm91bmRzkYKlY2FsbHOTgqRjb3N0BqRsb2dzksQIAAAAAAL68IHEAmhpgqRjb3N0BqRsb2dzksQIAAAAAAL68IHEAIOkY29zdASlZXJyb3LZe2xvZ2ljIGV2YWwgZXJyb3I6IGludmFsaWQgQXBwbGljYXRpb25BcmdzIGluZGV4IDAuIERldGFpbHM6IGFwcD0zMDAwMTEzMzc5LCBwYz01LCBvcGNvZGVzPWl0b2I7IGxvZzsgdHhuYSBBcHBsaWNhdGlvbkFyZ3MgMKRsb2dzkcQIAAAAAAL68IGlcm91bmTOAvrwgA==';
+
+    it('sends POST /v2/query as msgpack with every field', async () => {
+      const stub = new StubClient([answer([5])]);
+      await new DTAlgodClient(stub, '')
+        .query({
+          program: programBytes,
+          clearProgram: PROGRAM,
+          globalSchema: { numUint: 1, numByteSlice: 2 },
+          localSchema: new algosdk.modelsv2.ApplicationStateSchema({
+            numUint: 3,
+            numByteSlice: 4,
+          }),
+          sender: ADDR,
+          rounds: [5],
+          protocol: 'round',
+          budget: 1000,
+          calls: [
+            {
+              args: [utf8('hi'), new Uint8Array()],
+              accounts: [ADDR, algosdk.Address.zeroAddress()],
+              foreignApps: [7, 8n],
+              foreignAssets: [31566704],
+              boxes: [
+                { app: 0, name: utf8('a') },
+                new algosdk.modelsv2.BoxReference({ app: 9, name: utf8('b') }),
+              ],
+            },
+          ],
+        })
+        .do();
+      assert.strictEqual(stub.calls[0].path, '/v2/query');
+      assert.strictEqual(stub.calls[0].query.format, 'msgpack');
+      assert.deepStrictEqual(sentBody(stub), {
+        program: programBytes,
+        'clear-program': programBytes,
+        'global-schema': { 'num-uint': 1, 'num-byte-slice': 2 },
+        'local-schema': { 'num-uint': 3, 'num-byte-slice': 4 },
+        sender: ADDR,
+        rounds: [5],
+        protocol: 'round',
+        budget: 1000,
+        calls: [
+          {
+            args: [utf8('hi'), new Uint8Array()],
+            accounts: [ADDR, ADDR2],
+            'foreign-apps': [7, 8],
+            'foreign-assets': [31566704],
+            boxes: [{ name: utf8('a') }, { app: 9, name: utf8('b') }],
+          },
+        ],
+      });
+    });
+
+    it('sends app-id and only the keys that are set', async () => {
+      const stub = new StubClient([answer([100], 2)]);
+      await new DTAlgodClient(stub, '')
+        .query({ appId: 760937186, calls: [{}, { args: [utf8('x')] }] })
+        .do();
+      assert.deepStrictEqual(sentBody(stub), {
+        'app-id': 760937186,
+        calls: [{}, { args: [utf8('x')] }],
+      });
+    });
+
+    it('sets and clears rounds and protocol with the builders', async () => {
+      const stub = new StubClient([answer([0, 5]), answer([100])]);
+      const client = new DTAlgodClient(stub, '');
+      await client
+        .query({ program: PROGRAM, calls: [{}] })
+        .rounds([0, 5n])
+        .protocol('latest')
+        .do();
+      assert.deepStrictEqual(sentBody(stub).rounds, [0, 5]);
+      assert.strictEqual(sentBody(stub).protocol, 'latest');
+      await client
+        .query({ program: PROGRAM, rounds: [5], protocol: 'v40', calls: [{}] })
+        .rounds([])
+        .protocol('')
+        .do();
+      assert.ok(!('rounds' in sentBody(stub, 1)));
+      assert.ok(!('protocol' in sentBody(stub, 1)));
+    });
+
+    it('copies the request when it is made', async () => {
+      const stub = new StubClient([answer([5])]);
+      const request = new QueryRequest({
+        program: PROGRAM,
+        rounds: [5],
+        calls: [{ args: [utf8('a')] }],
+      });
+      const call = new DTAlgodClient(stub, '').query(request).protocol('round');
+      request.calls.push(new QueryCall({}));
+      request.rounds!.push(6n);
+      await call.do();
+      assert.strictEqual(sentBody(stub).protocol, 'round');
+      assert.deepStrictEqual(sentBody(stub).rounds, [5]);
+      assert.strictEqual((sentBody(stub).calls as unknown[]).length, 1);
+      assert.strictEqual(request.protocol, undefined);
+    });
+
+    it('rejects requests the node would refuse, without sending', async () => {
+      const stub = new StubClient([]);
+      const client = new DTAlgodClient(stub, '');
+      const bad: [QueryRequestParams, RegExp][] = [
+        [{ program: PROGRAM, calls: [] }, /at least one call/],
+        [{ calls: [{}] }, /exactly one of program and appId/],
+        [{ program: new Uint8Array(), appId: 0, calls: [{}] }, /exactly one/],
+        [{ program: PROGRAM, appId: 5, calls: [{}] }, /exactly one/],
+        [{ appId: 5, clearProgram: PROGRAM, calls: [{}] }, /need program/],
+        [
+          {
+            appId: 5,
+            globalSchema: { numUint: 0, numByteSlice: 0 },
+            calls: [{}],
+          },
+          /need program/,
+        ],
+        [
+          {
+            appId: 5,
+            localSchema: { numUint: 1, numByteSlice: 0 },
+            calls: [{}],
+          },
+          /need program/,
+        ],
+      ];
+      for (const [request, message] of bad) {
+        // eslint-disable-next-line no-await-in-loop
+        await assert.rejects(client.query(request).do(), message);
+      }
+      assert.strictEqual(stub.calls.length, 0);
+    });
+
+    it('decodes a response captured from a live node', async () => {
+      const stub = new StubClient([
+        () => ({ status: 200, body: algosdk.base64ToBytes(LIVE) }),
+      ]);
+      const res = await new DTAlgodClient(stub, '')
+        .query({
+          program: PROGRAM,
+          rounds: [50000000],
+          protocol: 'round',
+          calls: [{ args: [utf8('hi')] }, { args: [new Uint8Array()] }, {}],
+        })
+        .do();
+      assert.ok(res instanceof QueryResponse);
+      assert.strictEqual(res.lastRound, 66350850n);
+      assert.strictEqual(res.rounds.length, 1);
+      const [r] = res.rounds;
+      assert.ok(r instanceof QueryRoundResult);
+      assert.strictEqual(r.round, 50000000n);
+      assert.strictEqual(r.protocolOverride, undefined);
+      assert.strictEqual(r.error, undefined);
+      const roundLog = algosdk.encodeUint64(50000001);
+      assert.deepStrictEqual(
+        r.calls.map((c) => ({ ...c })),
+        [
+          { logs: [roundLog, utf8('hi')], cost: 6, error: undefined },
+          { logs: [roundLog, new Uint8Array()], cost: 6, error: undefined },
+          {
+            logs: [roundLog],
+            cost: 4,
+            error:
+              'logic eval error: invalid ApplicationArgs index 0. Details: app=3000113379, pc=5, opcodes=itob; log; txna ApplicationArgs 0',
+          },
+        ]
+      );
+      assert.ok(r.calls[0] instanceof QueryCallResult);
+    });
+
+    it('decodes round errors, protocol overrides, no logs and zero cost', async () => {
+      const stub = new StubClient([
+        raw({
+          'last-round': 100,
+          rounds: [
+            {
+              round: 100,
+              calls: [
+                { cost: 0, logs: [] },
+                { logs: [utf8('x')], cost: 3, error: 'boom' },
+              ],
+            },
+            {
+              round: 7,
+              protocol: {
+                from: 'v20',
+                to: 'v41',
+                applied: true,
+                notes: [{ code: 'semantics-changed', message: 'differ' }],
+              },
+              error:
+                'program version 10 greater than protocol supported version 2',
+            },
+          ],
+        }),
+      ]);
+      const res = await new DTAlgodClient(stub, '')
+        .query({ program: PROGRAM, calls: [{}, {}] })
+        .rounds([0, 7])
+        .do();
+      const [latest, past] = res.rounds;
+      assert.strictEqual(latest.round, 100n);
+      assert.deepStrictEqual(latest.calls[0].logs, []);
+      assert.strictEqual(latest.calls[0].cost, 0);
+      assert.strictEqual(latest.calls[0].error, undefined);
+      assert.strictEqual(latest.calls[1].error, 'boom');
+      assert.deepStrictEqual(latest.calls[1].logs, [utf8('x')]);
+      assert.deepStrictEqual(past.calls, []);
+      assert.match(past.error!, /program version 10/);
+      assert.ok(past.protocolOverride instanceof SimulateProtocolOverride);
+      assert.strictEqual(past.protocolOverride!.applied, true);
+      assert.strictEqual(past.protocolOverride!.to, 'v41');
+      assert.strictEqual(
+        past.protocolOverride!.notes![0].code,
+        'semantics-changed'
+      );
+    });
+
+    it('checks the number of round results', async () => {
+      const cases: [number[] | undefined, number[]][] = [
+        [undefined, []],
+        [undefined, [100, 100]],
+        [[5, 6], [5]],
+        [[5], [5, 6]],
+      ];
+      for (const [rounds, answered] of cases) {
+        const stub = new StubClient([answer(answered)]);
+        // eslint-disable-next-line no-await-in-loop
+        await assert.rejects(
+          new DTAlgodClient(stub, '')
+            .query({ program: PROGRAM, rounds, calls: [{}] })
+            .do(),
+          (err) =>
+            !(err instanceof DTUnsupportedError) &&
+            /round results/.test((err as Error).message)
+        );
+      }
+      // None requested: one result, for the latest round.
+      const stub = new StubClient([answer([100])]);
+      const res = await new DTAlgodClient(stub, '')
+        .query({ program: PROGRAM, calls: [{}] })
+        .do();
+      assert.strictEqual(res.rounds[0].round, 100n);
+    });
+
+    it('checks each requested round, and accepts any round for 0', async () => {
+      const stub = new StubClient([answer([5, 9])]);
+      await assert.rejects(
+        new DTAlgodClient(stub, '')
+          .query({ program: PROGRAM, calls: [{}] })
+          .rounds([5, 6])
+          .do(),
+        /Round result 1 is for round 9, not the round asked for, 6/
+      );
+      const ok0 = new StubClient([answer([5, 99, 5])]);
+      const res = await new DTAlgodClient(ok0, '')
+        .query({ program: PROGRAM, calls: [{}] })
+        .rounds([5, 0, 5])
+        .do();
+      assert.deepStrictEqual(
+        res.rounds.map((r) => r.round),
+        [5n, 99n, 5n]
+      );
+    });
+
+    it('checks the number of call results in rounds without an error', async () => {
+      const stub = new StubClient([answer([5], 1)]);
+      await assert.rejects(
+        new DTAlgodClient(stub, '')
+          .query({ program: PROGRAM, rounds: [5], calls: [{}, {}] })
+          .do(),
+        /Queried 2 calls but the node answered with 1 call results in round result 0/
+      );
+    });
+
+    it('returns the raw body from doRaw', async () => {
+      const body = algosdk.base64ToBytes(LIVE);
+      const stub = new StubClient([() => ({ status: 200, body })]);
+      const got = await new DTAlgodClient(stub, '')
+        .query({ program: PROGRAM, calls: [{}] })
+        .doRaw();
+      assert.deepStrictEqual(got, body);
+    });
+
+    it('throws a node without queries as DTUnsupportedError', async () => {
+      for (const handler of [
+        () => ({ status: 404, json: { message: 'Not Found' } }),
+        badRequest('query is disabled on this node (MaxAPIQueryCalls is 0)'),
+      ]) {
+        const stub = new StubClient([handler]);
+        // eslint-disable-next-line no-await-in-loop
+        await assert.rejects(
+          new DTAlgodClient(stub, '')
+            .query({ program: PROGRAM, calls: [{}] })
+            .do(),
+          (err) =>
+            err instanceof DTUnsupportedError &&
+            [400, 404].includes((err.cause as { status?: number }).status!)
+        );
+      }
+    });
+
+    it('passes other errors through', async () => {
+      for (const handler of [
+        badRequest('too many calls: got 1025, the limit is 1024'),
+        badRequest('round 999999999 is after the latest round 66350609'),
+        status(503),
+        status(504),
+      ]) {
+        const stub = new StubClient([handler]);
+        // eslint-disable-next-line no-await-in-loop
+        await assert.rejects(
+          new DTAlgodClient(stub, '')
+            .query({ program: PROGRAM, calls: [{}] })
+            .do(),
+          (err) =>
+            !(err instanceof DTUnsupportedError) &&
+            !isQueryResponseTooLarge(err) &&
+            [400, 503, 504].includes((err as { status?: number }).status!)
+        );
+      }
+    });
+
+    it('recognizes a response over maxResponseBytes', async () => {
+      const stub = new StubClient([
+        badRequest(
+          'query response too large: the logs are over 67108864 bytes (MaxAPIQueryResponseBytes); query fewer calls or rounds'
+        ),
+      ]);
+      const err = await new DTAlgodClient(stub, '')
+        .query({ program: PROGRAM, calls: [{}] })
+        .do()
+        .then(
+          () => undefined,
+          (e) => e
+        );
+      assert.strictEqual(isQueryResponseTooLarge(err), true);
+      assert.ok(!(err instanceof DTUnsupportedError));
+      assert.strictEqual(
+        isQueryResponseTooLarge(
+          Object.assign(new Error('query response too large'), { status: 413 })
+        ),
+        false
+      );
+      assert.strictEqual(isQueryResponseTooLarge(new Error('x')), false);
+      assert.strictEqual(isQueryResponseTooLarge(undefined), false);
+      assert.strictEqual(
+        isQueryResponseTooLarge('query response too large'),
+        false
+      );
+    });
+
+    it('accepts models and plain objects alike', async () => {
+      const stub = new StubClient([answer([5]), answer([5])]);
+      const client = new DTAlgodClient(stub, '');
+      await client
+        .query({
+          program: PROGRAM,
+          sender: ADDR,
+          rounds: [5],
+          calls: [{ accounts: [ADDR], boxes: [{ app: 3, name: 'AQ==' }] }],
+        })
+        .do();
+      await client
+        .query(
+          new QueryRequest({
+            program: programBytes,
+            sender: algosdk.Address.fromString(ADDR),
+            rounds: [5n],
+            calls: [
+              new QueryCall({
+                accounts: [algosdk.Address.fromString(ADDR)],
+                boxes: [
+                  new algosdk.modelsv2.BoxReference({
+                    app: 3n,
+                    name: new Uint8Array([1]),
+                  }),
+                ],
+              }),
+            ],
+          })
+        )
+        .do();
+      assert.deepStrictEqual(sentBody(stub, 0), sentBody(stub, 1));
+    });
+
+    it('encodes JSON as the node takes it', () => {
+      const request = new QueryRequest({
+        program: PROGRAM,
+        sender: ADDR,
+        rounds: [0, 5],
+        calls: [{ args: [utf8('hi')], foreignApps: [7] }],
+      });
+      const json = JSON.parse(algosdk.encodeJSON(request));
+      assert.deepStrictEqual(json, {
+        program: PROGRAM,
+        sender: ADDR,
+        rounds: [0, 5],
+        calls: [{ args: ['aGk='], 'foreign-apps': [7] }],
+      });
+      const back = algosdk.decodeJSON(
+        algosdk.encodeJSON(request),
+        QueryRequest
+      );
+      assert.deepStrictEqual(back, request);
+    });
+
+    it('is a feature exported from the package', () => {
+      assert.ok(DTAlgodClient.features.includes('query'));
+      assert.strictEqual(algosdk.dtModels.QueryRequest, QueryRequest);
+      assert.strictEqual(algosdk.dtModels.QueryLimits, QueryLimits);
+      assert.strictEqual(
+        algosdk.isQueryResponseTooLarge,
+        isQueryResponseTooLarge
+      );
+      assert.strictEqual(algosdk.MAX_QUERY_REQUEST_BYTES, 1_000_000);
+      assert.strictEqual(algosdk.QUERY_LOG_OVERHEAD_BYTES, 48);
     });
   });
 

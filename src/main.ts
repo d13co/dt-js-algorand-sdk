@@ -89,6 +89,9 @@ export {
   DEFAULT_MAX_SIMULATE_GROUPS,
   DEFAULT_MAX_SIMULATE_ROUNDS,
   MAX_TXN_LIFE,
+  isQueryResponseTooLarge,
+  MAX_QUERY_REQUEST_BYTES,
+  QUERY_LOG_OVERHEAD_BYTES,
 } from './client/v2/algod/dt/index.js';
 export * as dtModels from './client/v2/algod/dt/models.js';
 export * as indexerModels from './client/v2/indexer/models/types.js';

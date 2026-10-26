@@ -193,6 +193,33 @@ describe('client', () => {
 
     /* eslint-disable dot-notation */
   });
+  describe('response headers', () => {
+    /* eslint-disable dot-notation */
+    it('keys response headers by name', async () => {
+      const res = new Response('{}', {
+        status: 200,
+        headers: { 'Retry-After': '1', 'Content-Type': 'application/json' },
+      });
+      const formatted =
+        await URLTokenBaseHTTPClient['formatFetchResponse'](res);
+      assert.strictEqual(formatted.headers['retry-after'], '1');
+      assert.strictEqual(formatted.headers['content-type'], 'application/json');
+      assert.strictEqual(formatted.headers['1'], undefined);
+    });
+
+    it('keys the headers of an HTTP error by name', async () => {
+      const res = new Response('{"message":"busy"}', {
+        status: 503,
+        headers: { 'Retry-After': '1' },
+      });
+      await assert.rejects(
+        URLTokenBaseHTTPClient['checkHttpError'](res),
+        (err: { response?: { headers?: Record<string, string> } }) =>
+          err.response?.headers?.['retry-after'] === '1'
+      );
+    });
+    /* eslint-enable dot-notation */
+  });
   describe('Additional fetch options', () => {
     // eslint-disable-next-line func-names
     it('should pass additional options to the fetch method', async function () {

@@ -5,6 +5,10 @@ import algosdk, { bytesToString, coerceToBytes } from '../src/index.js';
 import * as utils from '../src/utils/utils.js';
 import { Schema, MsgpackRawStringProvider } from '../src/encoding/encoding.js';
 import {
+  base64ToBytesPortable,
+  bytesToBase64Portable,
+} from '../src/encoding/binarydata.js';
+import {
   BooleanSchema,
   StringSchema,
   Uint64Schema,
@@ -929,6 +933,39 @@ describe('encoding', () => {
           `Incorrect decoding of ${testCase}; got ${roundTripString}`
         );
       }
+    });
+
+    it('should convert base64 without Buffer as Buffer does', () => {
+      // The browser paths, on random bytes of lengths that are and aren't
+      // multiples of 3, across the encoder's 0x8000-byte chunks.
+      const lengths = [0, 1, 2, 3, 4, 5, 32767, 32768, 32769, 65536, 70000];
+      for (let i = 0; i < 20; i++) {
+        lengths.push(Math.floor(Math.random() * 70001));
+      }
+      for (const length of lengths) {
+        const bytes = new Uint8Array(length);
+        for (let j = 0; j < length; j++) {
+          bytes[j] = Math.floor(Math.random() * 256);
+        }
+        const expected = Buffer.from(bytes).toString('base64');
+        assert.strictEqual(bytesToBase64Portable(bytes), expected, `${length}`);
+        assert.deepStrictEqual(
+          base64ToBytesPortable(expected),
+          bytes,
+          `${length}`
+        );
+      }
+      // A subarray encodes only its own bytes.
+      const whole = Uint8Array.from([1, 2, 3, 4, 5, 6]);
+      assert.strictEqual(
+        bytesToBase64Portable(whole.subarray(2, 5)),
+        Buffer.from([3, 4, 5]).toString('base64')
+      );
+      // Unpadded input decodes as atob allows.
+      assert.deepStrictEqual(
+        base64ToBytesPortable('AAECAwQuLi7+/w'),
+        Uint8Array.from([0, 1, 2, 3, 4, 46, 46, 46, 254, 255])
+      );
     });
 
     it('should encode bytes to hex', () => {

@@ -52,6 +52,7 @@ import {
 import { NamedMapSchema } from '../src/encoding/schema/index';
 import {
   decodeJSON,
+  encodeJSON,
   decodeMsgpack,
   encodeMsgpack,
 } from '../src/encoding/encoding';
@@ -3264,5 +3265,510 @@ describe('decodeDTJSON', () => {
       algosdk.dtModels.BoxVersionsResponse
     );
     assert.strictEqual(res.versions[0].value, undefined);
+  });
+});
+
+describe('versions: rounds, keys and pages', () => {
+  const addr = 'RETICA7ZSQTWPWFB7KTF4CPHJDPRXTPQYIMY6DOUQ72I2JD3T5RRDXTUSQ';
+  const key = (s: string) => new TextEncoder().encode(s);
+  const b64 = (s: string) => Buffer.from(s).toString('base64');
+
+  describe('rounds', () => {
+    it('sends the rounds as CSV, deduplicated, with round 0 kept', async () => {
+      const stub = new StubClient([
+        ok({
+          round: 60000000,
+          versions: [
+            { round: 0, timestamp: 0, deleted: true },
+            { round: 1000, timestamp: 1560236200, deleted: true },
+            {
+              round: 60000000,
+              timestamp: 1775538824,
+              deleted: false,
+              'changed-round': 8874561,
+            },
+          ],
+        }),
+      ]);
+      const res = await new DTAlgodClient(stub, '')
+        .getAssetVersions(31566704)
+        .rounds([60000000, 0, BigInt(1000), 60000000])
+        .do();
+      assert.deepStrictEqual(stub.calls[0].query, {
+        rounds: '60000000,0,1000',
+      });
+      assert.deepStrictEqual(
+        res.versions.map((v) => [v.round, v.deleted, v.changedRound]),
+        [
+          [BigInt(0), true, undefined],
+          [BigInt(1000), true, undefined],
+          [BigInt(60000000), false, BigInt(8874561)],
+        ]
+      );
+    });
+
+    it('rejects rounds with a range, too many rounds, or none', async () => {
+      const client = new DTAlgodClient(new StubClient([]), '');
+      await assert.rejects(
+        client.getAssetVersions(7).rounds([5]).minRound(1).do(),
+        /rounds cannot be combined with minRound or maxRound/
+      );
+      await assert.rejects(
+        client.getAssetVersions(7).maxRound(9).rounds([5]).do(),
+        /rounds cannot be combined/
+      );
+      const many = Array.from({ length: 10001 }, (_, i) => i);
+      await assert.rejects(
+        client.getAssetVersions(7).rounds(many).do(),
+        /10001 distinct rounds, more than the 10000/
+      );
+      // 10,001 entries, 10,000 distinct: allowed.
+      const stub = new StubClient([
+        ok({
+          round: 9999,
+          versions: [{ round: 0, timestamp: 0, deleted: true }],
+        }),
+      ]);
+      await new DTAlgodClient(stub, '')
+        .getAssetVersions(7)
+        .rounds([...many.slice(0, 10000), 0])
+        .do();
+      assert.throws(
+        () => client.getAssetVersions(7).rounds([]),
+        /at least one round/
+      );
+      const pages = client.getAssetVersions(7).rounds([5]).minRound(1).pages();
+      await assert.rejects(pages.next(), /rounds cannot be combined/);
+    });
+
+    it('decodes changedRound on every kind of entry', async () => {
+      const stub = new StubClient([
+        ok({
+          round: 200,
+          versions: [
+            {
+              round: 200,
+              timestamp: 2000,
+              base: { deleted: false, 'changed-round': 150 },
+              assets: [{ 'asset-id': 7, deleted: false, 'changed-round': 120 }],
+              'apps-local-state': [
+                { 'app-id': 8, deleted: false, 'changed-round': 130 },
+              ],
+              'created-assets': [
+                { 'asset-id': 9, deleted: false, 'changed-round': 110 },
+              ],
+              'created-apps': [
+                { 'app-id': 10, deleted: false, 'changed-round': 100 },
+              ],
+            },
+          ],
+        }),
+        ok({
+          round: 200,
+          versions: [
+            {
+              round: 200,
+              timestamp: 2000,
+              boxes: [
+                {
+                  name: 'Y29uZmln',
+                  deleted: false,
+                  'changed-round': 190,
+                  value: 'AQ==',
+                },
+              ],
+            },
+          ],
+        }),
+        ok({
+          round: 200,
+          versions: [
+            { round: 200, timestamp: 2000, deleted: false, 'changed-round': 5 },
+          ],
+        }),
+        ok({
+          round: 200,
+          versions: [
+            { round: 200, timestamp: 2000, deleted: false, 'changed-round': 6 },
+          ],
+        }),
+      ]);
+      const client = new DTAlgodClient(stub, '');
+      const account = await client.accountVersions(addr).rounds([200]).do();
+      const v = account.versions[0];
+      assert.strictEqual(v.base?.changedRound, BigInt(150));
+      assert.strictEqual(v.assets?.[0].changedRound, BigInt(120));
+      assert.strictEqual(v.appsLocalState?.[0].changedRound, BigInt(130));
+      assert.strictEqual(v.createdAssets?.[0].changedRound, BigInt(110));
+      assert.strictEqual(v.createdApps?.[0].changedRound, BigInt(100));
+      const boxes = await client
+        .getApplicationBoxesVersions(8)
+        .rounds([200])
+        .include('values')
+        .do();
+      assert.strictEqual(boxes.versions[0].boxes[0].changedRound, BigInt(190));
+      const box = await client
+        .getApplicationBoxVersions(8, key('config'))
+        .rounds([200])
+        .do();
+      assert.strictEqual(box.versions[0].changedRound, BigInt(5));
+      const app = await client.getApplicationVersions(8).rounds([200]).do();
+      assert.strictEqual(app.versions[0].changedRound, BigInt(6));
+      // Without rounds, entries have no changedRound.
+      const plain = new StubClient([
+        ok({
+          round: 9,
+          versions: [{ round: 2, timestamp: 20, deleted: false }],
+        }),
+      ]);
+      const range = await new DTAlgodClient(plain, '').getAssetVersions(7).do();
+      assert.strictEqual(range.versions[0].changedRound, undefined);
+    });
+
+    it('throws DTUnsupportedError when the node ignored rounds', async () => {
+      const stub = new StubClient([
+        // A dt3 node drops rounds and lists the versions of the whole range.
+        ok({
+          round: 9,
+          versions: [
+            { round: 2, timestamp: 20, deleted: false },
+            { round: 5, timestamp: 50, deleted: false },
+          ],
+        }),
+        ok({ round: 9, versions: [] }),
+      ]);
+      const client = new DTAlgodClient(stub, '');
+      await assert.rejects(
+        client.getAssetVersions(7).rounds([5, 7]).do(),
+        (err: unknown) =>
+          err instanceof DTUnsupportedError &&
+          err.returnedRound === BigInt(2) &&
+          /ignored rounds/.test(err.message)
+      );
+      await assert.rejects(
+        client.accountAssetVersions(addr, 7).rounds([5]).do(),
+        (err: unknown) =>
+          err instanceof DTUnsupportedError && /no entries/.test(err.message)
+      );
+    });
+
+    it('pages through rounds with the next requested round as the token', async () => {
+      const entry = (round: number) => ({
+        round,
+        timestamp: round * 10,
+        deleted: false,
+        'changed-round': round - 1,
+      });
+      const stub = new StubClient([
+        ok({ round: 30, versions: [entry(10)], 'next-token': '20' }),
+        ok({ round: 30, versions: [entry(20)], 'next-token': '30' }),
+        ok({ round: 30, versions: [entry(30)] }),
+      ]);
+      const versions = [];
+      for await (const v of new DTAlgodClient(stub, '')
+        .getAssetVersions(7)
+        .rounds([30, 10, 20])
+        .limit(1)
+        .iterate()) {
+        versions.push(v.round);
+      }
+      assert.deepStrictEqual(versions, [BigInt(10), BigInt(20), BigInt(30)]);
+      assert.deepStrictEqual(
+        stub.calls.map((c) => c.query),
+        [
+          { rounds: '30,10,20', limit: '1' },
+          { rounds: '30,10,20', limit: '1', next: '20' },
+          { rounds: '30,10,20', limit: '1', next: '30' },
+        ]
+      );
+    });
+  });
+
+  describe("include('keys')", () => {
+    it('decodes changedKeys, keeping an empty list apart from none', async () => {
+      const stub = new StubClient([
+        ok({
+          round: 9,
+          versions: [
+            {
+              round: 2,
+              timestamp: 20,
+              deleted: false,
+              'changed-keys': [b64('total'), 'AP8='],
+            },
+            { round: 3, timestamp: 30, deleted: false, 'changed-keys': [] },
+            { round: 4, timestamp: 40, deleted: true },
+          ],
+        }),
+      ]);
+      const res = await new DTAlgodClient(stub, '')
+        .getApplicationVersions(8)
+        .include('values', 'keys')
+        .do();
+      assert.deepStrictEqual(stub.calls[0].query, { include: 'values,keys' });
+      assert.deepStrictEqual(res.versions[0].changedKeys, [
+        key('total'),
+        Uint8Array.from([0, 255]),
+      ]);
+      assert.deepStrictEqual(res.versions[1].changedKeys, []);
+      assert.strictEqual(res.versions[2].changedKeys, undefined);
+    });
+
+    it('decodes changedKeys on local states and created apps', async () => {
+      const stub = new StubClient([
+        ok({
+          round: 9,
+          versions: [
+            {
+              round: 2,
+              timestamp: 20,
+              'apps-local-state': [
+                { 'app-id': 8, deleted: false, 'changed-keys': [b64('n')] },
+                { 'app-id': 9, deleted: true },
+              ],
+              // Without changed-keys, as with exclude=created-apps-params.
+              'created-apps': [{ 'app-id': 10, deleted: false }],
+            },
+            {
+              round: 3,
+              timestamp: 30,
+              'created-apps': [
+                { 'app-id': 10, deleted: false, 'changed-keys': [b64('g')] },
+              ],
+            },
+          ],
+        }),
+      ]);
+      const res = await new DTAlgodClient(stub, '')
+        .accountVersions(addr)
+        .include('keys')
+        .do();
+      const [first, second] = res.versions;
+      assert.deepStrictEqual(first.appsLocalState?.[0].changedKeys, [key('n')]);
+      assert.strictEqual(first.appsLocalState?.[1].changedKeys, undefined);
+      assert.strictEqual(first.createdApps?.[0].changedKeys, undefined);
+      assert.deepStrictEqual(second.createdApps?.[0].changedKeys, [key('g')]);
+    });
+
+    it('throws DTUnsupportedError when the node rejects include=keys', async () => {
+      const stub = new StubClient([badRequest('invalid include value: keys')]);
+      await assert.rejects(
+        new DTAlgodClient(stub, '')
+          .accountApplicationVersions(addr, 8)
+          .include('keys')
+          .do(),
+        (err: unknown) =>
+          err instanceof DTUnsupportedError &&
+          (err.cause as { status?: number }).status === 400
+      );
+    });
+
+    it('throws DTUnsupportedError when the node ignored include=keys', async () => {
+      const stub = new StubClient([
+        ok({
+          round: 9,
+          versions: [
+            { round: 2, timestamp: 20, deleted: true },
+            { round: 3, timestamp: 30, deleted: false },
+          ],
+        }),
+        ok({
+          round: 9,
+          versions: [
+            {
+              round: 2,
+              timestamp: 20,
+              'apps-local-state': [{ 'app-id': 8, deleted: false }],
+            },
+          ],
+        }),
+        // Without keys, the same answers are fine.
+        ok({
+          round: 9,
+          versions: [{ round: 3, timestamp: 30, deleted: false }],
+        }),
+      ]);
+      const client = new DTAlgodClient(stub, '');
+      await assert.rejects(
+        client.getApplicationVersions(8).include('keys').do(),
+        (err: unknown) =>
+          err instanceof DTUnsupportedError && /ignored keys/.test(err.message)
+      );
+      await assert.rejects(
+        client.accountApplicationVersions(addr, 8).include('keys').do(),
+        DTUnsupportedError
+      );
+      await client.getApplicationVersions(8).include('values').do();
+    });
+  });
+
+  describe('pages', () => {
+    it('yields empty pages that have a nextToken and keeps going', async () => {
+      const stub = new StubClient([
+        ok({
+          round: 9,
+          versions: [{ round: 2, timestamp: 20, deleted: false }],
+          'next-token': 'a',
+        }),
+        ok({ round: 9, versions: [], 'next-token': 'b' }),
+        ok({ round: 9, versions: [], 'next-token': 'c' }),
+        ok({
+          round: 9,
+          versions: [{ round: 8, timestamp: 80, deleted: true }],
+        }),
+      ]);
+      const request = new DTAlgodClient(stub, '').getAssetVersions(7).limit(1);
+      const pages = [];
+      for await (const page of request.pages()) pages.push(page);
+      assert.deepStrictEqual(
+        pages.map((p) => [p.versions.length, p.nextToken]),
+        [
+          [1, 'a'],
+          [0, 'b'],
+          [0, 'c'],
+          [1, undefined],
+        ]
+      );
+      assert.deepStrictEqual(
+        stub.calls.map((c) => c.query.next),
+        [undefined, 'a', 'b', 'c']
+      );
+      // The builder's own query is untouched.
+      assert.deepStrictEqual(request.query, { limit: '1' });
+    });
+
+    it('throws when the node answers with the token it was sent', async () => {
+      const stub = new StubClient([
+        ok({ round: 9, versions: [], 'next-token': 'a' }),
+        ok({ round: 9, versions: [], 'next-token': 'a' }),
+      ]);
+      const seen = [];
+      await assert.rejects(
+        (async () => {
+          for await (const page of new DTAlgodClient(stub, '')
+            .getAssetVersions(7)
+            .pages()) {
+            seen.push(page);
+          }
+        })(),
+        /answered with the next-token it was sent \(a\)/
+      );
+      assert.strictEqual(seen.length, 1);
+      // A token sent with next() counts too.
+      const again = new StubClient([
+        ok({ round: 9, versions: [], 'next-token': 'z' }),
+      ]);
+      const pages = new DTAlgodClient(again, '')
+        .getAssetVersions(7)
+        .next('z')
+        .pages();
+      await assert.rejects(pages.next(), /next-token it was sent \(z\)/);
+    });
+
+    it('iterate gives the versions of every page in order', async () => {
+      const answers = () => [
+        ok({
+          round: 9,
+          versions: [
+            { round: 2, timestamp: 20, deleted: false },
+            { round: 3, timestamp: 30, deleted: false },
+          ],
+          'next-token': '4',
+        }),
+        ok({ round: 9, versions: [], 'next-token': '6' }),
+        ok({
+          round: 9,
+          versions: [{ round: 7, timestamp: 70, deleted: true }],
+        }),
+      ];
+      const fromPages = [];
+      for await (const page of new DTAlgodClient(new StubClient(answers()), '')
+        .getAssetVersions(7)
+        .pages()) {
+        fromPages.push(...page.versions);
+      }
+      const fromIterate = [];
+      for await (const v of new DTAlgodClient(new StubClient(answers()), '')
+        .getAssetVersions(7)
+        .iterate()) {
+        fromIterate.push(v);
+      }
+      assert.deepStrictEqual(fromIterate, fromPages);
+      assert.deepStrictEqual(
+        fromIterate.map((v) => v.round),
+        [BigInt(2), BigInt(3), BigInt(7)]
+      );
+    });
+  });
+
+  it('round-trips changedRound and changedKeys through JSON', () => {
+    const app = new algosdk.dtModels.ApplicationVersion({
+      round: 5,
+      timestamp: 50,
+      deleted: false,
+      changedRound: 4,
+      changedKeys: [key('a'), Uint8Array.from([0, 255])],
+    });
+    assert.deepStrictEqual(
+      decodeJSON(encodeJSON(app), algosdk.dtModels.ApplicationVersion),
+      app
+    );
+    const local = new algosdk.dtModels.ApplicationLocalStateVersion({
+      appId: 8,
+      deleted: false,
+      changedRound: 3,
+      changedKeys: [b64('n')],
+    });
+    const decoded = decodeJSON(
+      encodeJSON(local),
+      algosdk.dtModels.ApplicationLocalStateVersion
+    );
+    assert.deepStrictEqual(decoded, local);
+    assert.deepStrictEqual(decoded.changedKeys, [key('n')]);
+    for (const m of [
+      new algosdk.dtModels.AccountBaseVersion({
+        deleted: true,
+        changedRound: 1,
+      }),
+      new algosdk.dtModels.AssetHoldingVersion({
+        assetId: 7,
+        deleted: false,
+        changedRound: 2,
+      }),
+      new algosdk.dtModels.CreatedAssetVersion({
+        assetId: 7,
+        deleted: false,
+        changedRound: 2,
+      }),
+      new algosdk.dtModels.CreatedApplicationVersion({
+        appId: 8,
+        deleted: false,
+        changedRound: 2,
+        changedKeys: [key('g')],
+      }),
+      new BoxChange({ name: key('b'), deleted: false, changedRound: 2 }),
+      new BoxVersion({
+        round: 3,
+        timestamp: 30,
+        deleted: false,
+        changedRound: 2,
+      }),
+      new algosdk.dtModels.AssetVersion({
+        round: 3,
+        timestamp: 30,
+        deleted: false,
+        changedRound: 2,
+      }),
+    ]) {
+      const cls = m.constructor as unknown as algosdk.EncodableClass<typeof m>;
+      assert.deepStrictEqual(decodeJSON(encodeJSON(m), cls), m);
+      assert.match(encodeJSON(m), /"changed-round":[12]/);
+    }
+  });
+
+  it('lists the new features', () => {
+    for (const f of ['versions-rounds', 'versions-keys', 'versions-pages']) {
+      assert.ok(DTAlgodClient.features.includes(f), f);
+    }
   });
 });

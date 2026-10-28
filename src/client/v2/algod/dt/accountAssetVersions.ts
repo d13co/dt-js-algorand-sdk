@@ -40,8 +40,9 @@ export default class AccountAssetVersions extends VersionsRequest<
     return `/v2/accounts/${this.account}/assets/${this.assetID}/versions`;
   }
 
-  // eslint-disable-next-line class-methods-use-this
   prepare(response: HTTPClientResponse): AccountVersionsResponse {
-    return decodeDTJSON(response.getJSONText(), AccountVersionsResponse);
+    return this.checkPage(
+      decodeDTJSON(response.getJSONText(), AccountVersionsResponse)
+    );
   }
 }

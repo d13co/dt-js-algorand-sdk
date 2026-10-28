@@ -1,7 +1,7 @@
 import { HTTPClient, HTTPClientResponse } from '../../../client.js';
 import { decodeDTJSON } from './json.js';
 import { Address } from '../../../../encoding/address.js';
-import VersionsRequest from './versionsRequest.js';
+import VersionsRequest, { StateVersionsInclude } from './versionsRequest.js';
 import { AccountVersion, AccountVersionsResponse } from './models.js';
 
 export type AccountVersionsExclude =
@@ -29,7 +29,8 @@ export type AccountVersionsExclude =
  */
 export default class AccountVersions extends VersionsRequest<
   AccountVersion,
-  AccountVersionsResponse
+  AccountVersionsResponse,
+  StateVersionsInclude
 > {
   private account: string;
 
@@ -60,8 +61,23 @@ export default class AccountVersions extends VersionsRequest<
     return this;
   }
 
+  /**
+   * With `include('keys')`, a local state that exists must have
+   * `changedKeys`, even an empty list. Created applications are not checked:
+   * they have none with `exclude('created-apps-params')`.
+   */
   // eslint-disable-next-line class-methods-use-this
+  protected keysIgnored(page: AccountVersionsResponse): boolean {
+    return page.versions.some((v) =>
+      (v.appsLocalState ?? []).some(
+        (ls) => !ls.deleted && ls.changedKeys === undefined
+      )
+    );
+  }
+
   prepare(response: HTTPClientResponse): AccountVersionsResponse {
-    return decodeDTJSON(response.getJSONText(), AccountVersionsResponse);
+    return this.checkPage(
+      decodeDTJSON(response.getJSONText(), AccountVersionsResponse)
+    );
   }
 }

@@ -59,6 +59,11 @@ export class BoxVersion implements Encodable {
         { key: 'timestamp', valueSchema: new Uint64Schema(), omitEmpty: true },
         { key: 'deleted', valueSchema: new BooleanSchema(), omitEmpty: true },
         {
+          key: 'changed-round',
+          valueSchema: new OptionalSchema(new Uint64Schema()),
+          omitEmpty: true,
+        },
+        {
           key: 'value',
           valueSchema: new OptionalSchema(new ByteArraySchema()),
           omitEmpty: true,
@@ -69,7 +74,7 @@ export class BoxVersion implements Encodable {
   }
 
   /**
-   * The round of the version.
+   * The round of the version, or with `rounds` the requested round.
    */
   public round: bigint;
 
@@ -84,6 +89,13 @@ export class BoxVersion implements Encodable {
   public deleted: boolean;
 
   /**
+   * With `rounds`: the round of the version in effect at the requested round,
+   * the latest change at or before it. Absent if there was none: the object did
+   * not exist yet, and `deleted` is then true.
+   */
+  public changedRound?: bigint;
+
+  /**
    * With `include=values`, the new box value. Absent on deletions.
    */
   public value?: Uint8Array;
@@ -93,22 +105,29 @@ export class BoxVersion implements Encodable {
    * @param round - The round of the version.
    * @param timestamp - The timestamp of the version's block, in seconds since the epoch.
    * @param deleted - Whether the version is the deletion of the box.
+   * @param changedRound - With `rounds`: the round of the change in effect at the requested round.
    * @param value - With `include=values`, the new box value. Absent on deletions.
    */
   constructor({
     round,
     timestamp,
     deleted,
+    changedRound,
     value,
   }: {
     round: number | bigint;
     timestamp: number | bigint;
     deleted: boolean;
+    changedRound?: number | bigint;
     value?: string | Uint8Array;
   }) {
     this.round = ensureBigInt(round);
     this.timestamp = ensureSafeInteger(timestamp);
     this.deleted = deleted;
+    this.changedRound =
+      typeof changedRound === 'undefined'
+        ? undefined
+        : ensureBigInt(changedRound);
     this.value = typeof value === 'string' ? base64ToBytes(value) : value;
   }
 
@@ -122,6 +141,7 @@ export class BoxVersion implements Encodable {
       ['round', this.round],
       ['timestamp', this.timestamp],
       ['deleted', this.deleted],
+      ['changed-round', this.changedRound],
       ['value', this.value],
     ]);
   }
@@ -134,6 +154,7 @@ export class BoxVersion implements Encodable {
       round: data.get('round'),
       timestamp: data.get('timestamp'),
       deleted: data.get('deleted'),
+      changedRound: data.get('changed-round'),
       value: data.get('value'),
     });
   }
@@ -167,7 +188,8 @@ export class BoxVersionsResponse implements Encodable {
 
   /**
    * The last round of the range: `max-round`, or the latest round. On a
-   * descending page resumed from `next`, the round in the token.
+   * descending page resumed from `next`, the round in the token. With
+   * `rounds`, the largest requested round not listed by an earlier page.
    */
   public round: bigint;
 
@@ -239,6 +261,11 @@ export class BoxChange implements Encodable {
         { key: 'name', valueSchema: new ByteArraySchema(), omitEmpty: true },
         { key: 'deleted', valueSchema: new BooleanSchema(), omitEmpty: true },
         {
+          key: 'changed-round',
+          valueSchema: new OptionalSchema(new Uint64Schema()),
+          omitEmpty: true,
+        },
+        {
           key: 'value',
           valueSchema: new OptionalSchema(new ByteArraySchema()),
           omitEmpty: true,
@@ -259,6 +286,12 @@ export class BoxChange implements Encodable {
   public deleted: boolean;
 
   /**
+   * With `rounds`: the round of the latest change at or before the requested
+   * round.
+   */
+  public changedRound?: bigint;
+
+  /**
    * With `include=values`, the new box value. Absent on deletions.
    */
   public value?: Uint8Array;
@@ -267,19 +300,26 @@ export class BoxChange implements Encodable {
    * Creates a new `BoxChange` object.
    * @param name - The box name.
    * @param deleted - Whether the change is the deletion of the box.
+   * @param changedRound - With `rounds`: the round of the change in effect at the requested round.
    * @param value - With `include=values`, the new box value. Absent on deletions.
    */
   constructor({
     name,
     deleted,
+    changedRound,
     value,
   }: {
     name: string | Uint8Array;
     deleted: boolean;
+    changedRound?: number | bigint;
     value?: string | Uint8Array;
   }) {
     this.name = typeof name === 'string' ? base64ToBytes(name) : name;
     this.deleted = deleted;
+    this.changedRound =
+      typeof changedRound === 'undefined'
+        ? undefined
+        : ensureBigInt(changedRound);
     this.value = typeof value === 'string' ? base64ToBytes(value) : value;
   }
 
@@ -292,6 +332,7 @@ export class BoxChange implements Encodable {
     return new Map<string, unknown>([
       ['name', this.name],
       ['deleted', this.deleted],
+      ['changed-round', this.changedRound],
       ['value', this.value],
     ]);
   }
@@ -303,6 +344,7 @@ export class BoxChange implements Encodable {
     return new BoxChange({
       name: data.get('name'),
       deleted: data.get('deleted'),
+      changedRound: data.get('changed-round'),
       value: data.get('value'),
     });
   }
@@ -331,7 +373,7 @@ export class BoxesVersion implements Encodable {
   }
 
   /**
-   * The round of the version.
+   * The round of the version, or with `rounds` the requested round.
    */
   public round: bigint;
 
@@ -420,7 +462,8 @@ export class BoxesVersionsResponse implements Encodable {
 
   /**
    * The last round of the range: `max-round`, or the latest round. On a
-   * descending page resumed from `next`, the round in the token.
+   * descending page resumed from `next`, the round in the token. With
+   * `rounds`, the largest requested round not listed by an earlier page.
    */
   public round: bigint;
 
@@ -493,6 +536,11 @@ export class AssetVersion implements Encodable {
         { key: 'timestamp', valueSchema: new Uint64Schema(), omitEmpty: true },
         { key: 'deleted', valueSchema: new BooleanSchema(), omitEmpty: true },
         {
+          key: 'changed-round',
+          valueSchema: new OptionalSchema(new Uint64Schema()),
+          omitEmpty: true,
+        },
+        {
           key: 'asset',
           valueSchema: new OptionalSchema(Asset.encodingSchema),
           omitEmpty: true,
@@ -503,7 +551,7 @@ export class AssetVersion implements Encodable {
   }
 
   /**
-   * The round of the version.
+   * The round of the version, or with `rounds` the requested round.
    */
   public round: bigint;
 
@@ -518,6 +566,13 @@ export class AssetVersion implements Encodable {
   public deleted: boolean;
 
   /**
+   * With `rounds`: the round of the version in effect at the requested round,
+   * the latest change at or before it. Absent if there was none: the object did
+   * not exist yet, and `deleted` is then true.
+   */
+  public changedRound?: bigint;
+
+  /**
    * With `include=values`, the new asset parameters. Absent on deletions.
    */
   public asset?: Asset;
@@ -527,22 +582,29 @@ export class AssetVersion implements Encodable {
    * @param round - The round of the version.
    * @param timestamp - The timestamp of the version's block, in seconds since the epoch.
    * @param deleted - Whether the version is the deletion of the asset.
+   * @param changedRound - With `rounds`: the round of the change in effect at the requested round.
    * @param asset - With `include=values`, the new asset parameters. Absent on deletions.
    */
   constructor({
     round,
     timestamp,
     deleted,
+    changedRound,
     asset,
   }: {
     round: number | bigint;
     timestamp: number | bigint;
     deleted: boolean;
+    changedRound?: number | bigint;
     asset?: Asset;
   }) {
     this.round = ensureBigInt(round);
     this.timestamp = ensureSafeInteger(timestamp);
     this.deleted = deleted;
+    this.changedRound =
+      typeof changedRound === 'undefined'
+        ? undefined
+        : ensureBigInt(changedRound);
     this.asset = asset;
   }
 
@@ -556,6 +618,7 @@ export class AssetVersion implements Encodable {
       ['round', this.round],
       ['timestamp', this.timestamp],
       ['deleted', this.deleted],
+      ['changed-round', this.changedRound],
       [
         'asset',
         typeof this.asset !== 'undefined'
@@ -573,6 +636,7 @@ export class AssetVersion implements Encodable {
       round: data.get('round'),
       timestamp: data.get('timestamp'),
       deleted: data.get('deleted'),
+      changedRound: data.get('changed-round'),
       asset:
         typeof data.get('asset') !== 'undefined'
           ? Asset.fromEncodingData(data.get('asset'))
@@ -609,7 +673,8 @@ export class AssetVersionsResponse implements Encodable {
 
   /**
    * The last round of the range: `max-round`, or the latest round. On a
-   * descending page resumed from `next`, the round in the token.
+   * descending page resumed from `next`, the round in the token. With
+   * `rounds`, the largest requested round not listed by an earlier page.
    */
   public round: bigint;
 
@@ -682,8 +747,20 @@ export class ApplicationVersion implements Encodable {
         { key: 'timestamp', valueSchema: new Uint64Schema(), omitEmpty: true },
         { key: 'deleted', valueSchema: new BooleanSchema(), omitEmpty: true },
         {
+          key: 'changed-round',
+          valueSchema: new OptionalSchema(new Uint64Schema()),
+          omitEmpty: true,
+        },
+        {
           key: 'application',
           valueSchema: new OptionalSchema(Application.encodingSchema),
+          omitEmpty: true,
+        },
+        {
+          key: 'changed-keys',
+          valueSchema: new OptionalSchema(
+            new ArraySchema(new ByteArraySchema())
+          ),
           omitEmpty: true,
         }
       );
@@ -692,7 +769,7 @@ export class ApplicationVersion implements Encodable {
   }
 
   /**
-   * The round of the version.
+   * The round of the version, or with `rounds` the requested round.
    */
   public round: bigint;
 
@@ -707,32 +784,63 @@ export class ApplicationVersion implements Encodable {
   public deleted: boolean;
 
   /**
+   * With `rounds`: the round of the version in effect at the requested round,
+   * the latest change at or before it. Absent if there was none: the object did
+   * not exist yet, and `deleted` is then true.
+   */
+  public changedRound?: bigint;
+
+  /**
    * With `include=values`, the new application parameters. Absent on deletions.
    */
   public application?: Application;
+
+  /**
+   * With `include('keys')`, the global state keys added, removed or changed in
+   * this round, sorted: net over the round, so a key set and deleted again
+   * within it is not listed. On creation, every key of the new state. Empty
+   * when only other parameters changed. Absent on deletions.
+   */
+  public changedKeys?: Uint8Array[];
 
   /**
    * Creates a new `ApplicationVersion` object.
    * @param round - The round of the version.
    * @param timestamp - The timestamp of the version's block, in seconds since the epoch.
    * @param deleted - Whether the version is the deletion of the application.
+   * @param changedRound - With `rounds`: the round of the change in effect at the requested round.
    * @param application - With `include=values`, the new application parameters. Absent on deletions.
+   * @param changedKeys - With `include('keys')`, the state keys that changed in this round.
    */
   constructor({
     round,
     timestamp,
     deleted,
+    changedRound,
     application,
+    changedKeys,
   }: {
     round: number | bigint;
     timestamp: number | bigint;
     deleted: boolean;
+    changedRound?: number | bigint;
     application?: Application;
+    changedKeys?: (string | Uint8Array)[];
   }) {
     this.round = ensureBigInt(round);
     this.timestamp = ensureSafeInteger(timestamp);
     this.deleted = deleted;
+    this.changedRound =
+      typeof changedRound === 'undefined'
+        ? undefined
+        : ensureBigInt(changedRound);
     this.application = application;
+    this.changedKeys =
+      typeof changedKeys === 'undefined'
+        ? undefined
+        : changedKeys.map((k) =>
+            typeof k === 'string' ? base64ToBytes(k) : k
+          );
   }
 
   // eslint-disable-next-line class-methods-use-this
@@ -745,12 +853,14 @@ export class ApplicationVersion implements Encodable {
       ['round', this.round],
       ['timestamp', this.timestamp],
       ['deleted', this.deleted],
+      ['changed-round', this.changedRound],
       [
         'application',
         typeof this.application !== 'undefined'
           ? this.application.toEncodingData()
           : undefined,
       ],
+      ['changed-keys', this.changedKeys],
     ]);
   }
 
@@ -762,10 +872,12 @@ export class ApplicationVersion implements Encodable {
       round: data.get('round'),
       timestamp: data.get('timestamp'),
       deleted: data.get('deleted'),
+      changedRound: data.get('changed-round'),
       application:
         typeof data.get('application') !== 'undefined'
           ? Application.fromEncodingData(data.get('application'))
           : undefined,
+      changedKeys: data.get('changed-keys'),
     });
   }
 }
@@ -798,7 +910,8 @@ export class ApplicationVersionsResponse implements Encodable {
 
   /**
    * The last round of the range: `max-round`, or the latest round. On a
-   * descending page resumed from `next`, the round in the token.
+   * descending page resumed from `next`, the round in the token. With
+   * `rounds`, the largest requested round not listed by an earlier page.
    */
   public round: bigint;
 
@@ -909,7 +1022,7 @@ export class AccountVersion implements Encodable {
   }
 
   /**
-   * The round of the version.
+   * The round of the version, or with `rounds` the requested round.
    */
   public round: bigint;
 
@@ -1078,6 +1191,11 @@ export class AccountBaseVersion implements Encodable {
       (this.encodingSchemaValue as NamedMapSchema).pushEntries(
         { key: 'deleted', valueSchema: new BooleanSchema(), omitEmpty: true },
         {
+          key: 'changed-round',
+          valueSchema: new OptionalSchema(new Uint64Schema()),
+          omitEmpty: true,
+        },
+        {
           key: 'account',
           valueSchema: new OptionalSchema(Account.encodingSchema),
           omitEmpty: true,
@@ -1093,6 +1211,13 @@ export class AccountBaseVersion implements Encodable {
   public deleted: boolean;
 
   /**
+   * With `rounds`: the round of the version in effect at the requested round,
+   * the latest change at or before it. Absent if there was none: the object did
+   * not exist yet, and `deleted` is then true.
+   */
+  public changedRound?: bigint;
+
+  /**
    * With `include=values`, the account as of the version's round, without its
    * assets and applications, as `accountInformation(address).exclude('all')`
    * returns it at that round.
@@ -1102,10 +1227,23 @@ export class AccountBaseVersion implements Encodable {
   /**
    * Creates a new `AccountBaseVersion` object.
    * @param deleted - Whether the account was closed.
+   * @param changedRound - With `rounds`: the round of the change in effect at the requested round.
    * @param account - With `include=values`, the account as of the version's round, without its
    */
-  constructor({ deleted, account }: { deleted: boolean; account?: Account }) {
+  constructor({
+    deleted,
+    changedRound,
+    account,
+  }: {
+    deleted: boolean;
+    changedRound?: number | bigint;
+    account?: Account;
+  }) {
     this.deleted = deleted;
+    this.changedRound =
+      typeof changedRound === 'undefined'
+        ? undefined
+        : ensureBigInt(changedRound);
     this.account = account;
   }
 
@@ -1117,6 +1255,7 @@ export class AccountBaseVersion implements Encodable {
   toEncodingData(): Map<string, unknown> {
     return new Map<string, unknown>([
       ['deleted', this.deleted],
+      ['changed-round', this.changedRound],
       [
         'account',
         typeof this.account !== 'undefined'
@@ -1132,6 +1271,7 @@ export class AccountBaseVersion implements Encodable {
     }
     return new AccountBaseVersion({
       deleted: data.get('deleted'),
+      changedRound: data.get('changed-round'),
       account:
         typeof data.get('account') !== 'undefined'
           ? Account.fromEncodingData(data.get('account'))
@@ -1153,6 +1293,11 @@ export class AssetHoldingVersion implements Encodable {
         { key: 'asset-id', valueSchema: new Uint64Schema(), omitEmpty: true },
         { key: 'deleted', valueSchema: new BooleanSchema(), omitEmpty: true },
         {
+          key: 'changed-round',
+          valueSchema: new OptionalSchema(new Uint64Schema()),
+          omitEmpty: true,
+        },
+        {
           key: 'asset-holding',
           valueSchema: new OptionalSchema(AssetHolding.encodingSchema),
           omitEmpty: true,
@@ -1173,6 +1318,12 @@ export class AssetHoldingVersion implements Encodable {
   public deleted: boolean;
 
   /**
+   * With `rounds`: the round of the latest change at or before the requested
+   * round.
+   */
+  public changedRound?: bigint;
+
+  /**
    * With `include=values`, the new holding.
    */
   public assetHolding?: AssetHolding;
@@ -1181,19 +1332,26 @@ export class AssetHoldingVersion implements Encodable {
    * Creates a new `AssetHoldingVersion` object.
    * @param assetId - The asset.
    * @param deleted - Whether the version is the deletion of the holding (opt out).
+   * @param changedRound - With `rounds`: the round of the change in effect at the requested round.
    * @param assetHolding - With `include=values`, the new holding.
    */
   constructor({
     assetId,
     deleted,
+    changedRound,
     assetHolding,
   }: {
     assetId: number | bigint;
     deleted: boolean;
+    changedRound?: number | bigint;
     assetHolding?: AssetHolding;
   }) {
     this.assetId = ensureBigInt(assetId);
     this.deleted = deleted;
+    this.changedRound =
+      typeof changedRound === 'undefined'
+        ? undefined
+        : ensureBigInt(changedRound);
     this.assetHolding = assetHolding;
   }
 
@@ -1206,6 +1364,7 @@ export class AssetHoldingVersion implements Encodable {
     return new Map<string, unknown>([
       ['asset-id', this.assetId],
       ['deleted', this.deleted],
+      ['changed-round', this.changedRound],
       [
         'asset-holding',
         typeof this.assetHolding !== 'undefined'
@@ -1222,6 +1381,7 @@ export class AssetHoldingVersion implements Encodable {
     return new AssetHoldingVersion({
       assetId: data.get('asset-id'),
       deleted: data.get('deleted'),
+      changedRound: data.get('changed-round'),
       assetHolding:
         typeof data.get('asset-holding') !== 'undefined'
           ? AssetHolding.fromEncodingData(data.get('asset-holding'))
@@ -1243,8 +1403,20 @@ export class ApplicationLocalStateVersion implements Encodable {
         { key: 'app-id', valueSchema: new Uint64Schema(), omitEmpty: true },
         { key: 'deleted', valueSchema: new BooleanSchema(), omitEmpty: true },
         {
+          key: 'changed-round',
+          valueSchema: new OptionalSchema(new Uint64Schema()),
+          omitEmpty: true,
+        },
+        {
           key: 'app-local-state',
           valueSchema: new OptionalSchema(ApplicationLocalState.encodingSchema),
+          omitEmpty: true,
+        },
+        {
+          key: 'changed-keys',
+          valueSchema: new OptionalSchema(
+            new ArraySchema(new ByteArraySchema())
+          ),
           omitEmpty: true,
         }
       );
@@ -1264,28 +1436,58 @@ export class ApplicationLocalStateVersion implements Encodable {
   public deleted: boolean;
 
   /**
+   * With `rounds`: the round of the latest change at or before the requested
+   * round.
+   */
+  public changedRound?: bigint;
+
+  /**
    * With `include=values`, the new local state.
    */
   public appLocalState?: ApplicationLocalState;
 
   /**
+   * With `include('keys')`, the local state keys added, removed or changed in
+   * this round, sorted. On an opt-in after no local state, every key of the new
+   * state; on a clear and opt-in in the same round, the keys that differ.
+   * Absent on deletions.
+   */
+  public changedKeys?: Uint8Array[];
+
+  /**
    * Creates a new `ApplicationLocalStateVersion` object.
    * @param appId - The application.
    * @param deleted - Whether the version is the deletion of the local state (close out or
+   * @param changedRound - With `rounds`: the round of the change in effect at the requested round.
    * @param appLocalState - With `include=values`, the new local state.
+   * @param changedKeys - With `include('keys')`, the state keys that changed in this round.
    */
   constructor({
     appId,
     deleted,
+    changedRound,
     appLocalState,
+    changedKeys,
   }: {
     appId: number | bigint;
     deleted: boolean;
+    changedRound?: number | bigint;
     appLocalState?: ApplicationLocalState;
+    changedKeys?: (string | Uint8Array)[];
   }) {
     this.appId = ensureBigInt(appId);
     this.deleted = deleted;
+    this.changedRound =
+      typeof changedRound === 'undefined'
+        ? undefined
+        : ensureBigInt(changedRound);
     this.appLocalState = appLocalState;
+    this.changedKeys =
+      typeof changedKeys === 'undefined'
+        ? undefined
+        : changedKeys.map((k) =>
+            typeof k === 'string' ? base64ToBytes(k) : k
+          );
   }
 
   // eslint-disable-next-line class-methods-use-this
@@ -1297,12 +1499,14 @@ export class ApplicationLocalStateVersion implements Encodable {
     return new Map<string, unknown>([
       ['app-id', this.appId],
       ['deleted', this.deleted],
+      ['changed-round', this.changedRound],
       [
         'app-local-state',
         typeof this.appLocalState !== 'undefined'
           ? this.appLocalState.toEncodingData()
           : undefined,
       ],
+      ['changed-keys', this.changedKeys],
     ]);
   }
 
@@ -1313,10 +1517,12 @@ export class ApplicationLocalStateVersion implements Encodable {
     return new ApplicationLocalStateVersion({
       appId: data.get('app-id'),
       deleted: data.get('deleted'),
+      changedRound: data.get('changed-round'),
       appLocalState:
         typeof data.get('app-local-state') !== 'undefined'
           ? ApplicationLocalState.fromEncodingData(data.get('app-local-state'))
           : undefined,
+      changedKeys: data.get('changed-keys'),
     });
   }
 }
@@ -1333,6 +1539,11 @@ export class CreatedAssetVersion implements Encodable {
       (this.encodingSchemaValue as NamedMapSchema).pushEntries(
         { key: 'asset-id', valueSchema: new Uint64Schema(), omitEmpty: true },
         { key: 'deleted', valueSchema: new BooleanSchema(), omitEmpty: true },
+        {
+          key: 'changed-round',
+          valueSchema: new OptionalSchema(new Uint64Schema()),
+          omitEmpty: true,
+        },
         {
           key: 'asset',
           valueSchema: new OptionalSchema(Asset.encodingSchema),
@@ -1354,6 +1565,12 @@ export class CreatedAssetVersion implements Encodable {
   public deleted: boolean;
 
   /**
+   * With `rounds`: the round of the latest change at or before the requested
+   * round.
+   */
+  public changedRound?: bigint;
+
+  /**
    * With `include=values`, the new asset parameters.
    */
   public asset?: Asset;
@@ -1362,19 +1579,26 @@ export class CreatedAssetVersion implements Encodable {
    * Creates a new `CreatedAssetVersion` object.
    * @param assetId - The asset.
    * @param deleted - Whether the version is the deletion of the asset.
+   * @param changedRound - With `rounds`: the round of the change in effect at the requested round.
    * @param asset - With `include=values`, the new asset parameters.
    */
   constructor({
     assetId,
     deleted,
+    changedRound,
     asset,
   }: {
     assetId: number | bigint;
     deleted: boolean;
+    changedRound?: number | bigint;
     asset?: Asset;
   }) {
     this.assetId = ensureBigInt(assetId);
     this.deleted = deleted;
+    this.changedRound =
+      typeof changedRound === 'undefined'
+        ? undefined
+        : ensureBigInt(changedRound);
     this.asset = asset;
   }
 
@@ -1387,6 +1611,7 @@ export class CreatedAssetVersion implements Encodable {
     return new Map<string, unknown>([
       ['asset-id', this.assetId],
       ['deleted', this.deleted],
+      ['changed-round', this.changedRound],
       [
         'asset',
         typeof this.asset !== 'undefined'
@@ -1403,6 +1628,7 @@ export class CreatedAssetVersion implements Encodable {
     return new CreatedAssetVersion({
       assetId: data.get('asset-id'),
       deleted: data.get('deleted'),
+      changedRound: data.get('changed-round'),
       asset:
         typeof data.get('asset') !== 'undefined'
           ? Asset.fromEncodingData(data.get('asset'))
@@ -1424,8 +1650,20 @@ export class CreatedApplicationVersion implements Encodable {
         { key: 'app-id', valueSchema: new Uint64Schema(), omitEmpty: true },
         { key: 'deleted', valueSchema: new BooleanSchema(), omitEmpty: true },
         {
+          key: 'changed-round',
+          valueSchema: new OptionalSchema(new Uint64Schema()),
+          omitEmpty: true,
+        },
+        {
           key: 'application',
           valueSchema: new OptionalSchema(Application.encodingSchema),
+          omitEmpty: true,
+        },
+        {
+          key: 'changed-keys',
+          valueSchema: new OptionalSchema(
+            new ArraySchema(new ByteArraySchema())
+          ),
           omitEmpty: true,
         }
       );
@@ -1444,28 +1682,58 @@ export class CreatedApplicationVersion implements Encodable {
   public deleted: boolean;
 
   /**
+   * With `rounds`: the round of the latest change at or before the requested
+   * round.
+   */
+  public changedRound?: bigint;
+
+  /**
    * With `include=values`, the new application parameters.
    */
   public application?: Application;
 
   /**
+   * With `include('keys')`, the global state keys added, removed or changed in
+   * this round, sorted. On creation, every key of the new state. Empty when
+   * only other parameters changed. Absent on deletions and with
+   * `exclude('created-apps-params')`.
+   */
+  public changedKeys?: Uint8Array[];
+
+  /**
    * Creates a new `CreatedApplicationVersion` object.
    * @param appId - The application.
    * @param deleted - Whether the version is the deletion of the application.
+   * @param changedRound - With `rounds`: the round of the change in effect at the requested round.
    * @param application - With `include=values`, the new application parameters.
+   * @param changedKeys - With `include('keys')`, the state keys that changed in this round.
    */
   constructor({
     appId,
     deleted,
+    changedRound,
     application,
+    changedKeys,
   }: {
     appId: number | bigint;
     deleted: boolean;
+    changedRound?: number | bigint;
     application?: Application;
+    changedKeys?: (string | Uint8Array)[];
   }) {
     this.appId = ensureBigInt(appId);
     this.deleted = deleted;
+    this.changedRound =
+      typeof changedRound === 'undefined'
+        ? undefined
+        : ensureBigInt(changedRound);
     this.application = application;
+    this.changedKeys =
+      typeof changedKeys === 'undefined'
+        ? undefined
+        : changedKeys.map((k) =>
+            typeof k === 'string' ? base64ToBytes(k) : k
+          );
   }
 
   // eslint-disable-next-line class-methods-use-this
@@ -1477,12 +1745,14 @@ export class CreatedApplicationVersion implements Encodable {
     return new Map<string, unknown>([
       ['app-id', this.appId],
       ['deleted', this.deleted],
+      ['changed-round', this.changedRound],
       [
         'application',
         typeof this.application !== 'undefined'
           ? this.application.toEncodingData()
           : undefined,
       ],
+      ['changed-keys', this.changedKeys],
     ]);
   }
 
@@ -1493,10 +1763,12 @@ export class CreatedApplicationVersion implements Encodable {
     return new CreatedApplicationVersion({
       appId: data.get('app-id'),
       deleted: data.get('deleted'),
+      changedRound: data.get('changed-round'),
       application:
         typeof data.get('application') !== 'undefined'
           ? Application.fromEncodingData(data.get('application'))
           : undefined,
+      changedKeys: data.get('changed-keys'),
     });
   }
 }
@@ -1529,7 +1801,8 @@ export class AccountVersionsResponse implements Encodable {
 
   /**
    * The last round of the range: `max-round`, or the latest round. On a
-   * descending page resumed from `next`, the round in the token.
+   * descending page resumed from `next`, the round in the token. With
+   * `rounds`, the largest requested round not listed by an earlier page.
    */
   public round: bigint;
 

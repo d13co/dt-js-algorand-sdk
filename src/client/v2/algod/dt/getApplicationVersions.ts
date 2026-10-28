@@ -1,6 +1,6 @@
 import { HTTPClient, HTTPClientResponse } from '../../../client.js';
 import { decodeDTJSON } from './json.js';
-import VersionsRequest from './versionsRequest.js';
+import VersionsRequest, { StateVersionsInclude } from './versionsRequest.js';
 import { ApplicationVersion, ApplicationVersionsResponse } from './models.js';
 
 /**
@@ -15,7 +15,8 @@ import { ApplicationVersion, ApplicationVersionsResponse } from './models.js';
  */
 export default class GetApplicationVersions extends VersionsRequest<
   ApplicationVersion,
-  ApplicationVersionsResponse
+  ApplicationVersionsResponse,
+  StateVersionsInclude
 > {
   private index: bigint;
 
@@ -31,8 +32,18 @@ export default class GetApplicationVersions extends VersionsRequest<
     return `/v2/applications/${this.index}/versions`;
   }
 
+  /**
+   * With `include('keys')`, an application version that is not a deletion
+   * must have `changedKeys`, even an empty list.
+   */
   // eslint-disable-next-line class-methods-use-this
+  protected keysIgnored(page: ApplicationVersionsResponse): boolean {
+    return page.versions.some((v) => !v.deleted && v.changedKeys === undefined);
+  }
+
   prepare(response: HTTPClientResponse): ApplicationVersionsResponse {
-    return decodeDTJSON(response.getJSONText(), ApplicationVersionsResponse);
+    return this.checkPage(
+      decodeDTJSON(response.getJSONText(), ApplicationVersionsResponse)
+    );
   }
 }

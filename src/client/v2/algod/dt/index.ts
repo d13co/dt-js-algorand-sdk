@@ -8,7 +8,12 @@ export {
   MAX_QUERY_REQUEST_BYTES,
   QUERY_LOG_OVERHEAD_BYTES,
 } from './errors.js';
-export { VersionsOrder, VersionsInclude } from './versionsRequest.js';
+export {
+  VersionsOrder,
+  VersionsInclude,
+  StateVersionsInclude,
+  MAX_VERSIONS_ROUNDS,
+} from './versionsRequest.js';
 export { AccountVersionsExclude } from './accountVersions.js';
 export type { default as RunQuery } from './query.js';
 export * from './models.js';

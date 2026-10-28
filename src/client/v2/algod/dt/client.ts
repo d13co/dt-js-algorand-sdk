@@ -72,7 +72,12 @@ export class DTAlgodClient extends AlgodClient {
    *   `protocolOverride` on the response and its round results;
    * - `simulate-limits`: `simulateLimits()` and `getSimulateLimits()`;
    * - `query`: `query()`, and `query` (plus `maxExecTraceBytes`,
-   *   `timeLimitSeconds`) on `simulateLimits()`.
+   *   `timeLimitSeconds`) on `simulateLimits()`;
+   * - `versions-rounds`: `rounds()` on the `...Versions` methods, and
+   *   `changedRound` on their entries;
+   * - `versions-keys`: `include('keys')` on `getApplicationVersions`,
+   *   `accountVersions` and `accountApplicationVersions`, and `changedKeys`;
+   * - `versions-pages`: `pages()` on the `...Versions` methods.
    *
    * #### Example
    * ```typescript
@@ -96,6 +101,9 @@ export class DTAlgodClient extends AlgodClient {
     'simulate-protocol',
     'simulate-limits',
     'query',
+    'versions-rounds',
+    'versions-keys',
+    'versions-pages',
   ]);
 
   /** The clients made by {@link DTAlgodClient.from}, by source client. */

@@ -47,8 +47,9 @@ export default class GetApplicationBoxVersions extends VersionsRequest<
     return `/v2/applications/${this.index}/box/versions`;
   }
 
-  // eslint-disable-next-line class-methods-use-this
   prepare(response: HTTPClientResponse): BoxVersionsResponse {
-    return decodeDTJSON(response.getJSONText(), BoxVersionsResponse);
+    return this.checkPage(
+      decodeDTJSON(response.getJSONText(), BoxVersionsResponse)
+    );
   }
 }

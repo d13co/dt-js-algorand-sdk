@@ -512,4 +512,50 @@ describe('time travel against a live node', function liveSuite() {
       assert.ok(r.txnGroups.every((g) => g.failureMessage));
     });
   });
+
+  describe('versions rounds and keys', () => {
+    /** A mainnet app whose global state changes every few rounds. */
+    const ORE = 1284326447n;
+
+    it('lists versions as of rounds', async function asOfRounds() {
+      let res;
+      try {
+        res = await c.getAssetVersions(USDC).rounds([60_000_000, 1000]).do();
+      } catch (err) {
+        // A node built before rounds.
+        if (err instanceof DTUnsupportedError) this.skip();
+        throw err;
+      }
+      assert.deepStrictEqual(
+        res.versions.map((v) => [v.round, v.deleted, v.changedRound]),
+        [
+          [1000n, true, undefined],
+          [60_000_000n, false, 8_874_561n],
+        ]
+      );
+    });
+
+    it('lists the global state keys each version changed', async function keys() {
+      let res;
+      try {
+        res = await c
+          .getApplicationVersions(ORE)
+          .order('desc')
+          .limit(2)
+          .include('keys')
+          .do();
+      } catch (err) {
+        if (err instanceof DTUnsupportedError) this.skip();
+        throw err;
+      }
+      assert.strictEqual(res.versions.length, 2);
+      for (const v of res.versions) {
+        assert.ok(Array.isArray(v.changedKeys), `${v.round}`);
+      }
+      const names = res.versions.flatMap((v) =>
+        v.changedKeys!.map((k) => new TextDecoder().decode(k))
+      );
+      assert.ok(names.includes('total_effort'), names.join(','));
+    });
+  });
 });

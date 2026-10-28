@@ -79,6 +79,8 @@ export {
   DTUnsupportedError,
   VersionsOrder,
   VersionsInclude,
+  StateVersionsInclude,
+  MAX_VERSIONS_ROUNDS,
   AccountVersionsExclude,
   SimulateGroupError,
   SimulateGroupErrorKind,

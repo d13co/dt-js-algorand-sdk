@@ -2,6 +2,7 @@ import JSONRequest from '../../jsonrequest.js';
 import { HTTPClientResponse } from '../../../client.js';
 import { Query } from '../../../baseHTTPClient.js';
 import { ensureBigInt } from '../../../../utils/utils.js';
+import { bytesToBase64 } from '../../../../encoding/binarydata.js';
 import {
   describe,
   isMissingVersionsRoute,
@@ -21,6 +22,26 @@ export type StateVersionsInclude = 'values' | 'keys';
 
 /** The most distinct rounds one `rounds()` request may list. */
 export const MAX_VERSIONS_ROUNDS = 10_000;
+
+/** The longest state key or box name prefix the filters take. */
+export const MAX_VERSIONS_KEY_BYTES = 64;
+
+/**
+ * A state key or box name prefix in the node's app-arg form, `b64:...`.
+ * @param what - `key` or `prefix`, for the error message.
+ * @param bytes - The key or prefix.
+ */
+export function encodeVersionsFilter(what: string, bytes: Uint8Array) {
+  if (!(bytes instanceof Uint8Array)) {
+    throw new TypeError(`${what} must be a Uint8Array`);
+  }
+  if (bytes.length > MAX_VERSIONS_KEY_BYTES) {
+    throw new Error(
+      `${what} is ${bytes.length} bytes, longer than the ${MAX_VERSIONS_KEY_BYTES} the node allows`
+    );
+  }
+  return `b64:${bytesToBase64(bytes)}`;
+}
 
 /**
  * Base class for the `/versions` endpoints of a time-travel algod. Each lists
@@ -184,6 +205,9 @@ export default abstract class VersionsRequest<
       this.query['max-round'] !== undefined
     ) {
       return 'rounds cannot be combined with minRound or maxRound';
+    }
+    if (this.query.key !== undefined) {
+      return 'key cannot be combined with rounds';
     }
     if (rounds.size > MAX_VERSIONS_ROUNDS) {
       return `rounds lists ${rounds.size} distinct rounds, more than the ${MAX_VERSIONS_ROUNDS} a request may have`;

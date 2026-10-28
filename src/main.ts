@@ -81,6 +81,7 @@ export {
   VersionsInclude,
   StateVersionsInclude,
   MAX_VERSIONS_ROUNDS,
+  MAX_VERSIONS_KEY_BYTES,
   AccountVersionsExclude,
   SimulateGroupError,
   SimulateGroupErrorKind,

@@ -13,6 +13,7 @@ export {
   VersionsInclude,
   StateVersionsInclude,
   MAX_VERSIONS_ROUNDS,
+  MAX_VERSIONS_KEY_BYTES,
 } from './versionsRequest.js';
 export { AccountVersionsExclude } from './accountVersions.js';
 export type { default as RunQuery } from './query.js';

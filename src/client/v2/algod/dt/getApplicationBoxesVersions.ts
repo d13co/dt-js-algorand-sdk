@@ -1,6 +1,6 @@
 import { HTTPClient, HTTPClientResponse } from '../../../client.js';
 import { decodeDTJSON } from './json.js';
-import VersionsRequest from './versionsRequest.js';
+import VersionsRequest, { encodeVersionsFilter } from './versionsRequest.js';
 import { BoxesVersion, BoxesVersionsResponse } from './models.js';
 
 /**
@@ -51,6 +51,30 @@ export default class GetApplicationBoxesVersions extends VersionsRequest<
    */
   path() {
     return `/v2/applications/${this.index}/boxes/versions`;
+  }
+
+  /**
+   * List only the changes of the boxes whose names start with this prefix,
+   * such as one ARC-56 box map. Rounds in which none of them changed are left
+   * out. A prefix equal to a whole name also matches the longer names that
+   * start with it: for one box, use `getApplicationBoxVersions`.
+   *
+   * Without `rounds()`, a page steps through every box index entry of the
+   * application in its rounds, at most 1,000,000 of them, so it can hold
+   * fewer than `limit` versions, or none, and still have a `nextToken`;
+   * `pages()` and `iterate()` keep going until it is absent. With `rounds()`,
+   * only the boxes under the prefix are merged, so the node's per-round box
+   * limit counts only those.
+   *
+   * @param prefix - The box name prefix, as bytes, 1 to 64 bytes.
+   * @category query
+   */
+  prefix(prefix: Uint8Array) {
+    if (prefix instanceof Uint8Array && prefix.length === 0) {
+      throw new Error('prefix is empty: list every box without it');
+    }
+    this.query.prefix = encodeVersionsFilter('prefix', prefix);
+    return this;
   }
 
   prepare(response: HTTPClientResponse): BoxesVersionsResponse {

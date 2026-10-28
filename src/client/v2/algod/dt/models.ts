@@ -38,6 +38,7 @@ import {
   SimulateTransactionGroupResult,
   SimulateTraceConfig,
   SimulationEvalOverrides,
+  TealValue,
 } from '../models/types.js';
 import { Address } from '../../../../encoding/address.js';
 import { Transaction } from '../../../../transaction.js';
@@ -762,6 +763,11 @@ export class ApplicationVersion implements Encodable {
             new ArraySchema(new ByteArraySchema())
           ),
           omitEmpty: true,
+        },
+        {
+          key: 'key-value',
+          valueSchema: new OptionalSchema(TealValue.encodingSchema),
+          omitEmpty: true,
         }
       );
     }
@@ -804,6 +810,11 @@ export class ApplicationVersion implements Encodable {
   public changedKeys?: Uint8Array[];
 
   /**
+   * With `key()`, the key's new value. Absent when the version removed the key or deleted the application.
+   */
+  public keyValue?: TealValue;
+
+  /**
    * Creates a new `ApplicationVersion` object.
    * @param round - The round of the version.
    * @param timestamp - The timestamp of the version's block, in seconds since the epoch.
@@ -811,6 +822,7 @@ export class ApplicationVersion implements Encodable {
    * @param changedRound - With `rounds`: the round of the change in effect at the requested round.
    * @param application - With `include=values`, the new application parameters. Absent on deletions.
    * @param changedKeys - With `include('keys')`, the state keys that changed in this round.
+   * @param keyValue - With `key()`, the key's new value.
    */
   constructor({
     round,
@@ -819,6 +831,7 @@ export class ApplicationVersion implements Encodable {
     changedRound,
     application,
     changedKeys,
+    keyValue,
   }: {
     round: number | bigint;
     timestamp: number | bigint;
@@ -826,6 +839,7 @@ export class ApplicationVersion implements Encodable {
     changedRound?: number | bigint;
     application?: Application;
     changedKeys?: (string | Uint8Array)[];
+    keyValue?: TealValue;
   }) {
     this.round = ensureBigInt(round);
     this.timestamp = ensureSafeInteger(timestamp);
@@ -841,6 +855,7 @@ export class ApplicationVersion implements Encodable {
         : changedKeys.map((k) =>
             typeof k === 'string' ? base64ToBytes(k) : k
           );
+    this.keyValue = keyValue;
   }
 
   // eslint-disable-next-line class-methods-use-this
@@ -861,6 +876,12 @@ export class ApplicationVersion implements Encodable {
           : undefined,
       ],
       ['changed-keys', this.changedKeys],
+      [
+        'key-value',
+        typeof this.keyValue !== 'undefined'
+          ? this.keyValue.toEncodingData()
+          : undefined,
+      ],
     ]);
   }
 
@@ -878,6 +899,10 @@ export class ApplicationVersion implements Encodable {
           ? Application.fromEncodingData(data.get('application'))
           : undefined,
       changedKeys: data.get('changed-keys'),
+      keyValue:
+        typeof data.get('key-value') !== 'undefined'
+          ? TealValue.fromEncodingData(data.get('key-value'))
+          : undefined,
     });
   }
 }
@@ -1418,6 +1443,11 @@ export class ApplicationLocalStateVersion implements Encodable {
             new ArraySchema(new ByteArraySchema())
           ),
           omitEmpty: true,
+        },
+        {
+          key: 'key-value',
+          valueSchema: new OptionalSchema(TealValue.encodingSchema),
+          omitEmpty: true,
         }
       );
     }
@@ -1455,12 +1485,18 @@ export class ApplicationLocalStateVersion implements Encodable {
   public changedKeys?: Uint8Array[];
 
   /**
+   * With `key()`, the key's new value. Absent when the version removed the key or deleted the local state.
+   */
+  public keyValue?: TealValue;
+
+  /**
    * Creates a new `ApplicationLocalStateVersion` object.
    * @param appId - The application.
    * @param deleted - Whether the version is the deletion of the local state (close out or
    * @param changedRound - With `rounds`: the round of the change in effect at the requested round.
    * @param appLocalState - With `include=values`, the new local state.
    * @param changedKeys - With `include('keys')`, the state keys that changed in this round.
+   * @param keyValue - With `key()`, the key's new value.
    */
   constructor({
     appId,
@@ -1468,12 +1504,14 @@ export class ApplicationLocalStateVersion implements Encodable {
     changedRound,
     appLocalState,
     changedKeys,
+    keyValue,
   }: {
     appId: number | bigint;
     deleted: boolean;
     changedRound?: number | bigint;
     appLocalState?: ApplicationLocalState;
     changedKeys?: (string | Uint8Array)[];
+    keyValue?: TealValue;
   }) {
     this.appId = ensureBigInt(appId);
     this.deleted = deleted;
@@ -1488,6 +1526,7 @@ export class ApplicationLocalStateVersion implements Encodable {
         : changedKeys.map((k) =>
             typeof k === 'string' ? base64ToBytes(k) : k
           );
+    this.keyValue = keyValue;
   }
 
   // eslint-disable-next-line class-methods-use-this
@@ -1507,6 +1546,12 @@ export class ApplicationLocalStateVersion implements Encodable {
           : undefined,
       ],
       ['changed-keys', this.changedKeys],
+      [
+        'key-value',
+        typeof this.keyValue !== 'undefined'
+          ? this.keyValue.toEncodingData()
+          : undefined,
+      ],
     ]);
   }
 
@@ -1523,6 +1568,10 @@ export class ApplicationLocalStateVersion implements Encodable {
           ? ApplicationLocalState.fromEncodingData(data.get('app-local-state'))
           : undefined,
       changedKeys: data.get('changed-keys'),
+      keyValue:
+        typeof data.get('key-value') !== 'undefined'
+          ? TealValue.fromEncodingData(data.get('key-value'))
+          : undefined,
     });
   }
 }

@@ -585,4 +585,58 @@ describe('time travel against a live node', function liveSuite() {
       assert.deepStrictEqual([...addresses].sort(), addresses);
     });
   });
+
+  describe('versions filters', () => {
+    const ORE = 1284326447n;
+    const XGOV_APP = XGOV;
+
+    it('lists the versions of one global state key', async () => {
+      const versions = [];
+      for await (const v of c
+        .getApplicationVersions(ORE)
+        .key(new TextEncoder().encode('total_effort'))
+        .order('desc')
+        .limit(2)
+        .iterate()) {
+        versions.push(v);
+        if (versions.length === 2) break;
+      }
+      assert.strictEqual(versions.length, 2);
+      assert.ok(versions[0].round > versions[1].round);
+      for (const v of versions) {
+        assert.strictEqual(v.deleted, false);
+        assert.strictEqual(v.keyValue?.type, 2);
+      }
+      assert.notStrictEqual(
+        versions[0].keyValue?.uint,
+        versions[1].keyValue?.uint
+      );
+    });
+
+    it('lists the changes of the boxes under a prefix', async () => {
+      const newest = await c
+        .getApplicationBoxesVersions(XGOV_APP)
+        .order('desc')
+        .limit(1)
+        .do();
+      const first = newest.versions[0].boxes[0].name;
+      const p = first.slice(0, 1);
+      const versions = [];
+      for await (const v of c
+        .getApplicationBoxesVersions(XGOV_APP)
+        .prefix(p)
+        .order('desc')
+        .limit(2)
+        .iterate()) {
+        versions.push(v);
+        if (versions.length === 2) break;
+      }
+      assert.ok(versions.length >= 1);
+      assert.strictEqual(versions[0].round, newest.versions[0].round);
+      for (const v of versions) {
+        assert.ok(v.boxes.length >= 1);
+        for (const b of v.boxes) assert.strictEqual(b.name[0], p[0]);
+      }
+    });
+  });
 });

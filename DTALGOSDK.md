@@ -12,6 +12,7 @@
 - [Versions: the rounds at which objects changed](#versions-the-rounds-at-which-objects-changed)
   - [Versions as of rounds](#versions-as-of-rounds)
   - [Changed keys](#changed-keys)
+  - [Key and prefix filters](#key-and-prefix-filters)
 - [Asset holders](#asset-holders)
 - [Simulate](#simulate)
 - [Query](#query)
@@ -29,6 +30,7 @@
 | History                                           | none (use an indexer)                                | `...Versions` methods: the rounds at which an account, asset, application, box or any of an app's boxes changed, with paging        |
 | History as of rounds                              | none                                                 | `rounds([...])` on the `...Versions` methods: each object as of each listed round, with the round it last changed (`changedRound`)  |
 | Changed state keys                                | none                                                 | `include('keys')` on the application state versions: the global or local state keys each version changed (`changedKeys`)            |
+| History of one key or box map                     | none                                                 | `key()` on the application and local state versions (with `keyValue`), `prefix()` on the boxes versions                             |
 | Asset holders                                     | none (use an indexer)                                | `getAssetHolders(assetId)`: every holder of an asset at a round, paged with the round pinned                                        |
 | Simulate: groups per request                      | one                                                  | several (node's `MaxAPISimulateGroups`, default 16), in sequence or with `parallelGroups()`                                         |
 | Simulate: rounds per request                      | one (`round`)                                        | several with `rounds([...])` (node's `MaxAPISimulateRounds`, default 16)                                                            |
@@ -108,7 +110,7 @@ From the package root (`import algosdk from 'algosdk'`):
 - `DEFAULT_MAX_SIMULATE_GROUPS` (16), `DEFAULT_MAX_SIMULATE_ROUNDS` (16), `MAX_TXN_LIFE` (1000)
 - `isQueryResponseTooLarge`, `MAX_QUERY_REQUEST_BYTES` (1,000,000), `QUERY_LOG_OVERHEAD_BYTES` (48), and the type `RunQuery` (the builder `query()` returns)
 - the type `GetAssetHolders` (the builder `getAssetHolders()` returns)
-- the types `VersionsOrder`, `VersionsInclude`, `StateVersionsInclude`, `AccountVersionsExclude`, and `MAX_VERSIONS_ROUNDS` (10,000)
+- the types `VersionsOrder`, `VersionsInclude`, `StateVersionsInclude`, `AccountVersionsExclude`, `MAX_VERSIONS_ROUNDS` (10,000) and `MAX_VERSIONS_KEY_BYTES` (64)
 - `dtModels`: the request and response models: `DTSimulateRequest`, `DTSimulateResponse`, `DTSimulationEvalOverrides`, `SimulateRoundResult`, `SimulateProtocolOverride`, `SimulateProtocolNote`, `SimulateProtocolNoteHit`, the type `SimulateProtocolNoteCode`, `SimulateLimitsResponse`, `QueryLimits`, `QueryRequest`, `QueryCall`, `QueryResponse`, `QueryRoundResult`, `QueryCallResult`, the types `QueryRequestParams`, `QueryCallParams`, `AssetHolder`, `AssetHoldersResponse`, `BoxChange`, and the `...Version` / `...VersionsResponse` models
 
 `algosdk/client/algod` exports the same, with the models at its top level.
@@ -266,6 +268,28 @@ for await (const v of algod
 ```
 
 A node without `keys` (dt3 and older) rejects it with a 400, thrown as a `DTUnsupportedError`; one that answers without `changedKeys` where they must be is too.
+
+### Key and prefix filters
+
+- `getApplicationVersions(appId).key(K)` lists only the versions at which global state key `K` changed: added, removed, or a new value or type, net over the round. Each entry has `keyValue` (a `TealValue`), the key's new value, absent when the key was removed or the app deleted.
+- `accountApplicationVersions(address, appId).key(K)` does the same for a local state key. Its entries then list the local state only, never the app's parameters.
+- `getApplicationBoxesVersions(appId).prefix(P)` lists only the changes of the boxes whose names start with `P` (one ARC-56 box map, say). Rounds in which none of them changed are left out. With `rounds()`, only the boxes under `P` are merged, so the node's per-app box bound counts only those.
+
+Keys and prefixes are bytes (`Uint8Array`), sent in the node's app-arg form as `b64:...`: encode a string key yourself (`new TextEncoder().encode('total_effort')`). At most `MAX_VERSIONS_KEY_BYTES` (64) bytes; an empty key is allowed, an empty prefix is not. `key()` cannot be combined with `rounds()`; `prefix()` can. The client rejects the rest before sending.
+
+There is no index of state keys, and box prefixes step through the app's whole box index: a page examines at most 100,000 versions (key) or 1,000,000 index entries (prefix), so it can hold fewer than `limit` versions, or none, and still have a `nextToken`. Use `pages()` or `iterate()`, which keep going until it is absent.
+
+```typescript
+for await (const v of algod
+  .getApplicationVersions(1284326447)
+  .key(new TextEncoder().encode('total_effort'))
+  .order('desc')
+  .iterate()) {
+  console.log(v.round, v.keyValue?.uint);
+}
+```
+
+The node rejects `key` or `prefix` on an endpoint it does not apply to with a 400, which passes through.
 
 ## Asset holders
 

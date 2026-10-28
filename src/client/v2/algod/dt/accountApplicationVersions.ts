@@ -1,7 +1,10 @@
 import { HTTPClient, HTTPClientResponse } from '../../../client.js';
 import { decodeDTJSON } from './json.js';
 import { Address } from '../../../../encoding/address.js';
-import VersionsRequest, { StateVersionsInclude } from './versionsRequest.js';
+import VersionsRequest, {
+  StateVersionsInclude,
+  encodeVersionsFilter,
+} from './versionsRequest.js';
 import { AccountVersion, AccountVersionsResponse } from './models.js';
 
 /**
@@ -39,6 +42,27 @@ export default class AccountApplicationVersions extends VersionsRequest<
    */
   path() {
     return `/v2/accounts/${this.account}/applications/${this.applicationID}/versions`;
+  }
+
+  /**
+   * List only the versions at which this local state key's value changed:
+   * added, removed, or given a new value or type, net over the round. Each
+   * entry then has the local state only, never the application's parameters,
+   * with the key's new value as `keyValue` (absent when the key was removed or
+   * the local state deleted).
+   *
+   * There is no index of keys: a page examines at most 100,000 versions and
+   * reads at most 64 MB, so it can hold fewer than `limit` versions, or none,
+   * and still have a `nextToken`; `pages()` and `iterate()` keep going until
+   * it is absent. Not with `rounds()` (rejected before sending).
+   *
+   * @param key - The local state key, as bytes (`new TextEncoder().encode('n')`
+   * for a string key), at most 64 bytes. An empty key is allowed.
+   * @category query
+   */
+  key(key: Uint8Array) {
+    this.query.key = encodeVersionsFilter('key', key);
+    return this;
   }
 
   /**

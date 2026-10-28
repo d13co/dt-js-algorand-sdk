@@ -57,6 +57,8 @@ import {
   encodeMsgpack,
 } from '../src/encoding/encoding';
 import { decodeDTJSON } from '../src/client/v2/algod/dt/json';
+import GetApplicationVersions from '../src/client/v2/algod/dt/getApplicationVersions';
+import { HTTPClient } from '../src/client/client';
 import { SignedTransaction } from '../src/signedTransaction';
 import { makePaymentTxnWithSuggestedParamsFromObject } from '../src/makeTxn';
 import { AtomicTransactionComposer } from '../src/composer';
@@ -3925,5 +3927,188 @@ describe('getAssetHolders', () => {
       fast
     );
     assert.ok(DTAlgodClient.features.includes('holders'));
+  });
+});
+
+describe('versions: key and prefix filters', () => {
+  const addr = 'RETICA7ZSQTWPWFB7KTF4CPHJDPRXTPQYIMY6DOUQ72I2JD3T5RRDXTUSQ';
+  const key = (s: string) => new TextEncoder().encode(s);
+
+  it('sends key and prefix as b64, bytes that are not UTF-8 too', async () => {
+    const empty = ok({ round: 9, versions: [] });
+    const stub = new StubClient([empty, empty, empty, empty]);
+    const client = new DTAlgodClient(stub, '');
+    await client
+      .getApplicationVersions(8)
+      .key(Uint8Array.from([0xff, 0x00, 0xfe]))
+      .do();
+    await client.accountApplicationVersions(addr, 8).key(key('n')).do();
+    await client.getApplicationVersions(8).key(new Uint8Array()).do();
+    await client
+      .getApplicationBoxesVersions(8)
+      .prefix(key('u'))
+      .rounds([5])
+      .do()
+      .catch((err) => {
+        // The empty stub page fails the rounds check, after sending.
+        if (!(err instanceof DTUnsupportedError)) throw err;
+      });
+    assert.deepStrictEqual(
+      stub.calls.map((c) => [c.path, c.query]),
+      [
+        ['/v2/applications/8/versions', { key: 'b64:/wD+' }],
+        [`/v2/accounts/${addr}/applications/8/versions`, { key: 'b64:bg==' }],
+        ['/v2/applications/8/versions', { key: 'b64:' }],
+        [
+          '/v2/applications/8/boxes/versions',
+          { prefix: 'b64:dQ==', rounds: '5' },
+        ],
+      ]
+    );
+  });
+
+  it('rejects long keys and prefixes, an empty prefix, and key with rounds', async () => {
+    const client = new DTAlgodClient(new StubClient([]), '');
+    assert.throws(
+      () => client.getApplicationVersions(8).key(new Uint8Array(65)),
+      /key is 65 bytes, longer than the 64/
+    );
+    assert.throws(
+      () => client.getApplicationBoxesVersions(8).prefix(new Uint8Array(65)),
+      /prefix is 65 bytes/
+    );
+    assert.throws(
+      () => client.getApplicationBoxesVersions(8).prefix(new Uint8Array()),
+      /prefix is empty/
+    );
+    assert.throws(
+      () =>
+        client.getApplicationVersions(8).key('total' as unknown as Uint8Array),
+      TypeError
+    );
+    client.getApplicationVersions(8).key(new Uint8Array(64));
+    await assert.rejects(
+      client.getApplicationVersions(8).key(key('k')).rounds([5]).do(),
+      /key cannot be combined with rounds/
+    );
+    await assert.rejects(
+      client
+        .accountApplicationVersions(addr, 8)
+        .rounds([5])
+        .key(key('k'))
+        .pages()
+        .next(),
+      /key cannot be combined with rounds/
+    );
+  });
+
+  it('decodes keyValue, and its absence', async () => {
+    const stub = new StubClient([
+      ok({
+        round: 9,
+        versions: [
+          {
+            round: 2,
+            timestamp: 20,
+            deleted: false,
+            'key-value': { type: 2, uint: 7, bytes: '' },
+          },
+          {
+            round: 3,
+            timestamp: 30,
+            deleted: false,
+            'key-value': { type: 1, bytes: 'AQI=', uint: 0 },
+          },
+          // The key removed, then the app deleted.
+          { round: 4, timestamp: 40, deleted: false },
+          { round: 5, timestamp: 50, deleted: true },
+        ],
+        'next-token': '6',
+      }),
+    ]);
+    const client = new DTAlgodClient(stub, '');
+    const res = await client.getApplicationVersions(8).key(key('k')).do();
+    const [a, b, c, d] = res.versions;
+    assert.strictEqual(a.keyValue?.type, 2);
+    assert.strictEqual(a.keyValue?.uint, BigInt(7));
+    assert.deepStrictEqual(b.keyValue?.bytes, Uint8Array.from([1, 2]));
+    assert.strictEqual(c.keyValue, undefined);
+    assert.strictEqual(d.keyValue, undefined);
+    const local = decodeJSON(
+      JSON.stringify({
+        'app-id': 8,
+        deleted: false,
+        'key-value': { type: 2, uint: 1, bytes: '' },
+      }),
+      algosdk.dtModels.ApplicationLocalStateVersion
+    );
+    assert.strictEqual(local.keyValue?.uint, BigInt(1));
+    assert.deepStrictEqual(
+      decodeJSON(
+        encodeJSON(local),
+        algosdk.dtModels.ApplicationLocalStateVersion
+      ),
+      local
+    );
+    assert.deepStrictEqual(
+      decodeJSON(encodeJSON(a), algosdk.dtModels.ApplicationVersion),
+      a
+    );
+  });
+
+  it('pages a key through empty pages', async () => {
+    const stub = new StubClient([
+      ok({ round: 9, versions: [], 'next-token': 'x' }),
+      ok({
+        round: 9,
+        versions: [
+          {
+            round: 7,
+            timestamp: 70,
+            deleted: false,
+            'key-value': { type: 2, uint: 1, bytes: '' },
+          },
+        ],
+      }),
+    ]);
+    const versions = [];
+    for await (const v of new DTAlgodClient(stub, '')
+      .getApplicationVersions(8)
+      .key(key('k'))
+      .iterate()) {
+      versions.push(v.round);
+    }
+    assert.deepStrictEqual(versions, [BigInt(7)]);
+    assert.strictEqual(stub.calls.length, 2);
+  });
+
+  it('sends key and prefix with the first request, from any builder', async () => {
+    const stub = new StubClient([
+      ok({ round: 9, versions: [] }),
+      ok({ round: 9, versions: [] }),
+      badRequest(
+        "key applies to the versions of an application or of an account's local state of one"
+      ),
+    ]);
+    await new DTAlgodClient(stub, '')
+      .getApplicationBoxesVersions(8)
+      .prefix(key('u'))
+      .do();
+    await new GetApplicationVersions(new HTTPClient(stub), 8)
+      .key(key('k'))
+      .do();
+    assert.deepStrictEqual(
+      stub.calls.map((c) => c.path),
+      ['/v2/applications/8/boxes/versions', '/v2/applications/8/versions']
+    );
+    // The node's 400 for a misplaced key passes through.
+    const misplaced = new DTAlgodClient(stub, '').getAssetVersions(7);
+    misplaced.query.key = 'b64:AA==';
+    await assert.rejects(
+      misplaced.do(),
+      (err: unknown) =>
+        !(err instanceof DTUnsupportedError) &&
+        (err as { status?: number }).status === 400
+    );
   });
 });

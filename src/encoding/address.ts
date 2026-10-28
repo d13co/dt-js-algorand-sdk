@@ -44,6 +44,18 @@ export const PQ_SALT_MAX = 0xff;
 const verifiedAddresses = new Map<string, Uint8Array>();
 const VERIFIED_ADDRESSES_MAX = 10_000;
 
+/**
+ * The strings of public keys `Address.toString` has already encoded, keyed by
+ * the 32 bytes as a binary string, so a key seen again skips the SHA-512/256
+ * checksum and the base32 encode. Decoding ABI `address` values from the logs
+ * of a read at many rounds encodes the same keys in every round, which made
+ * this most of the decoding time. Only `toString` fills it, so it holds
+ * canonical strings only. Cleared when it reaches `ENCODED_ADDRESSES_MAX`
+ * entries (about 2 MB).
+ */
+const encodedAddresses = new Map<string, string>();
+const ENCODED_ADDRESSES_MAX = 10_000;
+
 function checksumFromPublicKey(pk: Uint8Array): Uint8Array {
   return Uint8Array.from(
     nacl
@@ -105,10 +117,21 @@ export class Address {
    * Encode the address into a string form.
    */
   toString(): string {
-    const addr = base32.encode(
-      utils.concatArrays(this.publicKey, this.checksum())
+    // The key is made from the bytes on each call, so a mutated publicKey
+    // is never answered with the string of its old bytes.
+    const cacheKey = String.fromCharCode.apply(
+      null,
+      this.publicKey as unknown as number[]
     );
-    return addr.slice(0, ALGORAND_ADDRESS_LENGTH); // removing the extra '===='
+    const cached = encodedAddresses.get(cacheKey);
+    if (cached !== undefined) return cached;
+    const addr = base32
+      .encode(utils.concatArrays(this.publicKey, this.checksum()))
+      .slice(0, ALGORAND_ADDRESS_LENGTH); // removing the extra '===='
+    if (encodedAddresses.size >= ENCODED_ADDRESSES_MAX)
+      encodedAddresses.clear();
+    encodedAddresses.set(cacheKey, addr);
+    return addr;
   }
 
   /**

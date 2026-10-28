@@ -110,6 +110,46 @@ describe('address', () => {
         new RegExp(address.CHECKSUM_ADDRESS_ERROR_MSG)
       );
     });
+
+    it('should encode a key seen before, a view of it, and a changed key correctly', () => {
+      const expected =
+        'MO2H6ZU47Q36GJ6GVHUKGEBEQINN7ZWVACMWZQGIYUOE3RBSRVYHV4ACJI';
+      // prettier-ignore
+      const pk = new Uint8Array([99, 180, 127, 102, 156, 252, 55, 227, 39, 198, 169, 232, 163, 16, 36, 130, 26, 223, 230, 213, 0, 153, 108, 192, 200, 197, 28, 77, 196, 50, 141, 112]);
+      assert.strictEqual(algosdk.encodeAddress(pk), expected);
+      assert.strictEqual(algosdk.encodeAddress(pk), expected);
+      // a view into a larger buffer, as ABI decoding of a log gives
+      const buf = new Uint8Array(40);
+      buf.set(pk, 5);
+      assert.strictEqual(
+        new algosdk.Address(buf.subarray(5, 37)).toString(),
+        expected
+      );
+      // the same Address object after its bytes changed
+      const a = new algosdk.Address(pk.slice());
+      assert.strictEqual(a.toString(), expected);
+      a.publicKey[0] = (a.publicKey[0] + 1) % 256;
+      const changed = a.toString();
+      assert.notStrictEqual(changed, expected);
+      assert.ok(algosdk.isValidAddress(changed));
+      assert.deepStrictEqual(
+        algosdk.decodeAddress(changed).publicKey,
+        a.publicKey
+      );
+    });
+
+    it('should keep encoding correctly after the encode cache fills up', () => {
+      const pk = nacl.randomBytes(32);
+      const addr = algosdk.encodeAddress(pk);
+      for (let i = 0; i < 10_001; i++) {
+        algosdk.encodeAddress(nacl.randomBytes(32));
+      }
+      assert.strictEqual(algosdk.encodeAddress(pk), addr);
+      assert.deepStrictEqual(
+        new Uint8Array(algosdk.decodeAddress(addr).publicKey),
+        pk
+      );
+    });
   });
 
   describe('from multisig preimage', () => {

@@ -34,6 +34,16 @@ export const PQ_SCHEME_SIZE = 2;
  */
 export const PQ_SALT_MAX = 0xff;
 
+/**
+ * The public keys of addresses `Address.fromString` has already checked, so a
+ * string seen again skips the base32 decode and the SHA-512/256 checksum.
+ * Simulate responses list the same accounts in every group and round, which
+ * made this check most of their decoding time. Cleared when it reaches
+ * `VERIFIED_ADDRESSES_MAX` entries.
+ */
+const verifiedAddresses = new Map<string, Uint8Array>();
+const VERIFIED_ADDRESSES_MAX = 10_000;
+
 function checksumFromPublicKey(pk: Uint8Array): Uint8Array {
   return Uint8Array.from(
     nacl
@@ -116,6 +126,10 @@ export class Address {
         `${MALFORMED_ADDRESS_ERROR_MSG}: expected length ${ALGORAND_ADDRESS_LENGTH}, got ${address.length}: ${address}`
       );
 
+    // a copy, so callers never share the cached bytes
+    const verified = verifiedAddresses.get(address);
+    if (verified) return new Address(verified.slice());
+
     // try to decode
     const decoded = base32.decode.asBytes(address);
     // Sanity check
@@ -139,6 +153,9 @@ export class Address {
     if (!utils.arrayEqual(checksum, cs))
       throw new Error(CHECKSUM_ADDRESS_ERROR_MSG);
 
+    if (verifiedAddresses.size >= VERIFIED_ADDRESSES_MAX)
+      verifiedAddresses.clear();
+    verifiedAddresses.set(address, pk.slice());
     return new Address(pk);
   }
 

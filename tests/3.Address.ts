@@ -87,6 +87,29 @@ describe('address', () => {
       const d = algosdk.decodeAddress(addr);
       assert.deepStrictEqual(new Uint8Array(d.publicKey), pk);
     });
+
+    it('should decode an address seen before into its own copy', () => {
+      const pk = nacl.randomBytes(32);
+      const addr = algosdk.encodeAddress(pk);
+      const first = algosdk.Address.fromString(addr);
+      const second = algosdk.Address.fromString(addr);
+      assert.deepStrictEqual(second.publicKey, pk);
+      assert.notStrictEqual(first, second);
+      assert.notStrictEqual(first.publicKey, second.publicKey);
+      first.publicKey[0] = (first.publicKey[0] + 1) % 256;
+      assert.deepStrictEqual(algosdk.Address.fromString(addr).publicKey, pk);
+    });
+
+    it('should still check the checksum of an address unlike one seen before', () => {
+      const addr = algosdk.encodeAddress(nacl.randomBytes(32));
+      algosdk.Address.fromString(addr);
+      // character 55 holds only checksum bits
+      const bad = `${addr.slice(0, 55)}${addr[55] === 'A' ? 'B' : 'A'}${addr.slice(56)}`;
+      assert.throws(
+        () => algosdk.Address.fromString(bad),
+        new RegExp(address.CHECKSUM_ADDRESS_ERROR_MSG)
+      );
+    });
   });
 
   describe('from multisig preimage', () => {

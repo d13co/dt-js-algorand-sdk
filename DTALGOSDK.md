@@ -14,26 +14,26 @@
 - [Query](#query)
 - [Simulate limits](#simulate-limits)
 - [Running against stock algod](#running-against-stock-algod)
-- [Bug fixes to upstream code](#bug-fixes-to-upstream-code)
+- [Bug fixes and changes to upstream code](#bug-fixes-and-changes-to-upstream-code)
 - [Releasing dtalgosdk](#releasing-dtalgosdk)
 
 ## Summary
 
-| Area                                              | algosdk                                              | dtalgosdk                                                                                                                          |
-| ------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| Client                                            | `Algodv2` / `AlgodClient`                            | also `DTAlgodClient`, a subclass, with `DTAlgodClient.from(existingAlgod)`                                                         |
-| Account, asset, application, box and supply reads | latest round only                                    | `.round(R)` on each read                                                                                                           |
-| History                                           | none (use an indexer)                                | `...Versions` methods: the rounds at which an account, asset, application, box or any of an app's boxes changed, with paging       |
-| Simulate: groups per request                      | one                                                  | several (node's `MaxAPISimulateGroups`, default 16), in sequence or with `parallelGroups()`                                        |
-| Simulate: rounds per request                      | one (`round`)                                        | several with `rounds([...])` (node's `MaxAPISimulateRounds`, default 16)                                                           |
-| Simulate: validity window                         | must contain the simulated round                     | `skipValidityWindow()` or `rewriteValidityWindow()` to simulate rounds far apart                                                   |
-| Simulate: consensus protocol                      | the round's own                                      | `protocol('v42' \| 'latest' \| ...)` to run under a later protocol                                                                 |
-| Simulate results                                  | `txnGroups`                                          | also `roundResults`, `protocolOverride`, and `groupResult()` / `groupResults()` that return each group's outcome or a typed error  |
-| Request building                                  | `SimulateRequest`                                    | `DTSimulateRequest`, with `fromTransactions()` for unsigned transactions, and `packSimulateRounds()` to split rounds into requests |
-| Read-only TEAL calls                              | simulate with signed or empty-signature transactions | `query()`: one program or app, many calls, at many rounds, logs and cost per call                                                  |
-| Node limits                                       | none                                                 | `simulateLimits()`, with the `query` limits                                                                                        |
-| Errors                                            | HTTP errors                                          | `DTUnsupportedError` when the node lacks a feature, `SimulateGroupError` per failed group                                          |
-| ABI                                               |                                                      | `ABIArrayDynamicType` and `ABITupleType` decode subarray views correctly (see [Bug fixes](#bug-fixes-to-upstream-code))            |
+| Area                                              | algosdk                                              | dtalgosdk                                                                                                                           |
+| ------------------------------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Client                                            | `Algodv2` / `AlgodClient`                            | also `DTAlgodClient`, a subclass, with `DTAlgodClient.from(existingAlgod)`                                                          |
+| Account, asset, application, box and supply reads | latest round only                                    | `.round(R)` on each read                                                                                                            |
+| History                                           | none (use an indexer)                                | `...Versions` methods: the rounds at which an account, asset, application, box or any of an app's boxes changed, with paging        |
+| Simulate: groups per request                      | one                                                  | several (node's `MaxAPISimulateGroups`, default 16), in sequence or with `parallelGroups()`                                         |
+| Simulate: rounds per request                      | one (`round`)                                        | several with `rounds([...])` (node's `MaxAPISimulateRounds`, default 16)                                                            |
+| Simulate: validity window                         | must contain the simulated round                     | `skipValidityWindow()` or `rewriteValidityWindow()` to simulate rounds far apart                                                    |
+| Simulate: consensus protocol                      | the round's own                                      | `protocol('v42' \| 'latest' \| ...)` to run under a later protocol                                                                  |
+| Simulate results                                  | `txnGroups`                                          | also `roundResults`, `protocolOverride`, and `groupResult()` / `groupResults()` that return each group's outcome or a typed error   |
+| Request building                                  | `SimulateRequest`                                    | `DTSimulateRequest`, with `fromTransactions()` for unsigned transactions, and `packSimulateRounds()` to split rounds into requests  |
+| Read-only TEAL calls                              | simulate with signed or empty-signature transactions | `query()`: one program or app, many calls, at many rounds, logs and cost per call                                                   |
+| Node limits                                       | none                                                 | `simulateLimits()`, with the `query` limits                                                                                         |
+| Errors                                            | HTTP errors                                          | `DTUnsupportedError` when the node lacks a feature, `SimulateGroupError` per failed group                                           |
+| ABI                                               |                                                      | `ABIArrayDynamicType` and `ABITupleType` decode subarray views correctly (see [Bug fixes](#bug-fixes-and-changes-to-upstream-code)) |
 
 ## Installing in place of algosdk
 
@@ -448,11 +448,13 @@ A node without the endpoint (stock algod, or an older fork build) gets stock alg
 - `query()` on a node without `POST /v2/query` (404) or with queries disabled is thrown as a `DTUnsupportedError`. Check `(await simulateLimits()).query` first, and simulate when it is undefined.
 - A time-travel node built before `getApplicationBoxesVersions` passes `supportsDT()` and answers that method with a 404, thrown as `DTUnsupportedError`.
 
-## Bug fixes to upstream code
+## Bug fixes and changes to upstream code
 
 - `ABIArrayDynamicType.decode` and `ABITupleType.decode` read the length prefix and offsets from the start of the underlying `ArrayBuffer` instead of the start of the `Uint8Array` passed in. Decoding a subarray (for example a value sliced out of a log or box) read the wrong bytes. They now read at the view's `byteOffset`, and a dynamic array shorter than its 2-byte length prefix throws a clear error.
 
 - `URLTokenBaseHTTPClient` built the `headers` of responses and HTTP errors with names and values swapped (`{ "1": "retry-after" }`), because `Headers.forEach` passes the value first. They are now keyed by the lowercased header name (`{ "retry-after": "1" }`), so retry logic can read `Retry-After` from a 503.
+
+- `Address.fromString` keeps the public keys of the last 10,000 address strings whose checksum it checked, so a string seen again skips the base32 decode and the SHA-512/256 checksum (it returns a new `Address` with its own copy of the key). Simulate responses repeat the same unnamed accounts in every group and round: decoding the unnamed resources of 16 rounds × 16 groups over 16 accounts takes 4.6 ms instead of 25 ms.
 
 ## Releasing dtalgosdk
 

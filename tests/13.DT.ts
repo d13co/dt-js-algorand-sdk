@@ -50,7 +50,12 @@ import {
   SimulationEvalOverrides,
 } from '../src/client/v2/algod/models/types';
 import { NamedMapSchema } from '../src/encoding/schema/index';
-import { decodeMsgpack, encodeMsgpack } from '../src/encoding/encoding';
+import {
+  decodeJSON,
+  decodeMsgpack,
+  encodeMsgpack,
+} from '../src/encoding/encoding';
+import { decodeDTJSON } from '../src/client/v2/algod/dt/json';
 import { SignedTransaction } from '../src/signedTransaction';
 import { makePaymentTxnWithSuggestedParamsFromObject } from '../src/makeTxn';
 import { AtomicTransactionComposer } from '../src/composer';
@@ -3076,5 +3081,188 @@ describe('time travel', () => {
       assert.ok(simulateResponse instanceof DTSimulateResponse);
       assert.strictEqual(sent(stub).txnGroups.length, 1);
     });
+  });
+});
+
+describe('decodeDTJSON', () => {
+  const addr = 'RETICA7ZSQTWPWFB7KTF4CPHJDPRXTPQYIMY6DOUQ72I2JD3T5RRDXTUSQ';
+
+  /** Decodes with both decoders and checks they agree. */
+  function same<T extends algosdk.Encodable>(
+    json: unknown,
+    cls: algosdk.EncodableClass<T>
+  ): T {
+    const text = JSON.stringify(json);
+    const fast = decodeDTJSON(text, cls);
+    assert.deepStrictEqual(fast, decodeJSON(text, cls));
+    return fast;
+  }
+
+  /** Counts the plain `JSON.parse` calls `fn` makes. */
+  function nativeParses(fn: () => void) {
+    const original = JSON.parse;
+    let calls = 0;
+    JSON.parse = ((...args: Parameters<typeof JSON.parse>) => {
+      calls += 1;
+      return original(...args);
+    }) as typeof JSON.parse;
+    try {
+      fn();
+    } finally {
+      JSON.parse = original;
+    }
+    return calls;
+  }
+
+  const accountPage = {
+    round: 4500000,
+    versions: [
+      {
+        round: 120,
+        timestamp: 1700000123,
+        base: {
+          deleted: false,
+          account: {
+            address: addr,
+            amount: 5000000,
+            'amount-without-pending-rewards': 5000000,
+            'min-balance': 100000,
+            'pending-rewards': 0,
+            rewards: 0,
+            round: 120,
+            status: 'Offline',
+            'total-apps-opted-in': 1,
+            'total-assets-opted-in': 1,
+            'total-created-apps': 0,
+            'total-created-assets': 0,
+          },
+        },
+        assets: [
+          {
+            'asset-id': 31566704,
+            deleted: false,
+            'asset-holding': {
+              amount: 10,
+              'asset-id': 31566704,
+              'is-frozen': false,
+            },
+          },
+        ],
+        'apps-local-state': [
+          {
+            'app-id': 1002,
+            deleted: false,
+            'app-local-state': {
+              id: 1002,
+              schema: { 'num-uint': 1, 'num-byte-slice': 1 },
+              'key-value': [
+                { key: 'Y291bnQ=', value: { type: 2, uint: 7, bytes: '' } },
+              ],
+            },
+          },
+        ],
+      },
+    ],
+    'next-token': '121',
+  };
+
+  it('decodes an account versions page as decodeJSON does, with JSON.parse', () => {
+    let res: algosdk.dtModels.AccountVersionsResponse | undefined;
+    const parses = nativeParses(() => {
+      res = decodeDTJSON(
+        JSON.stringify(accountPage),
+        algosdk.dtModels.AccountVersionsResponse
+      );
+    });
+    assert.strictEqual(parses, 1);
+    assert.deepStrictEqual(
+      res,
+      decodeJSON(
+        JSON.stringify(accountPage),
+        algosdk.dtModels.AccountVersionsResponse
+      )
+    );
+    const v = res!.versions[0];
+    assert.strictEqual(v.round, BigInt(120));
+    assert.strictEqual(v.base?.account?.amount, BigInt(5000000));
+    assert.strictEqual(
+      v.appsLocalState?.[0].appLocalState?.keyValue?.[0].value.uint,
+      BigInt(7)
+    );
+  });
+
+  it('decodes box and application versions pages as decodeJSON does', () => {
+    same(
+      {
+        round: 9,
+        versions: [
+          {
+            round: 2,
+            timestamp: 20,
+            boxes: [
+              { name: 'Y29uZmln', deleted: false, value: 'AAAAAAAAAAE=' },
+              { name: 'b3RoZXI=', deleted: true },
+            ],
+          },
+        ],
+      },
+      algosdk.dtModels.BoxesVersionsResponse
+    );
+    same(
+      {
+        round: 9,
+        versions: [
+          {
+            round: 3,
+            timestamp: 30,
+            deleted: false,
+            application: {
+              id: 8,
+              params: {
+                creator: addr,
+                'approval-program': 'AQ==',
+                'clear-state-program': 'AQ==',
+                'global-state': [
+                  {
+                    key: 'dG90YWw=',
+                    value: { type: 1, bytes: 'AQI=', uint: 0 },
+                  },
+                ],
+              },
+            },
+          },
+          { round: 4, timestamp: 40, deleted: true },
+        ],
+      },
+      algosdk.dtModels.ApplicationVersionsResponse
+    );
+  });
+
+  it('keeps integers above 2^53 exact, through json-bigint', () => {
+    const text = `{"round":9,"versions":[{"round":2,"timestamp":20,"deleted":false,"asset":{"index":7,"params":{"creator":"${addr}","decimals":0,"total":18446744073709551615}}}]}`;
+    let res: algosdk.dtModels.AssetVersionsResponse | undefined;
+    const parses = nativeParses(() => {
+      res = decodeDTJSON(text, algosdk.dtModels.AssetVersionsResponse);
+    });
+    assert.strictEqual(parses, 0);
+    assert.strictEqual(
+      res!.versions[0].asset?.params.total,
+      BigInt('18446744073709551615')
+    );
+    assert.deepStrictEqual(
+      res,
+      decodeJSON(text, algosdk.dtModels.AssetVersionsResponse)
+    );
+  });
+
+  it('decodes a null box value as no value', () => {
+    const res = same(
+      {
+        round: 9,
+        versions: [{ round: 2, timestamp: 20, deleted: false, value: null }],
+      },
+      algosdk.dtModels.BoxVersionsResponse
+    );
+    assert.strictEqual(res.versions[0].value, undefined);
   });
 });

@@ -1,5 +1,5 @@
 import { HTTPClient, HTTPClientResponse } from '../../../client.js';
-import { decodeJSON } from '../../../../encoding/encoding.js';
+import { decodeDTJSON } from './json.js';
 import VersionsRequest from './versionsRequest.js';
 import { AssetVersion, AssetVersionsResponse } from './models.js';
 
@@ -33,6 +33,6 @@ export default class GetAssetVersions extends VersionsRequest<
 
   // eslint-disable-next-line class-methods-use-this
   prepare(response: HTTPClientResponse): AssetVersionsResponse {
-    return decodeJSON(response.getJSONText(), AssetVersionsResponse);
+    return decodeDTJSON(response.getJSONText(), AssetVersionsResponse);
   }
 }

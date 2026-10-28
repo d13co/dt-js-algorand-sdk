@@ -1,6 +1,6 @@
 import { bytesToBase64 } from '../../../../encoding/binarydata.js';
 import { HTTPClient, HTTPClientResponse } from '../../../client.js';
-import { decodeJSON } from '../../../../encoding/encoding.js';
+import { decodeDTJSON } from './json.js';
 import VersionsRequest from './versionsRequest.js';
 import { BoxVersion, BoxVersionsResponse } from './models.js';
 
@@ -49,6 +49,6 @@ export default class GetApplicationBoxVersions extends VersionsRequest<
 
   // eslint-disable-next-line class-methods-use-this
   prepare(response: HTTPClientResponse): BoxVersionsResponse {
-    return decodeJSON(response.getJSONText(), BoxVersionsResponse);
+    return decodeDTJSON(response.getJSONText(), BoxVersionsResponse);
   }
 }

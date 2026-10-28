@@ -3772,3 +3772,158 @@ describe('versions: rounds, keys and pages', () => {
     }
   });
 });
+
+describe('getAssetHolders', () => {
+  const A = 'AAAAASVCTO6S5PAJWXAVE6D37WDBIMC54IMVSZTJXSYHXZLKH7644TKOUM';
+  const B = 'AAAAN4ZJPLUPZIWQAYK673FXOSEI2THQU65KEOEDQETSTNJCIUNUYQ6DVE';
+  const C = 'RETICA7ZSQTWPWFB7KTF4CPHJDPRXTPQYIMY6DOUQ72I2JD3T5RRDXTUSQ';
+  const holder = (address: string, amount: number, frozen = false) => ({
+    address,
+    amount,
+    'is-frozen': frozen,
+  });
+  const status404 = (message: string) => () => ({
+    status: 404,
+    json: { message },
+  });
+
+  it('sends round, limit and next, and decodes a page', async () => {
+    const stub = new StubClient([
+      ok({
+        round: 50000000,
+        holders: [holder(A, 82072), holder(B, 0, true)],
+        'next-token': B,
+      }),
+    ]);
+    const res = await new DTAlgodClient(stub, '')
+      .getAssetHolders(31566704)
+      .round(50000000)
+      .limit(2)
+      .next(A)
+      .do();
+    assert.deepStrictEqual(stub.calls[0], {
+      path: '/v2/assets/31566704/holders',
+      query: { round: '50000000', limit: '2', next: A },
+    });
+    assert.strictEqual(res.round, BigInt(50000000));
+    assert.strictEqual(res.nextToken, B);
+    assert.deepStrictEqual(
+      res.holders.map((h) => [h.address, h.amount, h.isFrozen]),
+      [
+        [A, BigInt(82072), false],
+        [B, BigInt(0), true],
+      ]
+    );
+    assert.strictEqual(typeof res.holders[0].address, 'string');
+  });
+
+  it('pins the first page round, through an empty page', async () => {
+    const stub = new StubClient([
+      ok({ round: 777, holders: [holder(A, 1)], 'next-token': A }),
+      ok({ round: 777, holders: [], 'next-token': B }),
+      ok({ round: 777, holders: [holder(C, 3)] }),
+    ]);
+    const request = new DTAlgodClient(stub, '').getAssetHolders(7).limit(1);
+    const holders = [];
+    for await (const h of request.iterate()) holders.push(h.address);
+    assert.deepStrictEqual(holders, [A, C]);
+    assert.deepStrictEqual(
+      stub.calls.map((c) => c.query),
+      [
+        { limit: '1' },
+        { limit: '1', next: A, round: '777' },
+        { limit: '1', next: B, round: '777' },
+      ]
+    );
+    // The builder is untouched, and the next run pins its own round.
+    assert.deepStrictEqual(request.query, { limit: '1' });
+  });
+
+  it('checks the round of every page', async () => {
+    const moved = new StubClient([
+      ok({ round: 777, holders: [holder(A, 1)], 'next-token': A }),
+      ok({ round: 778, holders: [] }),
+    ]);
+    const pages = new DTAlgodClient(moved, '').getAssetHolders(7).pages();
+    await pages.next();
+    await assert.rejects(
+      pages.next(),
+      (err: unknown) =>
+        err instanceof DTUnsupportedError &&
+        err.requestedRound === BigInt(777) &&
+        err.returnedRound === BigInt(778)
+    );
+    const stub = new StubClient([ok({ round: 9, holders: [] })]);
+    await assert.rejects(
+      new DTAlgodClient(stub, '').getAssetHolders(7).round(5).do(),
+      DTUnsupportedError
+    );
+  });
+
+  it('maps a node without holders to DTUnsupportedError', async () => {
+    const unsupported = [
+      status404('Not Found'),
+      badRequest(
+        'Invalid format for parameter asset-id: error binding string parameter: strconv.ParseUint: parsing "7/holders": invalid syntax'
+      ),
+      badRequest(
+        'asset holders require EnableTimeTravel and TimeTravelHoldersIndex'
+      ),
+      badRequest('asset holders need a time travel store with N = 1, not 16'),
+    ];
+    for (const answer of unsupported) {
+      // eslint-disable-next-line no-await-in-loop
+      await assert.rejects(
+        new DTAlgodClient(new StubClient([answer]), '').getAssetHolders(7).do(),
+        (err: unknown) =>
+          err instanceof DTUnsupportedError &&
+          (err.cause as { status?: number }).status !== undefined
+      );
+    }
+  });
+
+  it('passes a missing asset, other 400s and the 503 through', async () => {
+    const passed = [
+      [status404('asset does not exist'), 404],
+      [badRequest('limit must be between 1 and 10000'), 400],
+      [
+        () => ({
+          status: 503,
+          json: {
+            message:
+              'timetravel: the asset holders index is not complete: build it with ttimport -holders-index while the node is stopped',
+          },
+        }),
+        503,
+      ],
+    ] as const;
+    for (const [answer, code] of passed) {
+      // eslint-disable-next-line no-await-in-loop
+      await assert.rejects(
+        new DTAlgodClient(new StubClient([answer]), '').getAssetHolders(7).do(),
+        (err: unknown) =>
+          !(err instanceof DTUnsupportedError) &&
+          (err as { status?: number }).status === code
+      );
+    }
+  });
+
+  it('decodes holders as decodeJSON does, and round-trips them', () => {
+    const json = {
+      round: 777,
+      holders: [holder(A, 82072), holder(B, 0, true)],
+      'next-token': B,
+    };
+    const text = JSON.stringify(json);
+    const fast = decodeDTJSON(text, algosdk.dtModels.AssetHoldersResponse);
+    assert.deepStrictEqual(
+      fast,
+      decodeJSON(text, algosdk.dtModels.AssetHoldersResponse)
+    );
+    assert.deepStrictEqual(
+      decodeJSON(encodeJSON(fast), algosdk.dtModels.AssetHoldersResponse),
+      fast
+    );
+    assert.ok(DTAlgodClient.features.includes('holders'));
+  });
+});

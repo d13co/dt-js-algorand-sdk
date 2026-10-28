@@ -2,7 +2,11 @@ import JSONRequest from '../../jsonrequest.js';
 import { HTTPClientResponse } from '../../../client.js';
 import { Query } from '../../../baseHTTPClient.js';
 import { ensureBigInt } from '../../../../utils/utils.js';
-import { isMissingVersionsRoute, DTUnsupportedError } from './errors.js';
+import {
+  describe,
+  isMissingVersionsRoute,
+  DTUnsupportedError,
+} from './errors.js';
 import { pageThrough } from './paging.js';
 
 export type VersionsOrder = 'asc' | 'desc';
@@ -17,17 +21,6 @@ export type StateVersionsInclude = 'values' | 'keys';
 
 /** The most distinct rounds one `rounds()` request may list. */
 export const MAX_VERSIONS_ROUNDS = 10_000;
-
-/** The `message` and `response.text` of an HTTP error, for matching. */
-function errorText(err: unknown) {
-  const e = err as
-    | { status?: number; message?: string; response?: { text?: string } }
-    | undefined;
-  return {
-    status: e?.status,
-    text: `${e?.message ?? ''} ${e?.response?.text ?? ''}`,
-  };
-}
 
 /**
  * Base class for the `/versions` endpoints of a time-travel algod. Each lists
@@ -342,7 +335,7 @@ export default abstract class VersionsRequest<
           { cause: err }
         );
       }
-      const { status, text } = errorText(err);
+      const { status, text } = describe(err);
       if (status === 400 && /invalid include value: keys/.test(text)) {
         throw new DTUnsupportedError(
           `${this.path()} rejected include=keys: the node does not support the changed keys of application state`,

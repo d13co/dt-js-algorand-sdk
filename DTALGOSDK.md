@@ -12,6 +12,7 @@
 - [Versions: the rounds at which objects changed](#versions-the-rounds-at-which-objects-changed)
   - [Versions as of rounds](#versions-as-of-rounds)
   - [Changed keys](#changed-keys)
+- [Asset holders](#asset-holders)
 - [Simulate](#simulate)
 - [Query](#query)
 - [Simulate limits](#simulate-limits)
@@ -28,6 +29,7 @@
 | History                                           | none (use an indexer)                                | `...Versions` methods: the rounds at which an account, asset, application, box or any of an app's boxes changed, with paging        |
 | History as of rounds                              | none                                                 | `rounds([...])` on the `...Versions` methods: each object as of each listed round, with the round it last changed (`changedRound`)  |
 | Changed state keys                                | none                                                 | `include('keys')` on the application state versions: the global or local state keys each version changed (`changedKeys`)            |
+| Asset holders                                     | none (use an indexer)                                | `getAssetHolders(assetId)`: every holder of an asset at a round, paged with the round pinned                                        |
 | Simulate: groups per request                      | one                                                  | several (node's `MaxAPISimulateGroups`, default 16), in sequence or with `parallelGroups()`                                         |
 | Simulate: rounds per request                      | one (`round`)                                        | several with `rounds([...])` (node's `MaxAPISimulateRounds`, default 16)                                                            |
 | Simulate: validity window                         | must contain the simulated round                     | `skipValidityWindow()` or `rewriteValidityWindow()` to simulate rounds far apart                                                    |
@@ -105,8 +107,9 @@ From the package root (`import algosdk from 'algosdk'`):
 - `packSimulateRounds`, and the types `PackedSimulateRounds`, `SimulateRoundsWindow`
 - `DEFAULT_MAX_SIMULATE_GROUPS` (16), `DEFAULT_MAX_SIMULATE_ROUNDS` (16), `MAX_TXN_LIFE` (1000)
 - `isQueryResponseTooLarge`, `MAX_QUERY_REQUEST_BYTES` (1,000,000), `QUERY_LOG_OVERHEAD_BYTES` (48), and the type `RunQuery` (the builder `query()` returns)
+- the type `GetAssetHolders` (the builder `getAssetHolders()` returns)
 - the types `VersionsOrder`, `VersionsInclude`, `StateVersionsInclude`, `AccountVersionsExclude`, and `MAX_VERSIONS_ROUNDS` (10,000)
-- `dtModels`: the request and response models: `DTSimulateRequest`, `DTSimulateResponse`, `DTSimulationEvalOverrides`, `SimulateRoundResult`, `SimulateProtocolOverride`, `SimulateProtocolNote`, `SimulateProtocolNoteHit`, the type `SimulateProtocolNoteCode`, `SimulateLimitsResponse`, `QueryLimits`, `QueryRequest`, `QueryCall`, `QueryResponse`, `QueryRoundResult`, `QueryCallResult`, the types `QueryRequestParams`, `QueryCallParams`, `BoxChange`, and the `...Version` / `...VersionsResponse` models
+- `dtModels`: the request and response models: `DTSimulateRequest`, `DTSimulateResponse`, `DTSimulationEvalOverrides`, `SimulateRoundResult`, `SimulateProtocolOverride`, `SimulateProtocolNote`, `SimulateProtocolNoteHit`, the type `SimulateProtocolNoteCode`, `SimulateLimitsResponse`, `QueryLimits`, `QueryRequest`, `QueryCall`, `QueryResponse`, `QueryRoundResult`, `QueryCallResult`, the types `QueryRequestParams`, `QueryCallParams`, `AssetHolder`, `AssetHoldersResponse`, `BoxChange`, and the `...Version` / `...VersionsResponse` models
 
 `algosdk/client/algod` exports the same, with the models at its top level.
 
@@ -126,7 +129,7 @@ const algod = algosdk.DTAlgodClient.from(algorand.client.algod);
 
 `from` sends requests through the existing client's HTTP client (same server, token, headers and custom `BaseHTTPClient`), returns its argument if it already is a `DTAlgodClient`, and returns the same `DTAlgodClient` each time it is called with the same client, so cached answers (`supportsDT()`, `simulateLimits()`) are shared. The source client may come from another copy of algosdk, since it is read by shape, but transactions and models passed to the new client must come from this copy.
 
-`DTAlgodClient.features` lists what the build supports, for code that finds the class at runtime on an algosdk that may be stock or an older fork build: `reads-at-round`, `versions`, `simulate-groups`, `parallel-groups`, `simulate-rounds`, `from`, `group-results`, `from-transactions`, `pack-rounds`, `validity-window`, `simulate-protocol`, `simulate-limits`, `query`, `versions-rounds` (`rounds()` and `changedRound`), `versions-keys` (`include('keys')` and `changedKeys`), `versions-pages` (`pages()`).
+`DTAlgodClient.features` lists what the build supports, for code that finds the class at runtime on an algosdk that may be stock or an older fork build: `reads-at-round`, `versions`, `simulate-groups`, `parallel-groups`, `simulate-rounds`, `from`, `group-results`, `from-transactions`, `pack-rounds`, `validity-window`, `simulate-protocol`, `simulate-limits`, `query`, `versions-rounds` (`rounds()` and `changedRound`), `versions-keys` (`include('keys')` and `changedKeys`), `versions-pages` (`pages()`), `holders` (`getAssetHolders`).
 
 ```typescript
 const DT = (algosdk as any).DTAlgodClient;
@@ -263,6 +266,30 @@ for await (const v of algod
 ```
 
 A node without `keys` (dt3 and older) rejects it with a 400, thrown as a `DTUnsupportedError`; one that answers without `changedKeys` where they must be is too.
+
+## Asset holders
+
+`getAssetHolders(assetId)` lists the accounts that hold an asset at a round (the latest by default, or `.round(R)`), in address order, each with `address` (a string, as on `Account`), `amount` and `isFrozen`. Accounts opted in with a zero balance are listed. It needs a time-travel node with the asset holders index (`TimeTravelHoldersIndex`).
+
+- `.limit(N)`: holders per page, default 1,000, from 1 to 10,000. A page also stops after examining 100,000 accounts that ever held the asset, so it can be short or empty while more remain: only a missing `nextToken` ends the list.
+- Every page must be read at the same round. `.pages()` and `.iterate()` send the first page's `round` with every later page when no `.round()` was set. A manual `.next(token)` loop must pass `.round(first.round)` too.
+- The response's `round` is checked against `.round()` (and against the pinned round), as for the reads at a round.
+
+```typescript
+let supplyHeld = 0n;
+for await (const h of algod
+  .getAssetHolders(31566704)
+  .round(50_000_000)
+  .iterate()) {
+  supplyHeld += h.amount;
+}
+```
+
+Errors:
+
+- no endpoint (stock algod or a fork build before holders: a 404 `Not Found`, or stock algod's 400 for `{id}/holders` as an ID), or no holders index (400 `asset holders require EnableTimeTravel and TimeTravelHoldersIndex`, or a store with N > 1): `DTUnsupportedError`;
+- an asset that does not exist at the round, also a round before its creation: the node's 404 `asset does not exist`, passed through;
+- an index still being built: 503 `the asset holders index is not complete`, passed through; `isHistoryUnavailable(err)` recognizes it.
 
 ## Simulate
 
@@ -503,6 +530,7 @@ A node without the endpoint (stock algod, or an older fork build) gets stock alg
 - A stock node's rejection of a fork feature, or a response that ignored one (a read for another round, `rounds` without one result per round, a validity window mode not echoed, `protocol` without `protocolOverride`), is thrown as a `DTUnsupportedError`. Catch it once and fall back, for example to one group per simulate request.
 - `query()` on a node without `POST /v2/query` (404) or with queries disabled is thrown as a `DTUnsupportedError`. Check `(await simulateLimits()).query` first, and simulate when it is undefined.
 - A time-travel node built before `getApplicationBoxesVersions` passes `supportsDT()` and answers that method with a 404, thrown as `DTUnsupportedError`.
+- `getAssetHolders` needs dt-algorand `v5.0.4-dt3` or later with `TimeTravelHoldersIndex`; otherwise it throws `DTUnsupportedError`.
 - Versions `rounds()` and `include('keys')` need a build after dt-algorand `v5.0.4-dt3`. On dt3 and older, `rounds` is dropped (the answer is detected and thrown as `DTUnsupportedError`) and `keys` is a 400 (thrown as `DTUnsupportedError`). On stock algod the versions routes don't exist.
 
 ## Bug fixes and changes to upstream code

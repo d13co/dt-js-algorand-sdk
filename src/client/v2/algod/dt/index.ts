@@ -16,5 +16,6 @@ export {
 } from './versionsRequest.js';
 export { AccountVersionsExclude } from './accountVersions.js';
 export type { default as RunQuery } from './query.js';
+export type { default as GetAssetHolders } from './getAssetHolders.js';
 export * from './models.js';
 export * from './packRounds.js';

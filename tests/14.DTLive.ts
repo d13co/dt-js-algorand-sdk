@@ -558,4 +558,31 @@ describe('time travel against a live node', function liveSuite() {
       assert.ok(names.includes('total_effort'), names.join(','));
     });
   });
+
+  describe('holders', () => {
+    it('lists the holders of an asset, two pages at one round', async function holders() {
+      const pages = [];
+      try {
+        for await (const page of c.getAssetHolders(USDC).limit(2).pages()) {
+          pages.push(page);
+          if (pages.length === 2) break;
+        }
+      } catch (err) {
+        // A node without holders, or without its index.
+        if (err instanceof DTUnsupportedError) this.skip();
+        throw err;
+      }
+      assert.strictEqual(pages.length, 2);
+      assert.strictEqual(pages[1].round, pages[0].round);
+      const all = pages.flatMap((p) => p.holders);
+      assert.ok(all.length >= 1 && all.length <= 4);
+      for (const h of all) {
+        assert.strictEqual(typeof h.address, 'string');
+        assert.strictEqual(typeof h.amount, 'bigint');
+      }
+      // In address order, across pages.
+      const addresses = all.map((h) => h.address);
+      assert.deepStrictEqual([...addresses].sort(), addresses);
+    });
+  });
 });

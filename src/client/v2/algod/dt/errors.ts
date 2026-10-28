@@ -80,7 +80,7 @@ export function checkRound(
 }
 
 /** The status and the text of an error thrown by HTTPClient. */
-function describe(err: unknown) {
+export function describe(err: unknown) {
   const e = err as
     | { status?: number; message?: string; response?: { text?: string } }
     | undefined;

@@ -4067,3 +4067,171 @@ export class QueryResponse implements Encodable {
     });
   }
 }
+
+/**
+ * An account that holds an asset, and its holding.
+ */
+export class AssetHolder implements Encodable {
+  private static encodingSchemaValue: Schema | undefined;
+
+  static get encodingSchema(): Schema {
+    if (!this.encodingSchemaValue) {
+      this.encodingSchemaValue = new NamedMapSchema([]);
+      (this.encodingSchemaValue as NamedMapSchema).pushEntries(
+        { key: 'address', valueSchema: new StringSchema(), omitEmpty: true },
+        { key: 'amount', valueSchema: new Uint64Schema(), omitEmpty: true },
+        { key: 'is-frozen', valueSchema: new BooleanSchema(), omitEmpty: true }
+      );
+    }
+    return this.encodingSchemaValue;
+  }
+
+  /**
+   * The holder's address. A string, as `Account.address` is: decoding a page
+   * of 10,000 holders into `Address` objects would check 10,000 checksums.
+   */
+  public address: string;
+
+  /**
+   * \[a\] number of units held.
+   */
+  public amount: bigint;
+
+  /**
+   * \[f\] whether or not the holding is frozen.
+   */
+  public isFrozen: boolean;
+
+  /**
+   * Creates a new `AssetHolder` object.
+   * @param address - The holder's address.
+   * @param amount - \[a\] number of units held.
+   * @param isFrozen - \[f\] whether or not the holding is frozen.
+   */
+  constructor({
+    address,
+    amount,
+    isFrozen,
+  }: {
+    address: string | Address;
+    amount: number | bigint;
+    isFrozen: boolean;
+  }) {
+    this.address = address.toString();
+    this.amount = ensureBigInt(amount);
+    this.isFrozen = isFrozen;
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  getEncodingSchema(): Schema {
+    return AssetHolder.encodingSchema;
+  }
+
+  toEncodingData(): Map<string, unknown> {
+    return new Map<string, unknown>([
+      ['address', this.address],
+      ['amount', this.amount],
+      ['is-frozen', this.isFrozen],
+    ]);
+  }
+
+  static fromEncodingData(data: unknown): AssetHolder {
+    if (!(data instanceof Map)) {
+      throw new Error(`Invalid decoded AssetHolder: ${data}`);
+    }
+    return new AssetHolder({
+      address: data.get('address'),
+      amount: data.get('amount'),
+      isFrozen: data.get('is-frozen'),
+    });
+  }
+}
+
+/**
+ * Holders of an asset at a round.
+ */
+export class AssetHoldersResponse implements Encodable {
+  private static encodingSchemaValue: Schema | undefined;
+
+  static get encodingSchema(): Schema {
+    if (!this.encodingSchemaValue) {
+      this.encodingSchemaValue = new NamedMapSchema([]);
+      (this.encodingSchemaValue as NamedMapSchema).pushEntries(
+        { key: 'round', valueSchema: new Uint64Schema(), omitEmpty: true },
+        {
+          key: 'next-token',
+          valueSchema: new OptionalSchema(new StringSchema()),
+          omitEmpty: true,
+        },
+        {
+          key: 'holders',
+          valueSchema: new ArraySchema(AssetHolder.encodingSchema),
+          omitEmpty: true,
+        }
+      );
+    }
+    return this.encodingSchemaValue;
+  }
+
+  /**
+   * The round of the holdings: `round`, or the latest round.
+   */
+  public round: bigint;
+
+  /**
+   * Present if more holders may remain: provide it as the `next` parameter,
+   * with the same round, to get them.
+   */
+  public nextToken?: string;
+
+  /**
+   * The holders, in address order.
+   */
+  public holders: AssetHolder[];
+
+  /**
+   * Creates a new `AssetHoldersResponse` object.
+   * @param round - The round of the holdings: `round`, or the latest round.
+   * @param nextToken - Present if more holders may remain.
+   * @param holders - The holders, in address order.
+   */
+  constructor({
+    round,
+    nextToken,
+    holders,
+  }: {
+    round: number | bigint;
+    nextToken?: string;
+    holders: AssetHolder[];
+  }) {
+    this.round = ensureBigInt(round);
+    this.nextToken = nextToken;
+    this.holders = holders;
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  getEncodingSchema(): Schema {
+    return AssetHoldersResponse.encodingSchema;
+  }
+
+  toEncodingData(): Map<string, unknown> {
+    return new Map<string, unknown>([
+      ['round', this.round],
+      ['next-token', this.nextToken],
+      ['holders', this.holders.map((h) => h.toEncodingData())],
+    ]);
+  }
+
+  static fromEncodingData(data: unknown): AssetHoldersResponse {
+    if (!(data instanceof Map)) {
+      throw new Error(`Invalid decoded AssetHoldersResponse: ${data}`);
+    }
+    return new AssetHoldersResponse({
+      round: data.get('round'),
+      nextToken: data.get('next-token'),
+      holders: (data.get('holders') ?? []).map((h: unknown) =>
+        AssetHolder.fromEncodingData(h)
+      ),
+    });
+  }
+}

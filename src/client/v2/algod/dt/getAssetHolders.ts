@@ -1,0 +1,220 @@
+import JSONRequest from '../../jsonrequest.js';
+import { HTTPClient, HTTPClientResponse } from '../../../client.js';
+import { Query } from '../../../baseHTTPClient.js';
+import { ensureBigInt } from '../../../../utils/utils.js';
+import { checkRound, describe, DTUnsupportedError } from './errors.js';
+import { decodeDTJSON } from './json.js';
+import { pageThrough } from './paging.js';
+import { AssetHolder, AssetHoldersResponse } from './models.js';
+
+/**
+ * Why a node that rejected a holders request does not have the endpoint, or
+ * undefined if the error is about something else:
+ * - a 404 without a JSON message of the handler (`Not Found`): no such route,
+ *   on stock algod or a fork build before holders. The handler's own 404 says
+ *   `asset does not exist`, and passes through;
+ * - stock algod's router handing `{id}/holders` to the asset lookup as its
+ *   ID, which rejects it (400);
+ * - a node with time travel but without the holders index, or with a store
+ *   it cannot serve holders from (400).
+ */
+function holdersUnsupportedReason(err: unknown) {
+  const { status, text } = describe(err);
+  if (status === 404 && !/asset does not exist/.test(text)) {
+    return 'it has no holders endpoint (stock algod, or a fork build before it)';
+  }
+  if (status !== 400) return undefined;
+  if (
+    /Invalid format for parameter asset-id: .*parsing \\?"[^"\\]*\/holders\\?": invalid syntax/.test(
+      text
+    )
+  ) {
+    return 'it has no holders endpoint (stock algod)';
+  }
+  if (
+    /asset holders require EnableTimeTravel and TimeTravelHoldersIndex|asset holders need a time travel store/.test(
+      text
+    )
+  ) {
+    return 'it does not have the asset holders index (EnableTimeTravel, TimeTravelHoldersIndex, and a store with N = 1)';
+  }
+  return undefined;
+}
+
+/**
+ * Given an asset ID, list the accounts that hold it at a round, in address
+ * order, with their balance and frozen flag. Accounts opted in with a zero
+ * balance are listed. Requires a time-travel algod with its asset holders
+ * index (`TimeTravelHoldersIndex`).
+ *
+ * Pages hold at most `limit` holders (default 1,000, at most 10,000), and
+ * stop after examining 100,000 accounts that ever held the asset, so a page
+ * can be short, or even empty, while more holders remain: only a missing
+ * `nextToken` means there are no more. Every page must be read at the same
+ * round: `pages()` and `iterate()` pin the first page's `round` when no
+ * `round()` was set; a manual `next()` loop must pass `round(first.round)`
+ * itself.
+ *
+ * A node without the endpoint, or without the holders index, is thrown as a
+ * {@link DTUnsupportedError}. An asset that does not exist (also at a round
+ * before its creation) is the node's 404, and an index still being built its
+ * 503, both thrown as the HTTP error (`isHistoryUnavailable` recognizes the
+ * 503).
+ *
+ * #### Example
+ * ```typescript
+ * for await (const holder of algodClient
+ *   .getAssetHolders(31566704)
+ *   .round(50_000_000)
+ *   .iterate()) {
+ *   console.log(holder.address, holder.amount, holder.isFrozen);
+ * }
+ * ```
+ *
+ * @category GET
+ */
+export default class GetAssetHolders extends JSONRequest<AssetHoldersResponse> {
+  private assetID: bigint;
+
+  private requestedRound?: bigint;
+
+  constructor(c: HTTPClient, assetID: number | bigint) {
+    super(c);
+    this.assetID = BigInt(assetID);
+  }
+
+  /**
+   * @returns `/v2/assets/${assetID}/holders`
+   */
+  path() {
+    return `/v2/assets/${this.assetID}/holders`;
+  }
+
+  /**
+   * List the holders at this round. Defaults to the latest round. The
+   * response is checked to be for that round.
+   *
+   * @param round - The round.
+   * @category query
+   */
+  round(round: number | bigint) {
+    this.requestedRound = ensureBigInt(round);
+    this.query.round = this.requestedRound.toString();
+    return this;
+  }
+
+  /**
+   * Holders per page: default 1,000, from 1 to 10,000.
+   *
+   * @param limit - Maximum number of holders per page.
+   * @category query
+   */
+  limit(limit: number) {
+    this.query.limit = limit.toString();
+    return this;
+  }
+
+  /**
+   * The `nextToken` of the previous page (an address, after which the page
+   * starts). Pass the previous page's `round` with it.
+   *
+   * @param nextToken - The previous page's `nextToken`.
+   * @category query
+   */
+  next(nextToken: string | undefined) {
+    this.query.next = nextToken;
+    return this;
+  }
+
+  protected executeRequest(
+    headers?: Record<string, string>,
+    customOptions?: Record<string, unknown>
+  ): Promise<HTTPClientResponse> {
+    return this.getPage(this.query, headers, customOptions);
+  }
+
+  prepare(response: HTTPClientResponse): AssetHoldersResponse {
+    return this.decode(response, this.requestedRound);
+  }
+
+  /**
+   * Fetch every page, until a page has no `nextToken`, empty pages included.
+   * Without `round()`, the first page's `round` is sent with every later page,
+   * so they all list the same round. The builder's own query is not modified.
+   *
+   * @param headers - Additional headers to send in each request. Optional.
+   * @param customOptions - Additional options to pass to the underlying BaseHTTPClient. Optional.
+   */
+  async *pages(
+    headers?: Record<string, string>,
+    customOptions?: Record<string, unknown>
+  ): AsyncGenerator<AssetHoldersResponse, void, undefined> {
+    let pinned = this.requestedRound;
+    yield* pageThrough(
+      this.query,
+      async (query) => {
+        if (pinned !== undefined) {
+          // eslint-disable-next-line no-param-reassign
+          query.round = pinned.toString();
+        }
+        const page = this.decode(
+          await this.getPage(query, headers, customOptions),
+          pinned
+        );
+        pinned = page.round;
+        return page;
+      },
+      this.path()
+    );
+  }
+
+  /**
+   * Iterate over every holder at the round, fetching pages as needed (see
+   * `pages()`).
+   *
+   * @param headers - Additional headers to send in each request. Optional.
+   * @param customOptions - Additional options to pass to the underlying BaseHTTPClient. Optional.
+   */
+  async *iterate(
+    headers?: Record<string, string>,
+    customOptions?: Record<string, unknown>
+  ): AsyncGenerator<AssetHolder, void, undefined> {
+    for await (const page of this.pages(headers, customOptions)) {
+      yield* page.holders;
+    }
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  private decode(
+    response: HTTPClientResponse,
+    requested: bigint | undefined
+  ): AssetHoldersResponse {
+    const page = decodeDTJSON(response.getJSONText(), AssetHoldersResponse);
+    checkRound(requested, page.round, response);
+    return page;
+  }
+
+  private async getPage(
+    query: Query<any>,
+    headers?: Record<string, string>,
+    customOptions?: Record<string, unknown>
+  ): Promise<HTTPClientResponse> {
+    try {
+      return await this.c.get({
+        relativePath: this.path(),
+        query,
+        requestHeaders: headers,
+        customOptions,
+      });
+    } catch (err) {
+      const reason = holdersUnsupportedReason(err);
+      if (reason !== undefined) {
+        throw new DTUnsupportedError(
+          `The node cannot list asset holders: ${reason}`,
+          { cause: err }
+        );
+      }
+      throw err;
+    }
+  }
+}

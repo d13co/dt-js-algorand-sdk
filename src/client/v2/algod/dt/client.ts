@@ -13,6 +13,7 @@ import AccountVersions from './accountVersions.js';
 import AccountAssetVersions from './accountAssetVersions.js';
 import AccountApplicationVersions from './accountApplicationVersions.js';
 import GetAssetVersions from './getAssetVersions.js';
+import GetAssetHolders from './getAssetHolders.js';
 import GetApplicationVersions from './getApplicationVersions.js';
 import GetApplicationBoxByNameAt from './getApplicationBoxByNameAt.js';
 import GetApplicationBoxesAt from './getApplicationBoxesAt.js';
@@ -77,7 +78,8 @@ export class DTAlgodClient extends AlgodClient {
    *   `changedRound` on their entries;
    * - `versions-keys`: `include('keys')` on `getApplicationVersions`,
    *   `accountVersions` and `accountApplicationVersions`, and `changedKeys`;
-   * - `versions-pages`: `pages()` on the `...Versions` methods.
+   * - `versions-pages`: `pages()` on the `...Versions` methods;
+   * - `holders`: `getAssetHolders`.
    *
    * #### Example
    * ```typescript
@@ -104,6 +106,7 @@ export class DTAlgodClient extends AlgodClient {
     'versions-rounds',
     'versions-keys',
     'versions-pages',
+    'holders',
   ]);
 
   /** The clients made by {@link DTAlgodClient.from}, by source client. */
@@ -377,6 +380,32 @@ export class DTAlgodClient extends AlgodClient {
    */
   getAssetVersions(index: number | bigint) {
     return new GetAssetVersions(this.c, index);
+  }
+
+  /**
+   * Given an asset ID, list the accounts that hold it at a round (the latest
+   * by default), in address order, with their balance and frozen flag. Needs
+   * a time-travel node with the asset holders index (`TimeTravelHoldersIndex`);
+   * one without it, or without the endpoint, is thrown as a
+   * {@link DTUnsupportedError}.
+   *
+   * Pages can be short or empty while more holders remain: page with
+   * `pages()` or `iterate()`, which pin the first page's round, or pass the
+   * same `round()` with each `next()` yourself.
+   *
+   * #### Example
+   * ```typescript
+   * let total = 0n;
+   * for await (const h of algodClient.getAssetHolders(31566704).iterate()) {
+   *   total += h.amount;
+   * }
+   * ```
+   *
+   * @param index - The asset ID to look up.
+   * @category GET
+   */
+  getAssetHolders(index: number | bigint) {
+    return new GetAssetHolders(this.c, index);
   }
 
   /**

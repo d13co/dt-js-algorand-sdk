@@ -79,7 +79,11 @@ export class DTAlgodClient extends AlgodClient {
    * - `versions-keys`: `include('keys')` on `getApplicationVersions`,
    *   `accountVersions` and `accountApplicationVersions`, and `changedKeys`;
    * - `versions-pages`: `pages()` on the `...Versions` methods;
-   * - `holders`: `getAssetHolders`.
+   * - `holders`: `getAssetHolders`;
+   * - `response-headers`: `doWithHeaders()` on every request, and
+   *   `effortOf` / `parseEffortHeader` for the `X-Algod-Effort` header;
+   * - `error-helpers`: `isNodeBusy`, `retryAfterSeconds`,
+   *   `isTimeLimitExceeded`, `isRoundTooLarge`, `isHistoryUnavailable`.
    *
    * #### Example
    * ```typescript
@@ -107,6 +111,8 @@ export class DTAlgodClient extends AlgodClient {
     'versions-keys',
     'versions-pages',
     'holders',
+    'response-headers',
+    'error-helpers',
   ]);
 
   /** The clients made by {@link DTAlgodClient.from}, by source client. */

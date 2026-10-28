@@ -324,6 +324,20 @@ export default class SimulateTransactionsAt extends SimulateRawTransactions {
   }
 
   /**
+   * Execute the request, as `do()` does, and also return the response headers,
+   * keyed by lowercased name.
+   * @param headers - Additional headers to send in the request. Optional.
+   * @param customOptions - Additional options to pass to the underlying BaseHTTPClient. Optional.
+   */
+  async doWithHeaders(
+    headers?: Record<string, string>,
+    customOptions?: Record<string, unknown>
+  ): Promise<{ data: DTSimulateResponse; headers: Record<string, string> }> {
+    const res = await super.doWithHeaders(headers, customOptions);
+    return { data: res.data as DTSimulateResponse, headers: res.headers };
+  }
+
+  /**
    * Execute the request, returning the response body as received. With
    * `rounds` or `protocol`, the response is also decoded to check that the
    * node applied them.

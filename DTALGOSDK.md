@@ -17,6 +17,8 @@
 - [Simulate](#simulate)
 - [Query](#query)
 - [Simulate limits](#simulate-limits)
+- [Busy, time limit and history errors](#busy-time-limit-and-history-errors)
+- [Response headers](#response-headers)
 - [Running against stock algod](#running-against-stock-algod)
 - [Bug fixes and changes to upstream code](#bug-fixes-and-changes-to-upstream-code)
 - [Releasing dtalgosdk](#releasing-dtalgosdk)
@@ -41,6 +43,8 @@
 | Read-only TEAL calls                              | simulate with signed or empty-signature transactions | `query()`: one program or app, many calls, at many rounds, logs and cost per call                                                   |
 | Node limits                                       | none                                                 | `simulateLimits()`, with the `query` limits                                                                                         |
 | Errors                                            | HTTP errors                                          | `DTUnsupportedError` when the node lacks a feature, `SimulateGroupError` per failed group                                           |
+| Busy, time limit and history errors               | HTTP errors                                          | `isNodeBusy`, `retryAfterSeconds`, `isTimeLimitExceeded`, `isRoundTooLarge`, `isHistoryUnavailable`                                 |
+| Response headers                                  | dropped by `do()`                                    | `doWithHeaders()` on every request, `effortOf(headers)` for the node's `X-Algod-Effort`                                             |
 | ABI                                               |                                                      | `ABIArrayDynamicType` and `ABITupleType` decode subarray views correctly (see [Bug fixes](#bug-fixes-and-changes-to-upstream-code)) |
 
 ## Installing in place of algosdk
@@ -108,6 +112,8 @@ From the package root (`import algosdk from 'algosdk'`):
 - `DTUnsupportedError`, `SimulateGroupError`, and the types `SimulateGroupErrorKind`, `SimulateGroupOutcome`
 - `packSimulateRounds`, and the types `PackedSimulateRounds`, `SimulateRoundsWindow`
 - `DEFAULT_MAX_SIMULATE_GROUPS` (16), `DEFAULT_MAX_SIMULATE_ROUNDS` (16), `MAX_TXN_LIFE` (1000)
+- `isNodeBusy`, `retryAfterSeconds`, `isTimeLimitExceeded`, `isRoundTooLarge`, `isHistoryUnavailable`
+- `EFFORT_HEADER` (`x-algod-effort`), `parseEffortHeader`, `effortOf`, and the type `Effort`
 - `isQueryResponseTooLarge`, `MAX_QUERY_REQUEST_BYTES` (1,000,000), `QUERY_LOG_OVERHEAD_BYTES` (48), and the type `RunQuery` (the builder `query()` returns)
 - the type `GetAssetHolders` (the builder `getAssetHolders()` returns)
 - the types `VersionsOrder`, `VersionsInclude`, `StateVersionsInclude`, `AccountVersionsExclude`, `MAX_VERSIONS_ROUNDS` (10,000) and `MAX_VERSIONS_KEY_BYTES` (64)
@@ -131,7 +137,7 @@ const algod = algosdk.DTAlgodClient.from(algorand.client.algod);
 
 `from` sends requests through the existing client's HTTP client (same server, token, headers and custom `BaseHTTPClient`), returns its argument if it already is a `DTAlgodClient`, and returns the same `DTAlgodClient` each time it is called with the same client, so cached answers (`supportsDT()`, `simulateLimits()`) are shared. The source client may come from another copy of algosdk, since it is read by shape, but transactions and models passed to the new client must come from this copy.
 
-`DTAlgodClient.features` lists what the build supports, for code that finds the class at runtime on an algosdk that may be stock or an older fork build: `reads-at-round`, `versions`, `simulate-groups`, `parallel-groups`, `simulate-rounds`, `from`, `group-results`, `from-transactions`, `pack-rounds`, `validity-window`, `simulate-protocol`, `simulate-limits`, `query`, `versions-rounds` (`rounds()` and `changedRound`), `versions-keys` (`include('keys')` and `changedKeys`), `versions-pages` (`pages()`), `holders` (`getAssetHolders`).
+`DTAlgodClient.features` lists what the build supports, for code that finds the class at runtime on an algosdk that may be stock or an older fork build: `reads-at-round`, `versions`, `simulate-groups`, `parallel-groups`, `simulate-rounds`, `from`, `group-results`, `from-transactions`, `pack-rounds`, `validity-window`, `simulate-protocol`, `simulate-limits`, `query`, `versions-rounds` (`rounds()` and `changedRound`), `versions-keys` (`include('keys')` and `changedKeys`), `versions-pages` (`pages()`), `holders` (`getAssetHolders`), `response-headers` (`doWithHeaders()`, `effortOf`, `parseEffortHeader`), `error-helpers` (`isNodeBusy`, `retryAfterSeconds`, `isTimeLimitExceeded`, `isRoundTooLarge`, `isHistoryUnavailable`).
 
 ```typescript
 const DT = (algosdk as any).DTAlgodClient;
@@ -546,6 +552,44 @@ if (!query) {
 
 A node without the endpoint (stock algod, or an older fork build) gets stock algod's limits instead (`SimulateLimitsResponse.stock()`), with `reported` false: one group per request and no `rounds`, so send one request per round with `round` set. `timeTravel` and `developerApi` are then unknown and read false, so do not gate on them unless `reported` is true. `getSimulateLimits()` is the uncached request, which throws `DTUnsupportedError` on a 404.
 
+## Busy, time limit and history errors
+
+Helpers that take the error a request threw (an HTTP error from `HTTPClient`, with `status` and `response`) and say what kind of failure it is. They match the status and the node's message, so they work in browsers, which can't read `Retry-After` on a cross-origin request.
+
+| Helper                      | Matches                                                                                                                 | What to do                                                                      |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `isNodeBusy(err)`           | 503 "the node is busy" (simulate, query, versions and deltas share a concurrency limit)                                 | retry after `retryAfterSeconds(err) ?? 1` seconds, or on another node           |
+| `retryAfterSeconds(err)`    | the `Retry-After` header, in seconds or as an HTTP date; undefined without one                                          | a delay for the retry                                                           |
+| `isTimeLimitExceeded(err)`  | 504, the node's time limit (`RestWriteTimeoutSeconds`; `timeLimitSeconds` in `simulateLimits()`)                        | split the request (fewer groups, calls, rounds, a smaller page); don't retry it |
+| `isRoundTooLarge(err)`      | 400 "too many boxes at one round" or "too many objects to merge", from versions `rounds`                                | narrow it: a box `prefix()`, fewer objects, or reads at that round              |
+| `isHistoryUnavailable(err)` | 503 "the box index is incomplete", "the asset holders index is not complete" or "the time travel history is not served" | fall back to reads at a round, another node or an indexer; retrying soon fails  |
+
+```typescript
+for (let attempt = 0; ; attempt++) {
+  try {
+    return await algod.query(request).do();
+  } catch (err) {
+    if (!algosdk.isNodeBusy(err) || attempt >= 3) throw err;
+    await sleep(1000 * (algosdk.retryAfterSeconds(err) ?? 1));
+  }
+}
+```
+
+## Response headers
+
+`doWithHeaders()` runs any request as `do()` does, with the same checks, and returns `{ data, headers }`, the headers keyed by lowercased name. An HTTP error has them too, in `err.response.headers`.
+
+A dt-algorand node with `EnableEffortHeader` reports the work each request did in `X-Algod-Effort`, an RFC 9651 dictionary (`opcodes=700, lookups=3, history=2, scanned=10, response-bytes=512, eval-us=840`). `effortOf(headers)` parses it into an `Effort` (`opcodes`, `lookups`, `history`, `scanned`, `responseBytes`, `evalMicroseconds`), or gives undefined when it is absent or malformed (`parseEffortHeader(value)` takes the value itself). It is off by default and meant for a load balancer that bills on it and strips it, so most clients never see it: use it for diagnostics only.
+
+```typescript
+const { data, headers } = await algod
+  .getApplicationVersions(1234)
+  .doWithHeaders();
+console.log(data.versions.length, algosdk.effortOf(headers)?.lookups);
+```
+
+Browsers can read neither `Retry-After` nor `X-Algod-Effort` on a cross-origin request until algod lists them in `Access-Control-Expose-Headers`, which it does not yet: there `retryAfterSeconds` gives undefined and `effortOf` undefined.
+
 ## Running against stock algod
 
 `DTAlgodClient` works against a stock node for everything inherited from `AlgodClient`. For the additions:
@@ -554,6 +598,7 @@ A node without the endpoint (stock algod, or an older fork build) gets stock alg
 - A stock node's rejection of a fork feature, or a response that ignored one (a read for another round, `rounds` without one result per round, a validity window mode not echoed, `protocol` without `protocolOverride`), is thrown as a `DTUnsupportedError`. Catch it once and fall back, for example to one group per simulate request.
 - `query()` on a node without `POST /v2/query` (404) or with queries disabled is thrown as a `DTUnsupportedError`. Check `(await simulateLimits()).query` first, and simulate when it is undefined.
 - A time-travel node built before `getApplicationBoxesVersions` passes `supportsDT()` and answers that method with a 404, thrown as `DTUnsupportedError`.
+- `doWithHeaders()` and the error helpers work against any node; the errors they recognize come only from fork nodes.
 - `getAssetHolders` needs dt-algorand `v5.0.4-dt3` or later with `TimeTravelHoldersIndex`; otherwise it throws `DTUnsupportedError`.
 - Versions `rounds()` and `include('keys')` need a build after dt-algorand `v5.0.4-dt3`. On dt3 and older, `rounds` is dropped (the answer is detected and thrown as `DTUnsupportedError`) and `keys` is a 400 (thrown as `DTUnsupportedError`). On stock algod the versions routes don't exist.
 
@@ -564,6 +609,8 @@ A node without the endpoint (stock algod, or an older fork build) gets stock alg
 - `URLTokenBaseHTTPClient` built the `headers` of responses and HTTP errors with names and values swapped (`{ "1": "retry-after" }`), because `Headers.forEach` passes the value first. They are now keyed by the lowercased header name (`{ "retry-after": "1" }`), so retry logic can read `Retry-After` from a 503.
 
 - `base64ToBytes` and `bytesToBase64` without Node's `Buffer` (browsers) built the bytes with `Uint8Array.from` and a callback, and the string one `String.fromCodePoint` per byte. They now use a `charCodeAt` loop and `String.fromCharCode` over 32 KB chunks: for 32 KB, 0.13 ms instead of 3.6 ms to decode and 0.29 ms instead of 2.3 ms to encode. Every box value, program, state key and `changedKeys` entry decoded in a browser goes through them. Node keeps using `Buffer`.
+
+- `JSONRequest` gains `doWithHeaders()`, which returns the decoded data and the response headers (lowercased names). It runs `executeRequest` then `prepare`, so every subclass's checks apply as in `do()`.
 
 - `Address.fromString` keeps the public keys of the last 10,000 address strings whose checksum it checked, so a string seen again skips the base32 decode and the SHA-512/256 checksum (it returns a new `Address` with its own copy of the key). Simulate responses repeat the same unnamed accounts in every group and round: decoding the unnamed resources of 16 rounds × 16 groups over 16 accounts takes 4.6 ms instead of 25 ms.
 

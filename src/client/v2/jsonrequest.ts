@@ -67,6 +67,29 @@ export default abstract class JSONRequest<Data> {
   }
 
   /**
+   * Execute the request and decode the response, as `do()` does, and also
+   * return the response headers, keyed by lowercased name: for example
+   * `retry-after`, or a node's `x-algod-effort`. In browsers, only the headers
+   * the server exposes to the page are there.
+   * @param headers - Additional headers to send in the request. Optional.
+   * @param customOptions - Additional options to pass to the underlying BaseHTTPClient. Optional.
+   * @returns A promise which resolves to the parsed response object and the
+   *   response headers.
+   * @category JSONRequest
+   */
+  async doWithHeaders(
+    headers?: Record<string, string>,
+    customOptions?: Record<string, unknown>
+  ): Promise<{ data: Data; headers: Record<string, string> }> {
+    const res = await this.executeRequest(headers, customOptions);
+    const responseHeaders: Record<string, string> = {};
+    for (const [name, value] of Object.entries(res.headers ?? {})) {
+      responseHeaders[name.toLowerCase()] = value;
+    }
+    return { data: this.prepare(res), headers: responseHeaders };
+  }
+
+  /**
    * Execute the request, but do not process the response data in any way.
    * @param headers - Additional headers to send in the request. Optional.
    * @param customOptions - Additional options to pass to the underlying BaseHTTPClient. For

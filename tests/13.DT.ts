@@ -67,7 +67,12 @@ import { makeEmptyTransactionSigner } from '../src/signer';
 type Call = { path: string; query: Query<string>; body?: Uint8Array };
 
 /** A stub answer: a JSON body, or raw bytes such as msgpack. */
-type Answer = { status: number; json?: unknown; body?: Uint8Array };
+type Answer = {
+  status: number;
+  json?: unknown;
+  body?: Uint8Array;
+  headers?: Record<string, string>;
+};
 
 /**
  * A BaseHTTPClient that answers each request with the next queued handler.
@@ -85,11 +90,11 @@ class StubClient implements BaseHTTPClient {
     this.calls.push(call);
     const handler = this.handlers.shift();
     if (!handler) throw new Error(`unexpected request ${call.path}`);
-    const { status, json, body } = handler(call);
+    const { status, json, body, headers } = handler(call);
     const response = {
       body: body ?? new TextEncoder().encode(JSON.stringify(json)),
       status,
-      headers: {},
+      headers: headers ?? {},
     };
     if (status >= 300) {
       // The message URLTokenBaseHTTPClient builds.
@@ -4110,5 +4115,212 @@ describe('versions: key and prefix filters', () => {
         !(err instanceof DTUnsupportedError) &&
         (err as { status?: number }).status === 400
     );
+  });
+});
+
+describe('response headers and error helpers', () => {
+  const effort =
+    'opcodes=700, lookups=3, history=2, scanned=10, response-bytes=512, eval-us=840';
+
+  it('parses the effort header', () => {
+    const expected = {
+      opcodes: 700,
+      lookups: 3,
+      history: 2,
+      scanned: 10,
+      responseBytes: 512,
+      evalMicroseconds: 840,
+    };
+    assert.deepStrictEqual(algosdk.parseEffortHeader(effort), expected);
+    // Unknown keys and parameters are ignored, spacing is free.
+    assert.deepStrictEqual(
+      algosdk.parseEffortHeader(
+        `cpu-ns=99,${effort.replace(/ /g, '')};x=1, later=?1`
+      ),
+      expected
+    );
+    for (const bad of [
+      undefined,
+      '',
+      'garbage',
+      'opcodes=700, lookups=3',
+      effort.replace('lookups=3', 'lookups=three'),
+      effort.replace('lookups=3', 'lookups'),
+    ]) {
+      assert.strictEqual(algosdk.parseEffortHeader(bad), undefined, bad);
+    }
+    assert.deepStrictEqual(
+      algosdk.effortOf({ 'X-Algod-Effort': effort }),
+      expected
+    );
+    assert.strictEqual(algosdk.effortOf({}), undefined);
+    assert.strictEqual(algosdk.effortOf(undefined), undefined);
+    assert.strictEqual(algosdk.EFFORT_HEADER, 'x-algod-effort');
+  });
+
+  it('doWithHeaders returns the data and the lowercased headers', async () => {
+    const stub = new StubClient([
+      () => ({
+        status: 200,
+        json: { round: 9, versions: [] },
+        headers: {
+          'X-Algod-Effort': effort,
+          'content-type': 'application/json',
+        },
+      }),
+      () => ({
+        status: 200,
+        json: {
+          round: 9,
+          versions: [{ round: 2, timestamp: 1, deleted: false }],
+        },
+      }),
+    ]);
+    const client = new DTAlgodClient(stub, '');
+    const { data, headers } = await client
+      .getApplicationVersions(8)
+      .doWithHeaders();
+    assert.ok(data instanceof algosdk.dtModels.ApplicationVersionsResponse);
+    assert.deepStrictEqual(headers, {
+      'x-algod-effort': effort,
+      'content-type': 'application/json',
+    });
+    assert.strictEqual(algosdk.effortOf(headers)?.opcodes, 700);
+    // The builder's checks apply as in do().
+    await assert.rejects(
+      client.getAssetVersions(7).rounds([5]).doWithHeaders(),
+      DTUnsupportedError
+    );
+  });
+
+  it('doWithHeaders honours the simulate overrides', async () => {
+    const response = new DTSimulateResponse({
+      version: 2,
+      lastRound: 100,
+      txnGroups: [new SimulateTransactionGroupResult({ txnResults: [] })],
+    });
+    const stub = new StubClient([
+      () => ({
+        status: 200,
+        body: encodeMsgpack(response),
+        headers: { 'x-algod-effort': effort },
+      }),
+    ]);
+    const { data, headers } = await new DTAlgodClient(stub, '')
+      .simulateTransactions(
+        new SimulateRequest({
+          txnGroups: [new SimulateRequestTransactionGroup({ txns: [] })],
+        })
+      )
+      .doWithHeaders();
+    assert.ok(data instanceof DTSimulateResponse);
+    assert.strictEqual(data.requestGroupCount, 1);
+    assert.strictEqual(algosdk.effortOf(headers)?.evalMicroseconds, 840);
+  });
+
+  /** The error HTTPClient throws for a stub answer. */
+  async function errorFor(answer: Answer) {
+    try {
+      await new DTAlgodClient(new StubClient([() => answer]), '')
+        .getAssetVersions(7)
+        .do();
+    } catch (err) {
+      return err;
+    }
+    throw new Error('expected an error');
+  }
+
+  it('recognizes a busy node, with or without Retry-After', async () => {
+    const busy = {
+      message: 'the node is busy: try again later or on another node',
+    };
+    const withSeconds = await errorFor({
+      status: 503,
+      json: busy,
+      headers: { 'retry-after': '1' },
+    });
+    assert.strictEqual(algosdk.isNodeBusy(withSeconds), true);
+    assert.strictEqual(algosdk.retryAfterSeconds(withSeconds), 1);
+    const without = await errorFor({ status: 503, json: busy });
+    assert.strictEqual(algosdk.isNodeBusy(without), true);
+    assert.strictEqual(algosdk.retryAfterSeconds(without), undefined);
+    const inFuture = await errorFor({
+      status: 503,
+      json: busy,
+      headers: { 'retry-after': new Date(Date.now() + 2500).toUTCString() },
+    });
+    const wait = algosdk.retryAfterSeconds(inFuture)!;
+    assert.ok(wait >= 1 && wait <= 3, `${wait}`);
+    const past = await errorFor({
+      status: 503,
+      json: busy,
+      headers: { 'retry-after': 'Wed, 21 Oct 2015 07:28:00 GMT' },
+    });
+    assert.strictEqual(algosdk.retryAfterSeconds(past), 0);
+    const junk = await errorFor({
+      status: 503,
+      json: busy,
+      headers: { 'retry-after': 'soon' },
+    });
+    assert.strictEqual(algosdk.retryAfterSeconds(junk), undefined);
+    // Another 503 is not busy.
+    const history = await errorFor({
+      status: 503,
+      json: { message: 'timetravel: the box index is incomplete' },
+    });
+    assert.strictEqual(algosdk.isNodeBusy(history), false);
+    assert.strictEqual(algosdk.isNodeBusy(new Error('node is busy')), false);
+    assert.strictEqual(algosdk.retryAfterSeconds(undefined), undefined);
+  });
+
+  it('recognizes the time limit, round too large and history errors', async () => {
+    const timeLimit = await errorFor({
+      status: 504,
+      json: {
+        message:
+          "the request reached the node's time limit (RestWriteTimeoutSeconds)",
+      },
+    });
+    assert.strictEqual(algosdk.isTimeLimitExceeded(timeLimit), true);
+    assert.strictEqual(algosdk.isNodeBusy(timeLimit), false);
+    for (const message of [
+      'too many boxes at one round',
+      'too many objects to merge',
+    ]) {
+      // eslint-disable-next-line no-await-in-loop
+      const err = await errorFor({ status: 400, json: { message } });
+      assert.strictEqual(algosdk.isRoundTooLarge(err), true, message);
+      assert.strictEqual(algosdk.isTimeLimitExceeded(err), false);
+    }
+    assert.strictEqual(
+      algosdk.isRoundTooLarge(
+        await errorFor({ status: 400, json: { message: 'bad limit' } })
+      ),
+      false
+    );
+    for (const message of [
+      'timetravel: the box index is incomplete',
+      'timetravel: the asset holders index is not complete: build it with ttimport -holders-index while the node is stopped',
+      'the time travel history is not served',
+    ]) {
+      // eslint-disable-next-line no-await-in-loop
+      const err = await errorFor({ status: 503, json: { message } });
+      assert.strictEqual(algosdk.isHistoryUnavailable(err), true, message);
+      assert.strictEqual(algosdk.isNodeBusy(err), false);
+    }
+    assert.strictEqual(
+      algosdk.isHistoryUnavailable(
+        await errorFor({
+          status: 503,
+          json: {
+            message: 'the node is busy: try again later or on another node',
+          },
+        })
+      ),
+      false
+    );
+    for (const f of ['response-headers', 'error-helpers']) {
+      assert.ok(DTAlgodClient.features.includes(f), f);
+    }
   });
 });

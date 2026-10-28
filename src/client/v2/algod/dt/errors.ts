@@ -371,3 +371,97 @@ export function isQueryResponseTooLarge(err: unknown): boolean {
   const { status, text } = describe(err);
   return status === 400 && /query response too large/.test(text);
 }
+
+/**
+ * Whether an error is the node's 503 "the node is busy: try again later or on
+ * another node", from its limit on concurrent simulate, query, versions and
+ * delta requests. Retry after a moment (`retryAfterSeconds(err)`, 1 when the
+ * header can't be read, as in browsers on a cross-origin request), or on
+ * another node. It is matched by status and message, not `Retry-After`.
+ *
+ * @param err - The error thrown by a request.
+ */
+export function isNodeBusy(err: unknown): boolean {
+  const { status, text } = describe(err);
+  return status === 503 && /node is busy/.test(text);
+}
+
+/**
+ * The seconds to wait that an HTTP error's `Retry-After` header says, given
+ * as seconds or as an HTTP date (then rounded up, and 0 if already past), or
+ * undefined when it has none or it doesn't parse. Browsers can't read the
+ * header on a cross-origin request until the node exposes it, so have a
+ * default.
+ *
+ * @param err - The error thrown by a request.
+ */
+export function retryAfterSeconds(err: unknown): number | undefined {
+  const headers = (err as { response?: { headers?: Record<string, string> } })
+    ?.response?.headers;
+  if (!headers) return undefined;
+  const key = Object.keys(headers).find(
+    (k) => k.toLowerCase() === 'retry-after'
+  );
+  const value = key === undefined ? undefined : headers[key]?.trim();
+  if (!value) return undefined;
+  if (/^\d+$/.test(value)) return Number(value);
+  const at = Date.parse(value);
+  if (Number.isNaN(at)) return undefined;
+  return Math.max(0, Math.ceil((at - Date.now()) / 1000));
+}
+
+/**
+ * Whether an error is the node's 504 "the request reached the node's time
+ * limit": the request ran longer than the node allows
+ * (`RestWriteTimeoutSeconds`, `timeLimitSeconds` in `simulateLimits()`).
+ * Retrying the same request will fail again: split it (fewer groups, calls,
+ * rounds, or a shorter versions page) instead.
+ *
+ * @param err - The error thrown by a request.
+ */
+export function isTimeLimitExceeded(err: unknown): boolean {
+  return describe(err).status === 504;
+}
+
+/**
+ * Whether an error is a versions request with `rounds` that one round could
+ * not answer: 400 "too many boxes at one round" (boxes versions: one
+ * requested round holds more boxes than a page may) or "too many objects to
+ * merge" (more objects than the node merges, on the boxes or account
+ * endpoints). Narrow the request: a box `prefix()`, fewer objects, or reads
+ * at that round instead.
+ *
+ * @param err - The error thrown by a request.
+ */
+export function isRoundTooLarge(err: unknown): boolean {
+  const { status, text } = describe(err);
+  return (
+    status === 400 &&
+    /too many boxes at one round|too many objects to merge/.test(text)
+  );
+}
+
+/**
+ * Whether an error is a 503 that says the node cannot serve that history now,
+ * which retrying soon won't fix:
+ * - "the box index is incomplete" (boxes versions over rounds before the
+ *   node's box index);
+ * - "the asset holders index is not complete" (`getAssetHolders` while the
+ *   index is built);
+ * - "the time travel history is not served" (a node still catching up its
+ *   history).
+ *
+ * Fall back to reads at a round, another node or an indexer, rather than
+ * retrying as for {@link isNodeBusy}.
+ *
+ * @param err - The error thrown by a request.
+ */
+export function isHistoryUnavailable(err: unknown): boolean {
+  const { status, text } = describe(err);
+  return (
+    status === 503 &&
+    /box index is incomplete|asset holders index is not complete|history is not served/.test(
+      text
+    )
+  );
+}

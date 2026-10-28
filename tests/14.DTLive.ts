@@ -13,6 +13,8 @@ import {
   DTSimulateRequest,
   DTUnsupportedError,
   QueryLimits,
+  EFFORT_HEADER,
+  effortOf,
 } from '../src/client/v2/algod/dt/index';
 import { SimulateRequestTransactionGroup } from '../src/client/v2/algod/models/types';
 import { makePaymentTxnWithSuggestedParamsFromObject } from '../src/makeTxn';
@@ -636,6 +638,25 @@ describe('time travel against a live node', function liveSuite() {
       for (const v of versions) {
         assert.ok(v.boxes.length >= 1);
         for (const b of v.boxes) assert.strictEqual(b.name[0], p[0]);
+      }
+    });
+  });
+
+  describe('effort', () => {
+    it('returns the headers of a versions page, with any effort well-formed', async () => {
+      const { data, headers } = await c
+        .getAssetVersions(USDC)
+        .order('desc')
+        .limit(1)
+        .doWithHeaders();
+      assert.ok(data.versions.length <= 1);
+      assert.ok(Object.keys(headers).every((k) => k === k.toLowerCase()));
+      const e = effortOf(headers);
+      // Off unless the node sets EnableEffortHeader.
+      if (headers[EFFORT_HEADER] === undefined) {
+        assert.strictEqual(e, undefined);
+      } else {
+        assert.ok(e && e.lookups >= 1 && e.responseBytes >= 1);
       }
     });
   });

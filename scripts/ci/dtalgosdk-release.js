@@ -1,5 +1,5 @@
 /* eslint-disable no-console */
-// Keep the dtalgosdk version in the docs in step with package.json, and check it
+// Keep the dt-algosdk version in the docs in step with package.json, and check it
 // before a release.
 //
 // Usage:
@@ -20,9 +20,9 @@ const readJson = (file) => JSON.parse(read(file));
 const DOCS = ['README.md', 'DTALGOSDK.md'];
 const FORMAT = '<algosdk version>-dt.<dt-algorand release>.<x.y.z>';
 const VERSION_FORMAT = /^\d+\.\d+\.\d+-dt\.\d+\.\d+\.\d+\.\d+$/;
-// dtalgosdk@3.9.0-dt.2.0.0.1 in install snippets and CDN URLs, and the
-// dtalgosdk-3.9.0-dt.2.0.0.1.tgz name of a packed tarball
-const versionRef = /dtalgosdk([@-])(\d+\.\d+\.\d+-dt(?:\.\d+)+)/g;
+// dt-algosdk@3.9.0-dt.2.0.0.1 in install snippets and CDN URLs, and the
+// dt-algosdk-3.9.0-dt.2.0.0.1.tgz name of a packed tarball
+const versionRef = /dt-algosdk([@-])(\d+\.\d+\.\d+-dt(?:\.\d+)+)/g;
 const integrityRef = /integrity="(sha384-[^"]*)"/g;
 
 const [mode, tag] = process.argv.slice(2);
@@ -51,7 +51,7 @@ if (mode === 'update') {
   for (const file of DOCS) {
     const text = read(file);
     const updated = text
-      .replace(versionRef, (_, sep) => `dtalgosdk${sep}${version}`)
+      .replace(versionRef, (_, sep) => `dt-algosdk${sep}${version}`)
       .replace(integrityRef, `integrity="${sri}"`);
     fs.writeFileSync(path.join(root, file), updated);
     console.log(`${file}: ${text === updated ? 'unchanged' : 'updated'}`);
@@ -60,7 +60,8 @@ if (mode === 'update') {
 } else if (mode === 'check') {
   const errors = [];
   const lock = readJson('package-lock.json');
-  if (pkg.name !== 'dtalgosdk') errors.push(`package.json name is ${pkg.name}`);
+  if (pkg.name !== 'dt-algosdk')
+    errors.push(`package.json name is ${pkg.name}`);
   if (!VERSION_FORMAT.test(version))
     errors.push(`version ${version} is not ${FORMAT}`);
   if (lock.version !== version || lock.packages[''].version !== version)
@@ -85,7 +86,7 @@ if (mode === 'update') {
     process.exit(1);
   }
   console.log(
-    `dtalgosdk ${version} is consistent${sri ? ` (${sri})` : ''}${tag ? ` with ${tag}` : ''}`
+    `dt-algosdk ${version} is consistent${sri ? ` (${sri})` : ''}${tag ? ` with ${tag}` : ''}`
   );
 } else {
   console.error('Usage: dtalgosdk-release.js update | check [tag]');

@@ -56,7 +56,7 @@ export class DTAlgodClient extends AlgodClient {
   /**
    * What this build of the client supports, for code that finds
    * `DTAlgodClient` at runtime on an algosdk that may be stock algosdk
-   * rather than dtalgosdk (algokit-utils and generated clients check it). It
+   * rather than dt-algosdk (algokit-utils and generated clients check it). It
    * lists what the SDK has, not what the node has: use
    * {@link DTAlgodClient.capabilities}, {@link DTAlgodClient.supportsDT}
    * and {@link DTAlgodClient.supportsAssetHolders} for the node.

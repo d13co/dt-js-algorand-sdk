@@ -1,10 +1,10 @@
 # dt-js-algorand-sdk
 
-[![npm version](https://badge.fury.io/js/dtalgosdk.svg)](https://www.npmjs.com/package/dtalgosdk)
+[![npm version](https://badge.fury.io/js/dt-algosdk.svg)](https://www.npmjs.com/package/dt-algosdk)
 
-## dtalgosdk: algosdk for time-travel algod
+## dt-algosdk: algosdk for time-travel algod
 
-This is `dtalgosdk`, a fork of [algosdk](https://www.npmjs.com/package/algosdk) v3.9.0 for a time-travel algod: [dt-algorand](https://github.com/d13co/dt-algorand/tree/dtalgorand), the go-algorand fork run with `EnableTimeTravel: true`, which keeps the state of every round since genesis. It is a drop-in replacement: everything in algosdk is unchanged, and the additions are new exports. The main changes:
+This is `dt-algosdk`, a fork of [algosdk](https://www.npmjs.com/package/algosdk) v3.9.0 for a time-travel algod: [dt-algorand](https://github.com/d13co/dt-algorand/tree/dtalgorand), the go-algorand fork run with `EnableTimeTravel: true`, which keeps the state of every round since genesis. It is a drop-in replacement: everything in algosdk is unchanged, and the additions are new exports. The main changes:
 
 - **`DTAlgodClient`**, an `AlgodClient` subclass. `DTAlgodClient.from(algod)` wraps an existing client, such as algokit-utils' `algorand.client.algod`.
 - **Reads at past rounds**: `.round(R)` on account, asset, application, box and supply reads.
@@ -19,7 +19,7 @@ This is `dtalgosdk`, a fork of [algosdk](https://www.npmjs.com/package/algosdk) 
 
 See **[DTALGOSDK.md](https://github.com/d13co/dt-js-algorand-sdk/blob/dtalgorand/DTALGOSDK.md)** for the detailed differences, API reference and examples. Source and issues: [d13co/dt-js-algorand-sdk](https://github.com/d13co/dt-js-algorand-sdk) (branch `dtalgorand`).
 
-### Installing dtalgosdk in place of algosdk
+### Installing dt-algosdk in place of algosdk
 
 Install it under the name `algosdk` with a package-manager override, so that your code and every dependency that uses algosdk (algokit-utils, use-wallet, ...) load the same single copy. Imports stay `from 'algosdk'`.
 
@@ -28,7 +28,7 @@ npm (`package.json`):
 ```json
 {
   "dependencies": {
-    "algosdk": "npm:dtalgosdk@3.9.0-dt.4.1.0.0"
+    "algosdk": "npm:dt-algosdk@3.9.0-dt.4.1.0.0"
   },
   "overrides": {
     "algosdk": "$algosdk"
@@ -40,7 +40,7 @@ pnpm 10 and later (`pnpm-workspace.yaml`; pnpm 11 and later read overrides only 
 
 ```yaml
 overrides:
-  algosdk: npm:dtalgosdk@3.9.0-dt.4.1.0.0
+  algosdk: npm:dt-algosdk@3.9.0-dt.4.1.0.0
 ```
 
 pnpm 9 (`package.json`; it warns about an unmet `algosdk` peer dependency, which is harmless):
@@ -49,7 +49,7 @@ pnpm 9 (`package.json`; it warns about an unmet `algosdk` peer dependency, which
 {
   "pnpm": {
     "overrides": {
-      "algosdk": "npm:dtalgosdk@3.9.0-dt.4.1.0.0"
+      "algosdk": "npm:dt-algosdk@3.9.0-dt.4.1.0.0"
     }
   }
 }
@@ -60,17 +60,17 @@ Yarn and Bun (`package.json`):
 ```json
 {
   "dependencies": {
-    "algosdk": "npm:dtalgosdk@3.9.0-dt.4.1.0.0"
+    "algosdk": "npm:dt-algosdk@3.9.0-dt.4.1.0.0"
   },
   "resolutions": {
-    "algosdk": "npm:dtalgosdk@3.9.0-dt.4.1.0.0"
+    "algosdk": "npm:dt-algosdk@3.9.0-dt.4.1.0.0"
   }
 }
 ```
 
-Yarn 4 refuses versions published less than a day ago (`npmMinimalAgeGate`). To install a new dtalgosdk release right away, add `npmPreapprovedPackages: ["dtalgosdk"]` to `.yarnrc.yml`.
+Yarn 4 refuses versions published less than a day ago (`npmMinimalAgeGate`). To install a new dt-algosdk release right away, add `npmPreapprovedPackages: ["dt-algosdk"]` to `.yarnrc.yml`.
 
-`npm ls algosdk` or `pnpm why algosdk` (`yarn why dtalgosdk` on Yarn) should then list only `dtalgosdk@3.9.0-dt.4.1.0.0`. Pin the exact version, with no `^` or `~` (`npm install -E`): dtalgosdk versions are prereleases, so `^3.9.0` matches none of them, while a `^` or `~` range on a dtalgosdk version matches every later dtalgosdk built on the same algosdk version, breaking releases included. A version reads `<algosdk version>-dt.<dt-algorand release>.<SDK release>`: `3.9.0-dt.4.1.0.0` is built on algosdk 3.9.0, covers the API of dt-algorand dt4 (`v5.0.5-dt4`), and is SDK release 1.0.0 for that pair.
+`npm ls algosdk` or `pnpm why algosdk` (`yarn why dt-algosdk` on Yarn) should then list only `dt-algosdk@3.9.0-dt.4.1.0.0`. Pin the exact version, with no `^` or `~` (`npm install -E`): dt-algosdk versions are prereleases, so `^3.9.0` matches none of them, while a `^` or `~` range on a dt-algosdk version matches every later dt-algosdk built on the same algosdk version, breaking releases included. A version reads `<algosdk version>-dt.<dt-algorand release>.<SDK release>`: `3.9.0-dt.4.1.0.0` is built on algosdk 3.9.0, covers the API of dt-algorand dt4 (`v5.0.5-dt4`), and is SDK release 1.0.0 for that pair.
 
 ### Quick start
 
@@ -98,7 +98,7 @@ const { versions } = await algod
   .do();
 ```
 
-The rest of this README is upstream algosdk's, with the installation steps changed to install dtalgosdk.
+The rest of this README is upstream algosdk's, with the installation steps changed to install dt-algosdk.
 
 ---
 
@@ -113,10 +113,10 @@ Existing codebases using v2 of this library will be incompatible with v3. The v3
 ### [Node.js](https://nodejs.org/en/download/)
 
 ```
-$ npm install -E algosdk@npm:dtalgosdk@3.9.0-dt.4.1.0.0
+$ npm install -E algosdk@npm:dt-algosdk@3.9.0-dt.4.1.0.0
 ```
 
-This installs dtalgosdk under the name `algosdk`. If other dependencies use algosdk, also add the override from [Installing dtalgosdk in place of algosdk](#installing-dtalgosdk-in-place-of-algosdk), so that there is only one copy.
+This installs dt-algosdk under the name `algosdk`. If other dependencies use algosdk, also add the override from [Installing dt-algosdk in place of algosdk](#installing-dt-algosdk-in-place-of-algosdk), so that there is only one copy.
 
 > This package provides TypeScript types, but you will need [TypeScript](https://www.typescriptlang.org/) version 4.2 or higher to use them properly.
 
@@ -126,7 +126,7 @@ Include a minified browser bundle directly in your HTML like so. It defines the 
 
 ```html
 <script
-  src="https://unpkg.com/dtalgosdk@3.9.0-dt.4.1.0.0/dist/browser/algosdk.min.js"
+  src="https://unpkg.com/dt-algosdk@3.9.0-dt.4.1.0.0/dist/browser/algosdk.min.js"
   integrity="sha384-uYn+/StG2g/CidOhhPUXlMt0XyUgGYriM4nsrQWfwxjoJHIGeDMUZWhY7z84MT/2"
   crossorigin="anonymous"
 ></script>
@@ -136,7 +136,7 @@ or
 
 ```html
 <script
-  src="https://cdn.jsdelivr.net/npm/dtalgosdk@3.9.0-dt.4.1.0.0/dist/browser/algosdk.min.js"
+  src="https://cdn.jsdelivr.net/npm/dt-algosdk@3.9.0-dt.4.1.0.0/dist/browser/algosdk.min.js"
   integrity="sha384-uYn+/StG2g/CidOhhPUXlMt0XyUgGYriM4nsrQWfwxjoJHIGeDMUZWhY7z84MT/2"
   crossorigin="anonymous"
 ></script>

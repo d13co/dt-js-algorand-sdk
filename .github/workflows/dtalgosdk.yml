@@ -1,8 +1,8 @@
-name: dtalgosdk
+name: dt-algosdk
 
-# CI for the dtalgorand branch, and the npm release of dtalgosdk: pushing a
+# CI for the dtalgorand branch, and the npm release of dt-algosdk: pushing a
 # v<version> tag (v3.9.0-dt.2.0.0.1) on dtalgorand tests, packs and publishes it.
-# See "Releasing dtalgosdk" in DTALGOSDK.md.
+# See "Releasing dt-algosdk" in DTALGOSDK.md.
 on:
   push:
     branches: [dtalgorand]
@@ -15,7 +15,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: dtalgosdk-${{ github.ref }}
+  group: dt-algosdk-${{ github.ref }}
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
@@ -74,7 +74,7 @@ jobs:
         with:
           name: package
           path: |
-            dtalgosdk-*.tgz
+            dt-algosdk-*.tgz
             dist/browser/algosdk.min.js
           if-no-files-found: error
 
@@ -87,7 +87,7 @@ jobs:
     # reviewers to it on GitHub to approve each release by hand.
     environment:
       name: npm
-      url: https://www.npmjs.com/package/dtalgosdk/v/${{ steps.version.outputs.version }}
+      url: https://www.npmjs.com/package/dt-algosdk/v/${{ steps.version.outputs.version }}
     permissions:
       contents: write # GitHub release
       id-token: write # npm trusted publishing
@@ -124,16 +124,16 @@ jobs:
           path: package
 
       # Authenticates with npm trusted publishing (OIDC), which also adds provenance;
-      # there is no token. dtalgosdk versions are prereleases, and npm 11 publishes
+      # there is no token. dt-algosdk versions are prereleases, and npm 11 publishes
       # a prerelease only with an explicit --tag.
       - name: Publish
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          if npm view "dtalgosdk@$VERSION" version >/dev/null 2>&1; then
-            echo "::notice::dtalgosdk@$VERSION is already on npm, not publishing it again"
+          if npm view "dt-algosdk@$VERSION" version >/dev/null 2>&1; then
+            echo "::notice::dt-algosdk@$VERSION is already on npm, not publishing it again"
           else
-            npm publish "package/dtalgosdk-$VERSION.tgz" --tag latest
+            npm publish "package/dt-algosdk-$VERSION.tgz" --tag latest
           fi
 
       - name: Create GitHub release
@@ -146,7 +146,7 @@ jobs:
             exit 0
           fi
           {
-            echo "npm: [dtalgosdk@$VERSION](https://www.npmjs.com/package/dtalgosdk/v/$VERSION). Install it as described in the [README](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/README.md#installing-dtalgosdk-in-place-of-algosdk); the changes from algosdk are in [DTALGOSDK.md](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/DTALGOSDK.md)."
+            echo "npm: [dt-algosdk@$VERSION](https://www.npmjs.com/package/dt-algosdk/v/$VERSION). Install it as described in the [README](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/README.md#installing-dt-algosdk-in-place-of-algosdk); the changes from algosdk are in [DTALGOSDK.md](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/DTALGOSDK.md)."
             prev=$(git describe --tags --abbrev=0 --match 'v*-dt.*' "$GITHUB_REF_NAME^" 2>/dev/null || true)
             if [ -n "$prev" ]; then
               echo
@@ -156,6 +156,6 @@ jobs:
             fi
           } > notes.md
           gh release create "$GITHUB_REF_NAME" \
-            "package/dtalgosdk-$VERSION.tgz" \
+            "package/dt-algosdk-$VERSION.tgz" \
             "package/dist/browser/algosdk.min.js#algosdk.min.js (browser bundle)" \
-            --verify-tag --latest --title "dtalgosdk $VERSION" --notes-file notes.md
+            --verify-tag --latest --title "dt-algosdk $VERSION" --notes-file notes.md

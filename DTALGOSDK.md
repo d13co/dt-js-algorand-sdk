@@ -1,6 +1,6 @@
-# dtalgosdk: differences from algosdk
+# dt-algosdk: differences from algosdk
 
-`dtalgosdk` is [algosdk](https://www.npmjs.com/package/algosdk) v3.9.0 with additions for a time-travel algod: a node built from [dt-algorand](https://github.com/d13co/dt-algorand/tree/dtalgorand), the time-travel fork of go-algorand, and run with `EnableTimeTravel: true`, which keeps the state of every round since genesis. Everything in algosdk is unchanged and keeps working against stock algod; the additions are new exports, so code written for algosdk runs on dtalgosdk as is.
+`dt-algosdk` is [algosdk](https://www.npmjs.com/package/algosdk) v3.9.0 with additions for a time-travel algod: a node built from [dt-algorand](https://github.com/d13co/dt-algorand/tree/dtalgorand), the time-travel fork of go-algorand, and run with `EnableTimeTravel: true`, which keeps the state of every round since genesis. Everything in algosdk is unchanged and keeps working against stock algod; the additions are new exports, so code written for algosdk runs on dt-algosdk as is.
 
 "At round R" always means the state at the end of round R, after all of that round's transactions.
 
@@ -21,11 +21,11 @@
 - [Response headers](#response-headers)
 - [Optional node features](#optional-node-features)
 - [Bug fixes and changes to upstream code](#bug-fixes-and-changes-to-upstream-code)
-- [Releasing dtalgosdk](#releasing-dtalgosdk)
+- [Releasing dt-algosdk](#releasing-dt-algosdk)
 
 ## Summary
 
-| Area                                              | algosdk                                              | dtalgosdk                                                                                                                           |
+| Area                                              | algosdk                                              | dt-algosdk                                                                                                                          |
 | ------------------------------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | Client                                            | `Algodv2` / `AlgodClient`                            | also `DTAlgodClient`, a subclass, with `DTAlgodClient.from(existingAlgod)`                                                          |
 | Account, asset, application, box and supply reads | latest round only                                    | `.round(R)` on each read                                                                                                            |
@@ -49,14 +49,14 @@
 
 ## Installing in place of algosdk
 
-Install dtalgosdk under the name `algosdk` with your package manager's override, so that your code and every dependency that uses algosdk (algokit-utils, use-wallet, ...) load the same single copy. Two copies break `instanceof` checks and mix transaction and model classes. Imports stay `from 'algosdk'`.
+Install dt-algosdk under the name `algosdk` with your package manager's override, so that your code and every dependency that uses algosdk (algokit-utils, use-wallet, ...) load the same single copy. Two copies break `instanceof` checks and mix transaction and model classes. Imports stay `from 'algosdk'`.
 
 npm (`package.json`):
 
 ```json
 {
   "dependencies": {
-    "algosdk": "npm:dtalgosdk@3.9.0-dt.4.1.0.0"
+    "algosdk": "npm:dt-algosdk@3.9.0-dt.4.1.0.0"
   },
   "overrides": {
     "algosdk": "$algosdk"
@@ -68,7 +68,7 @@ pnpm 10 and later (`pnpm-workspace.yaml`; pnpm 11 and later read overrides only 
 
 ```yaml
 overrides:
-  algosdk: npm:dtalgosdk@3.9.0-dt.4.1.0.0
+  algosdk: npm:dt-algosdk@3.9.0-dt.4.1.0.0
 ```
 
 pnpm 9 (`package.json`; it warns about an unmet `algosdk` peer dependency, which is harmless):
@@ -77,7 +77,7 @@ pnpm 9 (`package.json`; it warns about an unmet `algosdk` peer dependency, which
 {
   "pnpm": {
     "overrides": {
-      "algosdk": "npm:dtalgosdk@3.9.0-dt.4.1.0.0"
+      "algosdk": "npm:dt-algosdk@3.9.0-dt.4.1.0.0"
     }
   }
 }
@@ -88,21 +88,21 @@ Yarn and Bun (`package.json`):
 ```json
 {
   "dependencies": {
-    "algosdk": "npm:dtalgosdk@3.9.0-dt.4.1.0.0"
+    "algosdk": "npm:dt-algosdk@3.9.0-dt.4.1.0.0"
   },
   "resolutions": {
-    "algosdk": "npm:dtalgosdk@3.9.0-dt.4.1.0.0"
+    "algosdk": "npm:dt-algosdk@3.9.0-dt.4.1.0.0"
   }
 }
 ```
 
-Yarn 4 refuses versions published less than a day ago (`npmMinimalAgeGate`). To install a new dtalgosdk release right away, add `npmPreapprovedPackages: ["dtalgosdk"]` to `.yarnrc.yml`.
+Yarn 4 refuses versions published less than a day ago (`npmMinimalAgeGate`). To install a new dt-algosdk release right away, add `npmPreapprovedPackages: ["dt-algosdk"]` to `.yarnrc.yml`.
 
-Then check that only one copy is installed: `npm ls algosdk` or `pnpm why algosdk` (`yarn why dtalgosdk` on Yarn) should list `dtalgosdk@3.9.0-dt.4.1.0.0` and nothing else.
+Then check that only one copy is installed: `npm ls algosdk` or `pnpm why algosdk` (`yarn why dt-algosdk` on Yarn) should list `dt-algosdk@3.9.0-dt.4.1.0.0` and nothing else.
 
-Pin the exact version, with no `^` or `~` (`npm install -E`): dtalgosdk versions are prereleases, so `^3.9.0` matches none of them, while a `^` or `~` range on a dtalgosdk version matches every later dtalgosdk built on the same algosdk version, breaking releases included. A version reads `<algosdk version>-dt.<dt-algorand release>.<SDK release>`: `3.9.0-dt.4.1.0.0` is built on algosdk 3.9.0, covers the API of dt-algorand dt4 (`v5.0.5-dt4`), and is SDK release 1.0.0 for that pair.
+Pin the exact version, with no `^` or `~` (`npm install -E`): dt-algosdk versions are prereleases, so `^3.9.0` matches none of them, while a `^` or `~` range on a dt-algosdk version matches every later dt-algosdk built on the same algosdk version, breaking releases included. A version reads `<algosdk version>-dt.<dt-algorand release>.<SDK release>`: `3.9.0-dt.4.1.0.0` is built on algosdk 3.9.0, covers the API of dt-algorand dt4 (`v5.0.5-dt4`), and is SDK release 1.0.0 for that pair.
 
-To use a local checkout instead, run `npm run build` in it (and again after each change), then use it in place of the registry version. With pnpm, set the override to `link:/path/to/js-algorand-sdk`. With npm, put a tarball from `npm pack` in `dependencies` (`"algosdk": "file:./vendor/dtalgosdk-3.9.0-dt.4.1.0.0.tgz"`) and keep the override as `"$algosdk"`: npm rejects an override that differs from the direct dependency.
+To use a local checkout instead, run `npm run build` in it (and again after each change), then use it in place of the registry version. With pnpm, set the override to `link:/path/to/js-algorand-sdk`. With npm, put a tarball from `npm pack` in `dependencies` (`"algosdk": "file:./vendor/dt-algosdk-3.9.0-dt.4.1.0.0.tgz"`) and keep the override as `"$algosdk"`: npm rejects an override that differs from the direct dependency.
 
 ## New exports
 
@@ -140,7 +140,7 @@ const algod = algosdk.DTAlgodClient.from(algorand.client.algod);
 
 `supportsDT()` and `supportsAssetHolders()` say whether the node has the optional features they name; see [Optional node features](#optional-node-features).
 
-`DTAlgodClient.features` lists what this build of the SDK has, for code that finds the class at runtime on an algosdk that may be stock algosdk rather than dtalgosdk, as algokit-utils and generated clients do: `reads-at-round`, `versions`, `simulate-groups`, `parallel-groups`, `simulate-rounds`, `from`, `group-results`, `from-transactions`, `pack-rounds`, `validity-window`, `simulate-protocol`, `capabilities` (`capabilities()`, `getCapabilities()`), `query`, `versions-rounds` (`rounds()` and `changedRound`), `versions-keys` (`include('keys')` and `changedKeys`), `versions-pages` (`pages()`), `holders` (`getAssetHolders`, `supportsAssetHolders`), `response-headers` (`doWithHeaders()`, `effortOf`, `parseEffortHeader`), `error-helpers` (`isNodeBusy`, `retryAfterSeconds`, `isTimeLimitExceeded`, `isRoundTooLarge`, `isHistoryUnavailable`), `round-header` (reads at a round check `X-Algod-TT-Round`, `TT_ROUND_HEADER`). It says nothing about the node: ask the node with `capabilities()`, `supportsDT()` and `supportsAssetHolders()`.
+`DTAlgodClient.features` lists what this build of the SDK has, for code that finds the class at runtime on an algosdk that may be stock algosdk rather than dt-algosdk, as algokit-utils and generated clients do: `reads-at-round`, `versions`, `simulate-groups`, `parallel-groups`, `simulate-rounds`, `from`, `group-results`, `from-transactions`, `pack-rounds`, `validity-window`, `simulate-protocol`, `capabilities` (`capabilities()`, `getCapabilities()`), `query`, `versions-rounds` (`rounds()` and `changedRound`), `versions-keys` (`include('keys')` and `changedKeys`), `versions-pages` (`pages()`), `holders` (`getAssetHolders`, `supportsAssetHolders`), `response-headers` (`doWithHeaders()`, `effortOf`, `parseEffortHeader`), `error-helpers` (`isNodeBusy`, `retryAfterSeconds`, `isTimeLimitExceeded`, `isRoundTooLarge`, `isHistoryUnavailable`), `round-header` (reads at a round check `X-Algod-TT-Round`, `TT_ROUND_HEADER`). It says nothing about the node: ask the node with `capabilities()`, `supportsDT()` and `supportsAssetHolders()`.
 
 ```typescript
 const DT = (algosdk as any).DTAlgodClient;
@@ -604,7 +604,7 @@ dt-algorand lists `Retry-After`, `X-Algod-Effort` and `X-Algod-TT-Round` in `Acc
 
 ## Optional node features
 
-dtalgosdk covers the API of the current dt-algorand release. Every dt-algorand node has the capabilities endpoint, several groups per simulate request, `parallelGroups()`, `protocol()` and the query endpoint; the rest depends on its config. `capabilities()` reads it once per client, and only the asset holders index needs a probe of its own:
+dt-algosdk covers the API of the current dt-algorand release. Every dt-algorand node has the capabilities endpoint, several groups per simulate request, `parallelGroups()`, `protocol()` and the query endpoint; the rest depends on its config. `capabilities()` reads it once per client, and only the asset holders index needs a probe of its own:
 
 | Feature                                                                 | Node config                                | How to tell                                                    | When off                                                                         |
 | ----------------------------------------------------------------------- | ------------------------------------------ | -------------------------------------------------------------- | -------------------------------------------------------------------------------- |
@@ -631,9 +631,9 @@ Against stock algod, `DTAlgodClient` works for everything inherited from `AlgodC
 - `Address.fromString` keeps the public keys of the last 10,000 address strings whose checksum it checked, so a string seen again skips the base32 decode and the SHA-512/256 checksum (it returns a new `Address` with its own copy of the key). Simulate responses repeat the same unnamed accounts in every group and round: decoding the unnamed resources of 16 rounds × 16 groups over 16 accounts takes 4.6 ms instead of 25 ms.
 - `Address.toString` (and so `encodeAddress` and the ABI `address` decode) keeps the strings of the last 10,000 public keys it encoded, keyed by the key's bytes, so a key seen again skips the SHA-512/256 checksum and the base32 encode. Decoding ABI addresses from the logs of a read at many rounds encodes the same keys in every round: 2,000 keys × 64 rounds take about 30–55 ms instead of 450–560 ms.
 
-## Releasing dtalgosdk
+## Releasing dt-algosdk
 
-GitHub Actions publishes dtalgosdk, with [`.github/workflows/dtalgosdk.yml`](.github/workflows/dtalgosdk.yml). On every push and pull request to `dtalgorand` it runs the linters, the type checks and the tests. On a `v<version>` tag it also checks the release, publishes it to npm with provenance, and creates a GitHub release with the package tarball and the browser bundle. Upstream's workflows that release or open pull requests (`release.yml`, `prod_release.yml`, `codegen.yml`) run only on algorand/js-algorand-sdk.
+GitHub Actions publishes dt-algosdk, with [`.github/workflows/dtalgosdk.yml`](.github/workflows/dtalgosdk.yml). On every push and pull request to `dtalgorand` it runs the linters, the type checks and the tests. On a `v<version>` tag it also checks the release, publishes it to npm with provenance, and creates a GitHub release with the package tarball and the browser bundle. Upstream's workflows that release or open pull requests (`release.yml`, `prod_release.yml`, `codegen.yml`) run only on algorand/js-algorand-sdk.
 
 1. Choose the version, `<algosdk version>-dt.<dt-algorand release>.<SDK release>`:
    - the algosdk version the code is built on; change it when merging a new upstream release;
@@ -642,11 +642,11 @@ GitHub Actions publishes dtalgosdk, with [`.github/workflows/dtalgosdk.yml`](.gi
 2. Set it and update the docs: `npm version <version> --no-git-tag-version`, `npm run build`, then `node scripts/ci/dtalgosdk-release.js update`. The script sets the version in the install snippets and CDN URLs in `README.md` and in this file, and the browser bundle's `integrity` hash in `README.md`.
 3. `npm test`, then `npm pack --dry-run` to check the contents (`dist/`, `src/`, `README.md`, `DTALGOSDK.md`, `LICENSE`).
 4. Commit and push `dtalgorand`, then tag the commit and push the tag: `git tag v<version>` and `git push d13co v<version>`.
-5. The workflow checks that the tag is on `dtalgorand` and matches the version in `package.json` and `package-lock.json`, and that the docs name that version and the bundle's hash (`node scripts/ci/dtalgosdk-release.js check v<version>` runs the same check locally). It then runs the tests and publishes with `npm publish --tag latest`: npm 11 publishes a prerelease only with an explicit tag, and `latest` makes it the version `npm install dtalgosdk` gets. If the version is already on npm, the workflow does not publish it again and only creates the GitHub release.
+5. The workflow checks that the tag is on `dtalgorand` and matches the version in `package.json` and `package-lock.json`, and that the docs name that version and the bundle's hash (`node scripts/ci/dtalgosdk-release.js check v<version>` runs the same check locally). It then runs the tests and publishes with `npm publish --tag latest`: npm 11 publishes a prerelease only with an explicit tag, and `latest` makes it the version `npm install dt-algosdk` gets. If the version is already on npm, the workflow does not publish it again and only creates the GitHub release.
 
 ### One-time setup
 
 - **Default branch.** Set it to `dtalgorand` (Settings → General). The guards that keep upstream's workflows off the fork exist only on this branch, and GitHub runs scheduled workflows such as `codegen.yml` from the default branch. It also makes the repository page show this branch's README.
 - **First version, by hand.** The workflow publishes only through npm trusted publishing, which is set up on a package that already exists. Publish the first version from a checkout: steps 1 to 3, then `npm publish --tag latest`, then push the tag (step 4). The workflow sees that the version is on npm, skips publishing, and creates the GitHub release.
-- **Trusted publisher.** Right after the first publish, add one for the workflow, either in the package's settings on npmjs.com (Trusted publishing → GitHub Actions: owner `d13co`, repository `dt-js-algorand-sdk`, workflow `dtalgosdk.yml`, environment `npm`, publishing allowed) or with npm 11.5.1 or later: `npm trust github dtalgosdk --file dtalgosdk.yml --repo d13co/dt-js-algorand-sdk --env npm --allow-publish`. Publishing is not allowed unless it is turned on. npm drops a new trusted publisher if nothing is published with it within 2 days, so set it up when the next release is close, or add it again later. Trusted publishing adds provenance to each version, and needs no token.
+- **Trusted publisher.** Right after the first publish, add one for the workflow, either in the package's settings on npmjs.com (Trusted publishing → GitHub Actions: owner `d13co`, repository `dt-js-algorand-sdk`, workflow `dtalgosdk.yml`, environment `npm`, publishing allowed) or with npm 11.5.1 or later: `npm trust github dt-algosdk --file dtalgosdk.yml --repo d13co/dt-js-algorand-sdk --env npm --allow-publish`. Publishing is not allowed unless it is turned on. npm drops a new trusted publisher if nothing is published with it within 2 days, so set it up when the next release is close, or add it again later. Trusted publishing adds provenance to each version, and needs no token.
 - **Approval (optional).** The publish job runs in the GitHub environment `npm`, which GitHub creates on the first run. To approve each release by hand, add required reviewers to it under Settings → Environments.

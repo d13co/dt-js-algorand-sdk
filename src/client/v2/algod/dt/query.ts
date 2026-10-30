@@ -5,7 +5,7 @@ import { setSimulateTransactionsHeaders } from '../simulateTransaction.js';
 import { ensureUint64 } from '../../../../utils/utils.js';
 import { ApplicationStateSchema } from '../models/types.js';
 import { QueryRequest, QueryRequestParams, QueryResponse } from './models.js';
-import { queryWithFeatures } from './errors.js';
+import { queryEnabled } from './errors.js';
 
 /** A copy of a request, with its own `calls` and `rounds` arrays. */
 function copyRequest(request: QueryRequest | QueryRequestParams) {
@@ -26,8 +26,8 @@ function copyRequest(request: QueryRequest | QueryRequestParams) {
 
 /**
  * Read-only TEAL calls at one or more rounds (`POST /v2/query`). Requires a
- * node built from the time-travel fork with queries on; a node without them is
- * thrown as a `DTUnsupportedError`. See `DTAlgodClient.query`.
+ * dtalgod node with queries on; one with them disabled is thrown as a
+ * `DTUnsupportedError`. See `DTAlgodClient.query`.
  *
  * The request is copied when this is made (its `calls` and `rounds` arrays
  * too, not the calls themselves) and encoded when it is sent, so the builders
@@ -124,7 +124,7 @@ export default class RunQuery extends JSONRequest<QueryResponse> {
     const invalid = this.invalidReason();
     if (invalid !== undefined) return Promise.reject(new Error(invalid));
     // Encoded here, not in the constructor, so that the builders apply.
-    return queryWithFeatures(
+    return queryEnabled(
       this.c.post({
         relativePath: this.path(),
         data: encodeMsgpack(this.request),

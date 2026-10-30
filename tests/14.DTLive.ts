@@ -66,10 +66,9 @@ describe('time travel against a live node', function liveSuite() {
     assert.strictEqual(await c.supportsDT(), true);
   });
 
-  it('reports its simulate limits', async function limits() {
+  it('reports its simulate limits', async () => {
     const l = await c.simulateLimits();
-    // A node built before the limits endpoint falls back to stock limits.
-    if (!l.reported) this.skip();
+    assert.strictEqual(l.reported, true);
     assert.strictEqual(l.timeTravel, true);
     assert.ok(l.maxTxnGroups >= 1);
     assert.ok(l.maxExtraOpcodeBudget >= 320000);
@@ -302,7 +301,7 @@ describe('time travel against a live node', function liveSuite() {
     before(async function needsQuery() {
       if (!c) this.skip();
       const { query } = await c.simulateLimits();
-      // A node without POST /v2/query, or with queries disabled.
+      // Queries are optional (MaxAPIQueryCalls).
       if (!query) this.skip();
       limits = query!;
     });
@@ -519,15 +518,11 @@ describe('time travel against a live node', function liveSuite() {
     /** A mainnet app whose global state changes every few rounds. */
     const ORE = 1284326447n;
 
-    it('lists versions as of rounds', async function asOfRounds() {
-      let res;
-      try {
-        res = await c.getAssetVersions(USDC).rounds([60_000_000, 1000]).do();
-      } catch (err) {
-        // A node built before rounds.
-        if (err instanceof DTUnsupportedError) this.skip();
-        throw err;
-      }
+    it('lists versions as of rounds', async () => {
+      const res = await c
+        .getAssetVersions(USDC)
+        .rounds([60_000_000, 1000])
+        .do();
       assert.deepStrictEqual(
         res.versions.map((v) => [v.round, v.deleted, v.changedRound]),
         [
@@ -537,19 +532,13 @@ describe('time travel against a live node', function liveSuite() {
       );
     });
 
-    it('lists the global state keys each version changed', async function keys() {
-      let res;
-      try {
-        res = await c
-          .getApplicationVersions(ORE)
-          .order('desc')
-          .limit(2)
-          .include('keys')
-          .do();
-      } catch (err) {
-        if (err instanceof DTUnsupportedError) this.skip();
-        throw err;
-      }
+    it('lists the global state keys each version changed', async () => {
+      const res = await c
+        .getApplicationVersions(ORE)
+        .order('desc')
+        .limit(2)
+        .include('keys')
+        .do();
       assert.strictEqual(res.versions.length, 2);
       for (const v of res.versions) {
         assert.ok(Array.isArray(v.changedKeys), `${v.round}`);
@@ -563,16 +552,12 @@ describe('time travel against a live node', function liveSuite() {
 
   describe('holders', () => {
     it('lists the holders of an asset, two pages at one round', async function holders() {
+      // The holders index is optional.
+      if (!(await c.supportsAssetHolders())) this.skip();
       const pages = [];
-      try {
-        for await (const page of c.getAssetHolders(USDC).limit(2).pages()) {
-          pages.push(page);
-          if (pages.length === 2) break;
-        }
-      } catch (err) {
-        // A node without holders, or without its index.
-        if (err instanceof DTUnsupportedError) this.skip();
-        throw err;
+      for await (const page of c.getAssetHolders(USDC).limit(2).pages()) {
+        pages.push(page);
+        if (pages.length === 2) break;
       }
       assert.strictEqual(pages.length, 2);
       assert.strictEqual(pages[1].round, pages[0].round);

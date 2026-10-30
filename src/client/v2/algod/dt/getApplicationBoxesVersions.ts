@@ -14,7 +14,7 @@ import { BoxesVersion, BoxesVersionsResponse } from './models.js';
  * never split a round.
  *
  * The node answers 503 when a page needs rounds from before its box index is
- * complete (a store written by an older build, before `ttimport -index-boxes`):
+ * complete (until it is built with `ttimport -index-boxes`):
  * at once for an ascending range that starts before it, while a descending
  * range lists the later changes and fails on the page that would reach past
  * it. That 503 is thrown as the HTTP error.
@@ -77,9 +77,8 @@ export default class GetApplicationBoxesVersions extends VersionsRequest<
     return this;
   }
 
+  // eslint-disable-next-line class-methods-use-this
   prepare(response: HTTPClientResponse): BoxesVersionsResponse {
-    return this.checkPage(
-      decodeDTJSON(response.getJSONText(), BoxesVersionsResponse)
-    );
+    return decodeDTJSON(response.getJSONText(), BoxesVersionsResponse);
   }
 }

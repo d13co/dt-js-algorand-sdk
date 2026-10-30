@@ -19,7 +19,7 @@
 - [Simulate limits](#simulate-limits)
 - [Busy, time limit and history errors](#busy-time-limit-and-history-errors)
 - [Response headers](#response-headers)
-- [Running against stock algod](#running-against-stock-algod)
+- [Optional node features](#optional-node-features)
 - [Bug fixes and changes to upstream code](#bug-fixes-and-changes-to-upstream-code)
 - [Releasing dtalgosdk](#releasing-dtalgosdk)
 
@@ -56,7 +56,7 @@ npm (`package.json`):
 ```json
 {
   "dependencies": {
-    "algosdk": "npm:dtalgosdk@3.9.0-dt.3.0.0.1"
+    "algosdk": "npm:dtalgosdk@3.9.0-dt.4.0.0.1"
   },
   "overrides": {
     "algosdk": "$algosdk"
@@ -68,7 +68,7 @@ pnpm 10 and later (`pnpm-workspace.yaml`; pnpm 11 and later read overrides only 
 
 ```yaml
 overrides:
-  algosdk: npm:dtalgosdk@3.9.0-dt.3.0.0.1
+  algosdk: npm:dtalgosdk@3.9.0-dt.4.0.0.1
 ```
 
 pnpm 9 (`package.json`; it warns about an unmet `algosdk` peer dependency, which is harmless):
@@ -77,7 +77,7 @@ pnpm 9 (`package.json`; it warns about an unmet `algosdk` peer dependency, which
 {
   "pnpm": {
     "overrides": {
-      "algosdk": "npm:dtalgosdk@3.9.0-dt.3.0.0.1"
+      "algosdk": "npm:dtalgosdk@3.9.0-dt.4.0.0.1"
     }
   }
 }
@@ -88,21 +88,21 @@ Yarn and Bun (`package.json`):
 ```json
 {
   "dependencies": {
-    "algosdk": "npm:dtalgosdk@3.9.0-dt.3.0.0.1"
+    "algosdk": "npm:dtalgosdk@3.9.0-dt.4.0.0.1"
   },
   "resolutions": {
-    "algosdk": "npm:dtalgosdk@3.9.0-dt.3.0.0.1"
+    "algosdk": "npm:dtalgosdk@3.9.0-dt.4.0.0.1"
   }
 }
 ```
 
 Yarn 4 refuses versions published less than a day ago (`npmMinimalAgeGate`). To install a new dtalgosdk release right away, add `npmPreapprovedPackages: ["dtalgosdk"]` to `.yarnrc.yml`.
 
-Then check that only one copy is installed: `npm ls algosdk` or `pnpm why algosdk` (`yarn why dtalgosdk` on Yarn) should list `dtalgosdk@3.9.0-dt.3.0.0.1` and nothing else.
+Then check that only one copy is installed: `npm ls algosdk` or `pnpm why algosdk` (`yarn why dtalgosdk` on Yarn) should list `dtalgosdk@3.9.0-dt.4.0.0.1` and nothing else.
 
-Pin the exact version: dtalgosdk versions are prereleases, and ranges such as `^3.9.0` do not match them. A version reads `<algosdk version>-dt.<dt-algorand release>.<SDK release>`: `3.9.0-dt.3.0.0.1` is built on algosdk 3.9.0, covers the API of dt-algorand dt3 (`v5.0.4-dt3`), and is SDK release 0.0.1 for that pair.
+Pin the exact version: dtalgosdk versions are prereleases, and ranges such as `^3.9.0` do not match them. A version reads `<algosdk version>-dt.<dt-algorand release>.<SDK release>`: `3.9.0-dt.4.0.0.1` is built on algosdk 3.9.0, covers the API of dt-algorand dt4 (`v5.0.5-dt4`), and is SDK release 0.0.1 for that pair.
 
-To use a local checkout instead, run `npm run build` in it (and again after each change), then use it in place of the registry version. With pnpm, set the override to `link:/path/to/js-algorand-sdk`. With npm, put a tarball from `npm pack` in `dependencies` (`"algosdk": "file:./vendor/dtalgosdk-3.9.0-dt.3.0.0.1.tgz"`) and keep the override as `"$algosdk"`: npm rejects an override that differs from the direct dependency.
+To use a local checkout instead, run `npm run build` in it (and again after each change), then use it in place of the registry version. With pnpm, set the override to `link:/path/to/js-algorand-sdk`. With npm, put a tarball from `npm pack` in `dependencies` (`"algosdk": "file:./vendor/dtalgosdk-3.9.0-dt.4.0.0.1.tgz"`) and keep the override as `"$algosdk"`: npm rejects an override that differs from the direct dependency.
 
 ## New exports
 
@@ -137,7 +137,9 @@ const algod = algosdk.DTAlgodClient.from(algorand.client.algod);
 
 `from` sends requests through the existing client's HTTP client (same server, token, headers and custom `BaseHTTPClient`), returns its argument if it already is a `DTAlgodClient`, and returns the same `DTAlgodClient` each time it is called with the same client, so cached answers (`supportsDT()`, `simulateLimits()`) are shared. The source client may come from another copy of algosdk, since it is read by shape, but transactions and models passed to the new client must come from this copy.
 
-`DTAlgodClient.features` lists what the build supports, for code that finds the class at runtime on an algosdk that may be stock or an older fork build: `reads-at-round`, `versions`, `simulate-groups`, `parallel-groups`, `simulate-rounds`, `from`, `group-results`, `from-transactions`, `pack-rounds`, `validity-window`, `simulate-protocol`, `simulate-limits`, `query`, `versions-rounds` (`rounds()` and `changedRound`), `versions-keys` (`include('keys')` and `changedKeys`), `versions-pages` (`pages()`), `holders` (`getAssetHolders`), `response-headers` (`doWithHeaders()`, `effortOf`, `parseEffortHeader`), `error-helpers` (`isNodeBusy`, `retryAfterSeconds`, `isTimeLimitExceeded`, `isRoundTooLarge`, `isHistoryUnavailable`).
+`supportsDT()` and `supportsAssetHolders()` say whether the node has the optional features they name; see [Optional node features](#optional-node-features).
+
+`DTAlgodClient.features` lists what this build of the SDK has, for code that finds the class at runtime on an algosdk that may be stock algosdk rather than dtalgosdk, as algokit-utils and generated clients do: `reads-at-round`, `versions`, `simulate-groups`, `parallel-groups`, `simulate-rounds`, `from`, `group-results`, `from-transactions`, `pack-rounds`, `validity-window`, `simulate-protocol`, `simulate-limits`, `query`, `versions-rounds` (`rounds()` and `changedRound`), `versions-keys` (`include('keys')` and `changedKeys`), `versions-pages` (`pages()`), `holders` (`getAssetHolders`, `supportsAssetHolders`), `response-headers` (`doWithHeaders()`, `effortOf`, `parseEffortHeader`), `error-helpers` (`isNodeBusy`, `retryAfterSeconds`, `isTimeLimitExceeded`, `isRoundTooLarge`, `isHistoryUnavailable`). It says nothing about the node: ask the node with `simulateLimits()`, `supportsDT()` and `supportsAssetHolders()`.
 
 ```typescript
 const DT = (algosdk as any).DTAlgodClient;
@@ -175,7 +177,7 @@ const boxes = await algod
   .do();
 ```
 
-Stock algod ignores `round` on these routes and answers with the latest state. Where the response says which round it is for, the client checks it and throws a `DTUnsupportedError` (with `requestedRound` and `returnedRound`) on a mismatch. `getAssetByID` and `getApplicationByID` responses carry no round, so a stock node cannot be detected there: check `supportsDT()` first.
+A dtalgod node with time travel off rejects `round` (400 `looking up past rounds requires EnableTimeTravel`, even for the latest round), thrown as a `DTUnsupportedError` with `requestedRound`. Stock algod ignores `round` and answers with the latest state, so check `supportsDT()` before relying on it. A node whose history is not trusted yet answers 503 `the time travel history is not served`, which `isHistoryUnavailable(err)` recognizes. `supply().round(R)` answers 404 for a round whose online stake the history does not record.
 
 When listing boxes at a past round, pass the same round on every page. The `next` cursor is exclusive: only names that sort strictly after it are returned (upstream's OpenAPI description says otherwise and is wrong). Listing at a past round walks every box the app has ever had under the prefix, deleted ones included, so narrow it with `.prefix()` where you can.
 
@@ -234,7 +236,7 @@ for (const version of res.versions) {
 - **Round 0 is the genesis round here.** In simulate and query `rounds`, 0 means the latest round.
 - At most `MAX_VERSIONS_ROUNDS` (10,000) distinct rounds, none after the latest round, and not with `minRound` / `maxRound`. The client rejects too many rounds and the combination before sending.
 - `limit` counts rounds, and `nextToken` is the next requested round, so `pages()` and `iterate()` page as usual.
-- On the boxes endpoint, each entry lists every box of the app at that round, each with its `changedRound`. The node rejects a round with too many boxes to merge (400, `too many boxes at one round`).
+- On the boxes endpoint, each entry lists every box of the app at that round, each with its `changedRound`. The node rejects a round with too many boxes to merge (400, `one round of boxes is too large`, or `too many objects to merge` beyond the node's object limit).
 - The rounds go in the URL, about 9 bytes each: 10,000 rounds make a 90 KB URL, beyond the header limits of many proxies. Split long lists into several requests; the client does not.
 - An empty box value can come back as `"value": null` from builds before the fix, and then reads as `value: undefined`, like a version without values.
 
@@ -248,8 +250,6 @@ for (const v of res.versions) {
   console.log(v.round, v.deleted ? 'did not exist' : `as of ${v.changedRound}`);
 }
 ```
-
-A node without `rounds` (dt-algorand `v5.0.4-dt3` and older) drops the parameter and lists range versions. The client sees entries for rounds it did not ask for, or no entries, and throws a `DTUnsupportedError`.
 
 ### Changed keys
 
@@ -272,8 +272,6 @@ for await (const v of algod
   );
 }
 ```
-
-A node without `keys` (dt3 and older) rejects it with a 400, thrown as a `DTUnsupportedError`; one that answers without `changedKeys` where they must be is too.
 
 ### Key and prefix filters
 
@@ -317,7 +315,7 @@ for await (const h of algod
 
 Errors:
 
-- no endpoint (stock algod or a fork build before holders: a 404 `Not Found`, or stock algod's 400 for `{id}/holders` as an ID), or no holders index (400 `asset holders require EnableTimeTravel and TimeTravelHoldersIndex`, or a store with N > 1): `DTUnsupportedError`;
+- time travel off (a 404 `Not Found`: the route is only registered with `EnableTimeTravel`) or the holders index off (400 `asset holders require EnableTimeTravel and TimeTravelHoldersIndex`): `DTUnsupportedError`. `supportsAssetHolders()` finds out first;
 - an asset that does not exist at the round, also a round before its creation: the node's 404 `asset does not exist`, passed through;
 - an index still being built: 503 `the asset holders index is not complete`, passed through; `isHistoryUnavailable(err)` recognizes it.
 
@@ -502,7 +500,7 @@ Code that falls back from query to simulate (or back) must handle these:
 
 The request body may be at most `MAX_QUERY_REQUEST_BYTES` (1,000,000) bytes of msgpack (`encodeMsgpack(request).length`), a fixed limit of the node that the limits endpoint does not report. The client checks none of these.
 
-- A node without the endpoint (404: stock algod, or a fork build without it) or with queries disabled (a 400 saying so) is thrown as a `DTUnsupportedError`.
+- A node with queries disabled (`MaxAPIQueryCalls` 0: a 400 saying so) is thrown as a `DTUnsupportedError`.
 - Results over `maxResponseBytes` fail with a 400 that `isQueryResponseTooLarge(err)` recognizes: split the request and retry.
 - Other 400s (too many calls or rounds, a round after the latest, an unknown protocol, a bad address) pass through.
 - A busy node answers 503 with `Retry-After` (query shares simulate's limiter), and a request over `timeLimitSeconds` 504.
@@ -535,34 +533,33 @@ if (!query) {
 
 `simulateLimits()` reads `GET /v2/transactions/simulate/limits` once per client and returns a frozen `SimulateLimitsResponse`:
 
-| Field                     | Meaning                                                                                                                                                     |
-| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `maxTxnGroups`            | groups per request                                                                                                                                          |
-| `maxRounds`               | `rounds` entries per request; 0 when `rounds` is off                                                                                                        |
-| `maxExtraOpcodeBudget`    | most `extraOpcodeBudget`, per group                                                                                                                         |
-| `resourceLimitMultiplier` | the node's `SimulateResourceLimitMultiplier`                                                                                                                |
-| `timeTravel`              | `EnableTimeTravel` is on                                                                                                                                    |
-| `developerApi`            | `EnableDeveloperAPI` is on (`execTraceConfig`, protocol `future`)                                                                                           |
-| `maxExecTraceBytes`       | most bytes of execution trace, 0 for no limit; undefined when not reported                                                                                  |
-| `timeLimitSeconds`        | how long the node evaluates a simulate or query request before a 504, 0 for no limit; undefined when not reported                                           |
-| `query`                   | `QueryLimits` of `POST /v2/query` (`maxCalls`, `maxCallBudget`, `maxCallLogBytes`, `maxResponseBytes`, `maxRounds`); undefined when the node has no queries |
-| `reported`                | the node reported these; false for the fallback below                                                                                                       |
+| Field                     | Meaning                                                                                                                                                                       |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `maxTxnGroups`            | groups per request                                                                                                                                                            |
+| `maxRounds`               | `rounds` entries per request; 0 when `rounds` is off                                                                                                                          |
+| `maxExtraOpcodeBudget`    | most `extraOpcodeBudget`, per group                                                                                                                                           |
+| `resourceLimitMultiplier` | the node's `SimulateResourceLimitMultiplier`                                                                                                                                  |
+| `timeTravel`              | `EnableTimeTravel` is on                                                                                                                                                      |
+| `developerApi`            | `EnableDeveloperAPI` is on (`execTraceConfig`, protocol `future`)                                                                                                             |
+| `timeLimitSeconds`        | how long the node works on a simulate, query, versions or delta request before a 504, 0 for no limit                                                                          |
+| `query`                   | `QueryLimits` of `POST /v2/query` (`maxCalls`, `maxCallBudget`, `maxCallLogBytes`, `maxCallStateBytes`, `maxResponseBytes`, `maxRounds`); undefined when queries are disabled |
+| `reported`                | the node reported these; false for the fallback below                                                                                                                         |
 
-`maxExecTraceBytes`, `timeLimitSeconds` and `query` are absent from older fork builds' answers and undefined then; a 0 from the node means no limit, so they are never defaulted to 0. `query` is frozen too.
+A 0 limit from the node means no limit. `query` is frozen too.
 
-A node without the endpoint (stock algod, or an older fork build) gets stock algod's limits instead (`SimulateLimitsResponse.stock()`), with `reported` false: one group per request and no `rounds`, so send one request per round with `round` set. `timeTravel` and `developerApi` are then unknown and read false, so do not gate on them unless `reported` is true. `getSimulateLimits()` is the uncached request, which throws `DTUnsupportedError` on a 404.
+Every dtalgod node serves the limits, so stock algod is the only node without them: it gets stock algod's limits instead (`SimulateLimitsResponse.stock()`), with `reported` false: one group per request, no `rounds`, no time travel and no queries, so send one request per round with `round` set. `getSimulateLimits()` is the uncached request, which throws `DTUnsupportedError` on a 404.
 
 ## Busy, time limit and history errors
 
-Helpers that take the error a request threw (an HTTP error from `HTTPClient`, with `status` and `response`) and say what kind of failure it is. They match the status and the node's message, so they work in browsers, which can't read `Retry-After` on a cross-origin request.
+Helpers that take the error a request threw (an HTTP error from `HTTPClient`, with `status` and `response`) and say what kind of failure it is. They match the status and the node's message, not headers.
 
-| Helper                      | Matches                                                                                                                 | What to do                                                                      |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| `isNodeBusy(err)`           | 503 "the node is busy" (simulate, query, versions and deltas share a concurrency limit)                                 | retry after `retryAfterSeconds(err) ?? 1` seconds, or on another node           |
-| `retryAfterSeconds(err)`    | the `Retry-After` header, in seconds or as an HTTP date; undefined without one                                          | a delay for the retry                                                           |
-| `isTimeLimitExceeded(err)`  | 504, the node's time limit (`RestWriteTimeoutSeconds`; `timeLimitSeconds` in `simulateLimits()`)                        | split the request (fewer groups, calls, rounds, a smaller page); don't retry it |
-| `isRoundTooLarge(err)`      | 400 "too many boxes at one round" or "too many objects to merge", from versions `rounds`                                | narrow it: a box `prefix()`, fewer objects, or reads at that round              |
-| `isHistoryUnavailable(err)` | 503 "the box index is incomplete", "the asset holders index is not complete" or "the time travel history is not served" | fall back to reads at a round, another node or an indexer; retrying soon fails  |
+| Helper                      | Matches                                                                                                                                                                                          | What to do                                                                      |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------- |
+| `isNodeBusy(err)`           | 503 "the node is busy" (simulate, query, versions and deltas share a concurrency limit), or "every slot for re-evaluating old rounds is in use" (deltas of rounds older than the in-memory ones) | retry after `retryAfterSeconds(err) ?? 1` seconds, or on another node           |
+| `retryAfterSeconds(err)`    | the `Retry-After` header, in seconds or as an HTTP date; undefined without one                                                                                                                   | a delay for the retry                                                           |
+| `isTimeLimitExceeded(err)`  | 504, the node's time limit (`RestWriteTimeoutSeconds`; `timeLimitSeconds` in `simulateLimits()`)                                                                                                 | split the request (fewer groups, calls, rounds, a smaller page); don't retry it |
+| `isRoundTooLarge(err)`      | 400 "one round of boxes is too large" (boxes versions with `rounds`) or "too many objects to merge" (account versions, or boxes versions with `rounds`)                                          | narrow it: a box `prefix()`, fewer objects, or reads at that round              |
+| `isHistoryUnavailable(err)` | 503 "the box index is incomplete", "the asset holders index is not complete" or "the time travel history is not served"                                                                          | fall back to reads at a round, another node or an indexer; retrying soon fails  |
 
 ```typescript
 for (let attempt = 0; ; attempt++) {
@@ -588,19 +585,23 @@ const { data, headers } = await algod
 console.log(data.versions.length, algosdk.effortOf(headers)?.lookups);
 ```
 
-Browsers can read neither `Retry-After` nor `X-Algod-Effort` on a cross-origin request until algod lists them in `Access-Control-Expose-Headers`, which it does not yet: there `retryAfterSeconds` gives undefined and `effortOf` undefined.
+dt-algorand lists both `Retry-After` and `X-Algod-Effort` in `Access-Control-Expose-Headers`, so browsers can read them on a cross-origin request. A proxy in front of the node may still drop them, so have a default for `retryAfterSeconds`.
 
-## Running against stock algod
+## Optional node features
 
-`DTAlgodClient` works against a stock node for everything inherited from `AlgodClient`. For the additions:
+dtalgosdk covers the API of the current dt-algorand release. Every dt-algorand node has the limits endpoint, several groups per simulate request, `parallelGroups()`, `protocol()` and the query endpoint; the rest depends on its config. `simulateLimits()` reads it once per client, and only the asset holders index needs a probe of its own:
 
-- `supportsDT()` probes a `/versions` route once per client and answers whether the node has time travel. Use it to fall back to an indexer.
-- A stock node's rejection of a fork feature, or a response that ignored one (a read for another round, `rounds` without one result per round, a validity window mode not echoed, `protocol` without `protocolOverride`), is thrown as a `DTUnsupportedError`. Catch it once and fall back, for example to one group per simulate request.
-- `query()` on a node without `POST /v2/query` (404) or with queries disabled is thrown as a `DTUnsupportedError`. Check `(await simulateLimits()).query` first, and simulate when it is undefined.
-- A time-travel node built before `getApplicationBoxesVersions` passes `supportsDT()` and answers that method with a 404, thrown as `DTUnsupportedError`.
-- `doWithHeaders()` and the error helpers work against any node; the errors they recognize come only from fork nodes.
-- `getAssetHolders` needs dt-algorand `v5.0.4-dt3` or later with `TimeTravelHoldersIndex`; otherwise it throws `DTUnsupportedError`.
-- Versions `rounds()` and `include('keys')` need a build after dt-algorand `v5.0.4-dt3`. On dt3 and older, `rounds` is dropped (the answer is detected and thrown as `DTUnsupportedError`) and `keys` is a 400 (thrown as `DTUnsupportedError`). On stock algod the versions routes don't exist.
+| Feature                                                                 | Node config                                | How to tell                                                    | When off                                                                         |
+| ----------------------------------------------------------------------- | ------------------------------------------ | -------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| Time travel: reads at past rounds, `...Versions`, simulate at any round | `EnableTimeTravel`                         | `supportsDT()` (`timeTravel` of the limits)                    | `DTUnsupportedError` (the `/versions` and holders routes 404, `round` is a 400)  |
+| Asset holders                                                           | `TimeTravelHoldersIndex` (and time travel) | `supportsAssetHolders()`, one probe that reads nothing, cached | `DTUnsupportedError`; an index not built yet is a 503 for `isHistoryUnavailable` |
+| Query                                                                   | `MaxAPIQueryCalls` above 0                 | `query` of the limits                                          | `DTUnsupportedError`                                                             |
+| Simulate `rounds` and the validity window modes                         | `MaxAPISimulateRounds` above 0             | `maxRounds` of the limits                                      | `DTUnsupportedError`                                                             |
+| Several groups per simulate request                                     | `MaxAPISimulateGroups` above 1             | `maxTxnGroups` of the limits                                   | the node's 400 `too many transaction groups`                                     |
+| Execution traces, protocol `future`                                     | `EnableDeveloperAPI`                       | `developerApi` of the limits                                   | the node's 400                                                                   |
+| `X-Algod-Effort`                                                        | `EnableEffortHeader`                       | the header is present                                          | `effortOf(headers)` is undefined                                                 |
+
+Against stock algod, `DTAlgodClient` works for everything inherited from `AlgodClient`. `simulateLimits()` falls back to stock algod's limits (`reported` false), so `supportsDT()` and `supportsAssetHolders()` are false and `query` is undefined. Gate the additions on these: stock algod ignores `round` and answers with the latest state, rejects the fork's simulate fields with its own 400, and answers the fork's routes unevenly: `getAssetVersions`, `accountAssetVersions`, `accountApplicationVersions` and `getAssetHolders` get its router's 400 (`Invalid format for parameter asset-id` or `application-id`), thrown as the plain HTTP error, while the other `...Versions` methods get a 404, thrown as a `DTUnsupportedError` that says time travel is off.
 
 ## Bug fixes and changes to upstream code
 
@@ -621,7 +622,7 @@ GitHub Actions publishes dtalgosdk, with [`.github/workflows/dtalgosdk.yml`](.gi
 
 1. Choose the version, `<algosdk version>-dt.<dt-algorand release>.<SDK release>`:
    - the algosdk version the code is built on; change it when merging a new upstream release;
-   - the number of the latest dt-algorand release (`v5.0.4-dt2` is 2) whose API the SDK covers. It says what the SDK covers, not what it requires: the client detects missing node features at runtime. Keep the dot (`dt.2`, not `dt2`), so that npm compares it as a number and `dt.10` sorts after `dt.9`;
+   - the number of the latest dt-algorand release (`v5.0.4-dt2` is 2) whose API the SDK covers. Nodes of older dt-algorand releases are not supported; the client detects only the optional features of the current release (see [Optional node features](#optional-node-features)). Keep the dot (`dt.2`, not `dt2`), so that npm compares it as a number and `dt.10` sorts after `dt.9`;
    - the SDK's own release, `x.y.z`: bump `x` for a breaking change to the fork's API, `y` for features and `z` for fixes. Reset it to `0.0.1` when either of the parts before it changes.
 2. Set it and update the docs: `npm version <version> --no-git-tag-version`, `npm run build`, then `node scripts/ci/dtalgosdk-release.js update`. The script sets the version in the install snippets and CDN URLs in `README.md` and in this file, and the browser bundle's `integrity` hash in `README.md`.
 3. `npm test`, then `npm pack --dry-run` to check the contents (`dist/`, `src/`, `README.md`, `DTALGOSDK.md`, `LICENSE`).

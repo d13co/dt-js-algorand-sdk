@@ -71,17 +71,9 @@ export default class AccountApplicationVersions extends VersionsRequest<
    * they have none with `exclude('created-apps-params')`.
    */
   // eslint-disable-next-line class-methods-use-this
-  protected keysIgnored(page: AccountVersionsResponse): boolean {
-    return page.versions.some((v) =>
-      (v.appsLocalState ?? []).some(
-        (ls) => !ls.deleted && ls.changedKeys === undefined
-      )
-    );
-  }
 
+  // eslint-disable-next-line class-methods-use-this
   prepare(response: HTTPClientResponse): AccountVersionsResponse {
-    return this.checkPage(
-      decodeDTJSON(response.getJSONText(), AccountVersionsResponse)
-    );
+    return decodeDTJSON(response.getJSONText(), AccountVersionsResponse);
   }
 }

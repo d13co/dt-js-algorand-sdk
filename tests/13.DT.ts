@@ -135,6 +135,17 @@ const status = (code: number) => () => ({
   status: code,
   json: { message: 'nope' },
 });
+/** What a dtalgod node with time travel answers to the limits request. */
+const nodeLimits = {
+  'max-txn-groups': 8,
+  'max-rounds': 4,
+  'max-extra-opcode-budget': 640000,
+  'resource-limit-multiplier': 2,
+  'time-limit-seconds': 108,
+  'time-travel': true,
+  'developer-api': false,
+};
+
 const badRequest = (message: string) => () => ({
   status: 400,
   json: { message },
@@ -174,23 +185,6 @@ describe('time travel', () => {
       assert.strictEqual(stub.calls[0].query.round, '0');
     });
 
-    it('throws when the node answers for another round', async () => {
-      // Stock algod ignores round on /box and answers for the latest round.
-      const stub = new StubClient([
-        ok({ round: 50000000, name: 'Y29uZmln', value: 'AAAAAAAAAAI=' }),
-      ]);
-      await assert.rejects(
-        new DTAlgodClient(stub, '')
-          .getApplicationBoxByName(1234, name)
-          .round(45000000)
-          .do(),
-        (err: unknown) =>
-          err instanceof DTUnsupportedError &&
-          err.requestedRound === BigInt(45000000) &&
-          err.returnedRound === BigInt(50000000)
-      );
-    });
-
     it('does not check the round when none was asked for', async () => {
       const stub = new StubClient([
         ok({ round: 50000000, name: 'Y29uZmln', value: 'AAAAAAAAAAI=' }),
@@ -204,14 +198,6 @@ describe('time travel', () => {
   });
 
   describe('getApplicationBoxes', () => {
-    it('checks the round of the response', async () => {
-      const stub = new StubClient([ok({ round: 7, boxes: [] })]);
-      await assert.rejects(
-        new DTAlgodClient(stub, '').getApplicationBoxes(1).round(6).do(),
-        DTUnsupportedError
-      );
-    });
-
     it('accepts a response for the asked round', async () => {
       const stub = new StubClient([
         ok({ round: 6, boxes: [{ name: 'AA==' }], 'next-token': 'b64:AA==' }),
@@ -495,18 +481,6 @@ describe('time travel', () => {
       assert.strictEqual(request.query.next, undefined);
     });
 
-    it("recognizes stock algod's 400 should it route the path as an ID", async () => {
-      const stub = new StubClient([
-        badRequest(
-          'Invalid format for parameter application-id: error binding string parameter: strconv.ParseUint: parsing "1/boxes/versions": invalid syntax'
-        ),
-      ]);
-      await assert.rejects(
-        new DTAlgodClient(stub, '').getApplicationBoxesVersions(1).do(),
-        DTUnsupportedError
-      );
-    });
-
     it('passes a 400 for a bad next token through', async () => {
       // The same "parsing ...: invalid syntax" tail as stock algod's ID error.
       const stub = new StubClient([
@@ -544,45 +518,139 @@ describe('time travel', () => {
     });
   });
 
+  it('lists the features that algokit-utils and generated clients check', () => {
+    // algokit-utils' REQUIRED_DT_FEATURES and optional ones, and ghostkit's.
+    for (const f of [
+      'reads-at-round',
+      'versions',
+      'simulate-groups',
+      'parallel-groups',
+      'simulate-rounds',
+      'from',
+      'group-results',
+      'from-transactions',
+      'pack-rounds',
+      'validity-window',
+      'simulate-protocol',
+      'simulate-limits',
+      'query',
+    ]) {
+      assert.ok(DTAlgodClient.features.includes(f), f);
+    }
+    assert.ok(Object.isFrozen(DTAlgodClient.features));
+    assert.strictEqual(
+      (algosdk as unknown as { DTAlgodClient: typeof DTAlgodClient })
+        .DTAlgodClient.features,
+      DTAlgodClient.features
+    );
+  });
+
   describe('supportsDT', () => {
-    it('is true when the versions route answers, and is cached', async () => {
-      const stub = new StubClient([ok({ round: 1, versions: [] })]);
+    it('reads timeTravel from the limits, sharing their request', async () => {
+      const stub = new StubClient([ok(nodeLimits)]);
       const client = new DTAlgodClient(stub, '');
       assert.strictEqual(await client.supportsDT(), true);
       assert.strictEqual(await client.supportsDT(), true);
+      await client.simulateLimits();
       assert.strictEqual(stub.calls.length, 1);
+      assert.strictEqual(
+        stub.calls[0].path,
+        '/v2/transactions/simulate/limits'
+      );
     });
 
-    it('is true when the route rejects the probe with 400', async () => {
-      const stub = new StubClient([status(400)]);
-      assert.strictEqual(await new DTAlgodClient(stub, '').supportsDT(), true);
+    it('is false on a dtalgod node with time travel off', async () => {
+      const stub = new StubClient([
+        ok({ ...nodeLimits, 'time-travel': false }),
+      ]);
+      assert.strictEqual(await new DTAlgodClient(stub, '').supportsDT(), false);
     });
 
-    it('is false when the route is missing', async () => {
+    it('is false on stock algod, which has no limits endpoint', async () => {
       const stub = new StubClient([status(404)]);
       assert.strictEqual(await new DTAlgodClient(stub, '').supportsDT(), false);
     });
 
     it('rethrows other errors without caching them', async () => {
-      const stub = new StubClient([
-        status(401),
-        ok({ round: 1, versions: [] }),
-      ]);
+      const stub = new StubClient([status(401), ok(nodeLimits)]);
       const client = new DTAlgodClient(stub, '');
       await assert.rejects(client.supportsDT());
       assert.strictEqual(await client.supportsDT(), true);
     });
+
+    it('shares one request between concurrent calls', async () => {
+      const stub = new StubClient([ok(nodeLimits)]);
+      const client = new DTAlgodClient(stub, '');
+      assert.deepStrictEqual(
+        await Promise.all([client.supportsDT(), client.supportsDT()]),
+        [true, true]
+      );
+      assert.strictEqual(stub.calls.length, 1);
+    });
+  });
+
+  describe('supportsAssetHolders', () => {
+    it('is true when the node rejects the probe limit, and is cached', async () => {
+      const stub = new StubClient([
+        ok(nodeLimits),
+        badRequest('limit must be between 1 and 10000'),
+      ]);
+      const client = new DTAlgodClient(stub, '');
+      assert.strictEqual(await client.supportsAssetHolders(), true);
+      assert.strictEqual(await client.supportsAssetHolders(), true);
+      assert.strictEqual(stub.calls.length, 2);
+      assert.strictEqual(stub.calls[1].path, '/v2/assets/0/holders');
+      assert.deepStrictEqual(stub.calls[1].query, { limit: '0' });
+    });
+
+    it('is false with the holders index off', async () => {
+      const stub = new StubClient([
+        ok(nodeLimits),
+        badRequest(
+          'asset holders require EnableTimeTravel and TimeTravelHoldersIndex'
+        ),
+      ]);
+      assert.strictEqual(
+        await new DTAlgodClient(stub, '').supportsAssetHolders(),
+        false
+      );
+    });
+
+    it('is false without time travel, without probing', async () => {
+      for (const answer of [
+        ok({ ...nodeLimits, 'time-travel': false }),
+        status(404),
+      ]) {
+        const stub = new StubClient([answer]);
+        assert.strictEqual(
+          // eslint-disable-next-line no-await-in-loop
+          await new DTAlgodClient(stub, '').supportsAssetHolders(),
+          false
+        );
+        assert.strictEqual(stub.calls.length, 1);
+      }
+    });
+
+    it('rethrows other errors without caching them', async () => {
+      const stub = new StubClient([
+        ok(nodeLimits),
+        () => ({
+          status: 503,
+          json: { message: 'the time travel history is not served: x' },
+        }),
+        badRequest('limit must be between 1 and 10000'),
+      ]);
+      const client = new DTAlgodClient(stub, '');
+      await assert.rejects(
+        client.supportsAssetHolders(),
+        (err) => (err as { status?: number }).status === 503
+      );
+      assert.strictEqual(await client.supportsAssetHolders(), true);
+    });
   });
 
   describe('simulateLimits', () => {
-    const limits = {
-      'max-txn-groups': 8,
-      'max-rounds': 4,
-      'max-extra-opcode-budget': 640000,
-      'resource-limit-multiplier': 2,
-      'time-travel': true,
-      'developer-api': false,
-    };
+    const limits = nodeLimits;
 
     it('decodes the node limits and caches them', async () => {
       const stub = new StubClient([ok(limits)]);
@@ -598,8 +666,7 @@ describe('time travel', () => {
           resourceLimitMultiplier: 2,
           timeTravel: true,
           developerApi: false,
-          maxExecTraceBytes: undefined,
-          timeLimitSeconds: undefined,
+          timeLimitSeconds: 108,
           query: undefined,
           reported: true,
         }
@@ -630,6 +697,8 @@ describe('time travel', () => {
       assert.strictEqual(got.maxTxnGroups, 1);
       assert.strictEqual(got.maxRounds, 0);
       assert.strictEqual(got.maxExtraOpcodeBudget, 320000);
+      assert.strictEqual(got.timeTravel, false);
+      assert.strictEqual(got.query, undefined);
       assert.strictEqual(got.reported, false);
       assert.ok(Object.isFrozen(got));
       assert.strictEqual(await client.simulateLimits(), got);
@@ -678,25 +747,20 @@ describe('time travel', () => {
       assert.strictEqual(stub.calls.length, 1);
     });
 
-    it('is listed in features', () => {
-      assert.ok(DTAlgodClient.features.includes('simulate-limits'));
-    });
-
-    // What a node with POST /v2/query answers (127.0.0.1:8081, 2026-10-26).
+    // What a node with queries on answers (dtalgorand e30b77b27, defaults).
     const withQuery = {
       ...limits,
-      'max-exec-trace-bytes': 268435456,
-      'time-limit-seconds': 119,
       query: {
         'max-call-budget': 320000,
         'max-call-log-bytes': 65536,
+        'max-call-state-bytes': 67108864,
         'max-calls': 1024,
         'max-response-bytes': 67108864,
         'max-rounds': 16,
       },
     };
 
-    it('decodes the query limits, frozen, and the newer fields', async () => {
+    it('decodes the query limits, frozen', async () => {
       const stub = new StubClient([ok(withQuery)]);
       const got = await new DTAlgodClient(stub, '').simulateLimits();
       assert.ok(got.query instanceof QueryLimits);
@@ -706,61 +770,52 @@ describe('time travel', () => {
           maxCalls: 1024,
           maxCallBudget: 320000,
           maxCallLogBytes: 65536,
+          maxCallStateBytes: 67108864,
           maxResponseBytes: 67108864,
           maxRounds: 16,
         }
       );
       assert.ok(Object.isFrozen(got.query));
-      assert.strictEqual(got.maxExecTraceBytes, 268435456);
-      assert.strictEqual(got.timeLimitSeconds, 119);
     });
 
     it('keeps 0 limits as 0, which means no limit', async () => {
       const stub = new StubClient([
         ok({
           ...withQuery,
-          'max-exec-trace-bytes': 0,
           'time-limit-seconds': 0,
           query: {
             ...withQuery.query,
             'max-call-log-bytes': 0,
+            'max-call-state-bytes': 0,
             'max-response-bytes': 0,
           },
         }),
       ]);
       const got = await new DTAlgodClient(stub, '').simulateLimits();
-      assert.strictEqual(got.maxExecTraceBytes, 0);
       assert.strictEqual(got.timeLimitSeconds, 0);
       assert.strictEqual(got.query!.maxCallLogBytes, 0);
+      assert.strictEqual(got.query!.maxCallStateBytes, 0);
       assert.strictEqual(got.query!.maxResponseBytes, 0);
     });
 
-    it('leaves query and the newer fields undefined when absent', async () => {
+    it('leaves query undefined when queries are disabled', async () => {
       const stub = new StubClient([ok(limits)]);
       const got = await new DTAlgodClient(stub, '').simulateLimits();
       assert.strictEqual(got.query, undefined);
-      assert.strictEqual(got.maxExecTraceBytes, undefined);
-      assert.strictEqual(got.timeLimitSeconds, undefined);
       const stock = SimulateLimitsResponse.stock();
       assert.strictEqual(stock.query, undefined);
-      assert.strictEqual(stock.maxExecTraceBytes, undefined);
-      assert.strictEqual(stock.timeLimitSeconds, undefined);
-      assert.ok(
-        !/query|max-exec-trace-bytes|time-limit-seconds/.test(
-          algosdk.encodeJSON(stock)
-        )
-      );
+      assert.strictEqual(stock.timeLimitSeconds, 0);
+      assert.ok(!/query/.test(algosdk.encodeJSON(stock)));
     });
 
-    it('encodes the query limits as the node does', () => {
-      const decoded = algosdk.decodeJSON(
-        JSON.stringify(withQuery),
-        SimulateLimitsResponse
-      );
-      assert.deepStrictEqual(
-        JSON.parse(algosdk.encodeJSON(decoded)),
-        withQuery
-      );
+    it('encodes the limits as the node does', () => {
+      for (const body of [limits, withQuery]) {
+        const decoded = algosdk.decodeJSON(
+          JSON.stringify(body),
+          SimulateLimitsResponse
+        );
+        assert.deepStrictEqual(JSON.parse(algosdk.encodeJSON(decoded)), body);
+      }
     });
 
     it('does not encode reported', () => {
@@ -1113,22 +1168,18 @@ describe('time travel', () => {
       assert.deepStrictEqual(got, body);
     });
 
-    it('throws a node without queries as DTUnsupportedError', async () => {
-      for (const handler of [
-        () => ({ status: 404, json: { message: 'Not Found' } }),
+    it('throws a node with queries disabled as DTUnsupportedError', async () => {
+      const stub = new StubClient([
         badRequest('query is disabled on this node (MaxAPIQueryCalls is 0)'),
-      ]) {
-        const stub = new StubClient([handler]);
-        // eslint-disable-next-line no-await-in-loop
-        await assert.rejects(
-          new DTAlgodClient(stub, '')
-            .query({ program: PROGRAM, calls: [{}] })
-            .do(),
-          (err) =>
-            err instanceof DTUnsupportedError &&
-            [400, 404].includes((err.cause as { status?: number }).status!)
-        );
-      }
+      ]);
+      await assert.rejects(
+        new DTAlgodClient(stub, '')
+          .query({ program: PROGRAM, calls: [{}] })
+          .do(),
+        (err) =>
+          err instanceof DTUnsupportedError &&
+          (err.cause as { status?: number }).status === 400
+      );
     });
 
     it('passes other errors through', async () => {
@@ -1235,62 +1286,10 @@ describe('time travel', () => {
       );
       assert.deepStrictEqual(back, request);
     });
-
-    it('is a feature exported from the package', () => {
-      assert.ok(DTAlgodClient.features.includes('query'));
-      assert.strictEqual(algosdk.dtModels.QueryRequest, QueryRequest);
-      assert.strictEqual(algosdk.dtModels.QueryLimits, QueryLimits);
-      assert.strictEqual(
-        algosdk.isQueryResponseTooLarge,
-        isQueryResponseTooLarge
-      );
-      assert.strictEqual(algosdk.MAX_QUERY_REQUEST_BYTES, 1_000_000);
-      assert.strictEqual(algosdk.QUERY_LOG_OVERHEAD_BYTES, 48);
-      const builder: algosdk.RunQuery = new DTAlgodClient(
-        new StubClient([]),
-        ''
-      ).query({ appId: 1, calls: [{}] });
-      assert.strictEqual(builder.path(), '/v2/query');
-    });
   });
 
   describe('reads at a round', () => {
     const addr = 'RETICA7ZSQTWPWFB7KTF4CPHJDPRXTPQYIMY6DOUQ72I2JD3T5RRDXTUSQ';
-
-    it('checks the round of an account', async () => {
-      const account = { address: addr, amount: 5, round: 120 };
-      const stub = new StubClient([
-        ok(account),
-        ok({ ...account, round: 121 }),
-      ]);
-      const client = new DTAlgodClient(stub, '');
-
-      const res = await client
-        .accountInformation(addr)
-        .exclude('all')
-        .round(120)
-        .do();
-      assert.strictEqual(res.round, BigInt(120));
-      assert.deepStrictEqual(stub.calls[0], {
-        path: `/v2/accounts/${addr}`,
-        query: { exclude: 'all', round: '120' },
-      });
-      await assert.rejects(
-        client.accountInformation(addr).round(120).do(),
-        DTUnsupportedError
-      );
-    });
-
-    it('checks the current_round of the supply', async () => {
-      const supply = { current_round: 9, 'online-money': 1, 'total-money': 2 };
-      const stub = new StubClient([ok(supply), ok(supply)]);
-      const client = new DTAlgodClient(stub, '');
-      assert.strictEqual(
-        (await client.supply().round(9).do()).currentRound,
-        BigInt(9)
-      );
-      await assert.rejects(client.supply().round(8).do(), DTUnsupportedError);
-    });
 
     it('sends round on asset and application lookups', async () => {
       const stub = new StubClient([
@@ -1392,22 +1391,6 @@ describe('time travel', () => {
       );
     });
 
-    it("recognizes stock algod's 400 for a versions route it routes as an ID", async () => {
-      const stub = new StubClient([
-        () => ({
-          status: 400,
-          json: {
-            message:
-              'Invalid format for parameter asset-id: error binding string parameter: strconv.ParseUint: parsing "31566704/versions": invalid syntax',
-          },
-        }),
-      ]);
-      await assert.rejects(
-        new DTAlgodClient(stub, '').getAssetVersions(31566704).do(),
-        DTUnsupportedError
-      );
-    });
-
     it('decodes asset, application and created-object versions', async () => {
       const asset = {
         index: 7,
@@ -1502,21 +1485,6 @@ describe('time travel', () => {
       );
     });
 
-    it('reports a node without history as unsupported', async () => {
-      const stub = new StubClient([
-        badRequest('versions require EnableTimeTravel'),
-        badRequest('versions require EnableTimeTravel'),
-      ]);
-      const client = new DTAlgodClient(stub, '');
-      await assert.rejects(
-        client.getAssetVersions(7).do(),
-        (err: unknown) =>
-          err instanceof DTUnsupportedError &&
-          (err.cause as { status?: number }).status === 400
-      );
-      assert.strictEqual(await client.supportsDT(), false);
-    });
-
     it('sends limit 0 instead of dropping it', async () => {
       const stub = new StubClient([ok({ round: 1, versions: [] })]);
       await new DTAlgodClient(stub, '').getAssetVersions(7).limit(0).do();
@@ -1574,67 +1542,6 @@ describe('time travel', () => {
   describe('reads at a round: edge cases', () => {
     const addr = 'RETICA7ZSQTWPWFB7KTF4CPHJDPRXTPQYIMY6DOUQ72I2JD3T5RRDXTUSQ';
 
-    it('checks the round of the account asset and application reads', async () => {
-      const reads: Array<[unknown, (c: DTAlgodClient) => Promise<unknown>]> = [
-        [{ round: 5 }, (c) => c.accountAssetInformation(addr, 7).round(4).do()],
-        [
-          { round: 5 },
-          (c) => c.accountApplicationInformation(addr, 8).round(4).do(),
-        ],
-        [
-          { round: 5, 'asset-holdings': [] },
-          (c) => c.accountAssetsInformation(addr).round(4).do(),
-        ],
-        [
-          { round: 5, 'apps-local-states': [] },
-          (c) => c.accountApplicationsInformation(addr).round(4).do(),
-        ],
-      ];
-      for (const [json, read] of reads) {
-        const stub = new StubClient([
-          ok(json),
-          ok({ ...(json as object), round: 4 }),
-        ]);
-        const client = new DTAlgodClient(stub, '');
-        // eslint-disable-next-line no-await-in-loop
-        await assert.rejects(
-          read(client),
-          (err: unknown) =>
-            err instanceof DTUnsupportedError && err.returnedRound === BigInt(5)
-        );
-        // eslint-disable-next-line no-await-in-loop
-        await read(client);
-        assert.strictEqual(stub.calls[1].query.round, '4');
-      }
-    });
-
-    it('does not take a missing round for round 0', async () => {
-      const stub = new StubClient([ok({ name: 'AA==', value: '' })]);
-      await assert.rejects(
-        new DTAlgodClient(stub, '')
-          .getApplicationBoxByName(1, new Uint8Array([0]))
-          .round(0)
-          .do(),
-        (err: unknown) =>
-          err instanceof DTUnsupportedError && err.returnedRound === undefined
-      );
-    });
-
-    it('checks the round in doRaw, and returns the body as received', async () => {
-      const box = { round: 50, name: 'Y29uZmln', value: 'AAAAAAAAAAI=' };
-      const stub = new StubClient([ok(box), ok(box)]);
-      const client = new DTAlgodClient(stub, '');
-      await assert.rejects(
-        client.getApplicationBoxByName(1234, name).round(45).doRaw(),
-        DTUnsupportedError
-      );
-      const raw = await client
-        .getApplicationBoxByName(1234, name)
-        .round(50)
-        .doRaw();
-      assert.deepStrictEqual(JSON.parse(new TextDecoder().decode(raw)), box);
-    });
-
     it('turns a refusal to read a past round into DTUnsupportedError', async () => {
       const stub = new StubClient([
         badRequest('looking up past rounds requires EnableTimeTravel'),
@@ -1667,16 +1574,6 @@ describe('time travel', () => {
         (err: { status?: number }) =>
           !(err instanceof DTUnsupportedError) && err.status === 400
       );
-    });
-
-    it('shares one probe between concurrent supportsDT calls', async () => {
-      const stub = new StubClient([ok({ round: 1, versions: [] })]);
-      const client = new DTAlgodClient(stub, '');
-      assert.deepStrictEqual(
-        await Promise.all([client.supportsDT(), client.supportsDT()]),
-        [true, true]
-      );
-      assert.strictEqual(stub.calls.length, 1);
     });
   });
   describe('simulate', () => {
@@ -1900,40 +1797,9 @@ describe('time travel', () => {
     const stockUnknownField = badRequest(
       'failed to decode object: json decode error [pos 1]: only encoded map or array can be decoded into a struct'
     );
-    const isUnsupported = (err: unknown) =>
-      err instanceof DTUnsupportedError &&
-      (err.cause as { status?: number }).status === 400;
     const isPlain400 = (err: unknown) =>
       !(err instanceof DTUnsupportedError) &&
       (err as { status?: number }).status === 400;
-
-    it("reports stock algod's one-group limit as unsupported", async () => {
-      const stub = new StubClient([stockOneGroup]);
-      await assert.rejects(
-        new DTAlgodClient(stub, '')
-          .simulateTransactions(
-            new SimulateRequest({ txnGroups: [group(1), group(2)] })
-          )
-          .do(),
-        (err: unknown) =>
-          isUnsupported(err) &&
-          /only one transaction group per request, and this request has 2/.test(
-            (err as Error).message
-          )
-      );
-    });
-
-    it("reports stock algod's rejection of parallel-groups as unsupported", async () => {
-      const stub = new StubClient([stockUnknownField]);
-      await assert.rejects(
-        new DTAlgodClient(stub, '')
-          .simulateTransactions(new SimulateRequest({ txnGroups: [group(1)] }))
-          .parallelGroups()
-          .do(),
-        (err: unknown) =>
-          isUnsupported(err) && /parallel-groups/.test((err as Error).message)
-      );
-    });
 
     it('passes 400s through when the request uses no fork feature', async () => {
       const stub = new StubClient([
@@ -2121,130 +1987,26 @@ describe('time travel', () => {
         assert.strictEqual(stub.calls.length, 0);
       });
 
-      it('checks there is one result per entry', async () => {
-        const stub = new StubClient([
-          msgpack(
-            new SimulateResponse({ lastRound: 5, version: 2, txnGroups: [] })
-          ),
-          msgpack(roundsResponse(at(5))),
-        ]);
-        await assert.rejects(
-          simulateAt(stub, [5, 6]).do(),
-          (err: unknown) =>
-            err instanceof DTUnsupportedError &&
-            /no round-results/.test(err.message)
-        );
-        await assert.rejects(
-          simulateAt(stub, [5, 6]).do(),
-          (err: unknown) =>
-            err instanceof DTUnsupportedError &&
-            /answered with 1 round results/.test(err.message)
-        );
-      });
-
-      it('checks each result is for the round asked for', async () => {
-        const stub = new StubClient([
-          msgpack(roundsResponse(at(5), at(7))),
-          msgpack(
-            roundsResponse(
-              at(5, undefined, undefined),
-              at(8, undefined, undefined)
-            )
-          ),
-        ]);
-        await assert.rejects(
-          simulateAt(stub, [5, 6]).do(),
-          (err: unknown) =>
-            err instanceof DTUnsupportedError &&
-            err.requestedRound === BigInt(6) &&
-            err.returnedRound === BigInt(7)
-        );
-        // A 0 entry accepts whatever round the node resolved it to.
-        const res = await simulateAt(stub, [5, 0]).do();
-        assert.strictEqual(res.roundResults![1].lastRound, BigInt(8));
-      });
-
-      it('checks the round results in doRaw, and returns the body', async () => {
-        const good = encodeMsgpack(roundsResponse(at(5, undefined, undefined)));
-        const stub = new StubClient([
-          () => ({ status: 200, body: good }),
-          msgpack(roundsResponse(at(6))),
-        ]);
-        assert.deepStrictEqual(await simulateAt(stub, [5]).doRaw(), good);
-        await assert.rejects(simulateAt(stub, [5]).doRaw(), DTUnsupportedError);
-      });
-
-      it("reports stock algod's rejection of rounds as unsupported", async () => {
-        const stub = new StubClient([stockUnknownField]);
-        await assert.rejects(
-          new DTAlgodClient(stub, '')
-            .simulateTransactions(
-              new SimulateRequest({ txnGroups: [group(1)] })
-            )
-            .rounds([5])
-            .do(),
-          (err: unknown) =>
-            isUnsupported(err) && /rounds/.test((err as Error).message)
-        );
-      });
-
       it("passes the fork's rounds 400s through", async () => {
         const stub = new StubClient([
           badRequest('too many rounds: got 20, the limit is 16'),
+        ]);
+        await assert.rejects(simulateAt(stub, [1]).do(), isPlain400);
+      });
+
+      it('throws a node with rounds disabled as DTUnsupportedError', async () => {
+        const stub = new StubClient([
           badRequest(
             'rounds is disabled on this node (MaxAPISimulateRounds is 0)'
           ),
         ]);
-        await assert.rejects(simulateAt(stub, [1]).do(), isPlain400);
-        await assert.rejects(simulateAt(stub, [1]).do(), isPlain400);
+        await assert.rejects(
+          simulateAt(stub, [1]).do(),
+          (err) =>
+            err instanceof DTUnsupportedError &&
+            (err.cause as { status?: number }).status === 400
+        );
       });
-    });
-
-    it('checks there is one group result per requested group', async () => {
-      const stub = new StubClient([
-        msgpack(
-          new SimulateResponse({
-            lastRound: 1,
-            version: 2,
-            txnGroups: [groupResult(stxn(1))],
-          })
-        ),
-        msgpack(
-          new DTSimulateResponse({
-            lastRound: 0,
-            version: 2,
-            txnGroups: [],
-            roundResults: [
-              // A round that could not be simulated has no group results.
-              new SimulateRoundResult({
-                lastRound: 5,
-                txnGroups: [],
-                error: 'round 5 is not available',
-              }),
-              new SimulateRoundResult({
-                lastRound: 6,
-                txnGroups: [groupResult(stxn(1))],
-              }),
-            ],
-          })
-        ),
-      ]);
-      const client = new DTAlgodClient(stub, '');
-      const request = new SimulateRequest({ txnGroups: [group(1), group(2)] });
-      await assert.rejects(
-        client.simulateTransactions(request).do(),
-        (err: unknown) =>
-          err instanceof DTUnsupportedError &&
-          /Simulated 2 transaction groups but the node answered with 1 group results$/.test(
-            err.message
-          )
-      );
-      await assert.rejects(
-        client.simulateTransactions(request).rounds([5, 6]).do(),
-        (err: unknown) =>
-          err instanceof DTUnsupportedError &&
-          /answered with 1 group results in round result 1$/.test(err.message)
-      );
     });
 
     it('sends rounds and parallel-groups from a stock request', async () => {
@@ -2342,23 +2104,6 @@ describe('time travel', () => {
             TypeError
           );
         }
-      });
-
-      it('is found with its features on the package', () => {
-        assert.strictEqual(algosdk.DTAlgodClient, DTAlgodClient);
-        for (const feature of [
-          'from',
-          'group-results',
-          'from-transactions',
-          'pack-rounds',
-          'simulate-rounds',
-          'validity-window',
-          'simulate-protocol',
-        ]) {
-          assert.ok(DTAlgodClient.features.includes(feature), feature);
-        }
-        assert.strictEqual(algosdk.SimulateGroupError, SimulateGroupError);
-        assert.strictEqual(algosdk.packSimulateRounds, packSimulateRounds);
       });
     });
 
@@ -2519,30 +2264,6 @@ describe('time travel', () => {
             .groupResults()
             .map((row) => row.map((o) => (o.ok ? 'ok' : o.error.kind))),
           [['round', 'round']]
-        );
-      });
-
-      it('checks the group results in doRaw', async () => {
-        const stub = new StubClient([
-          msgpack(
-            new DTSimulateResponse({
-              lastRound: 0,
-              version: 2,
-              txnGroups: [],
-              roundResults: [
-                new SimulateRoundResult({
-                  lastRound: 5,
-                  txnGroups: [groupResult(stxn(1))],
-                }),
-              ],
-            })
-          ),
-        ]);
-        await assert.rejects(
-          call(stub).doRaw(),
-          (err: unknown) =>
-            err instanceof DTUnsupportedError &&
-            /answered with 1 group results in round result 0$/.test(err.message)
         );
       });
     });
@@ -2752,29 +2473,6 @@ describe('time travel', () => {
         }
       });
 
-      it('throws DTUnsupportedError when a mode is not echoed', async () => {
-        const stub = new StubClient([
-          msgpack(
-            response({
-              evalOverrides: new DTSimulationEvalOverrides({
-                allowEmptySignatures: true,
-              }),
-              roundResults: [roundResult(100)],
-            })
-          ),
-        ]);
-        await assert.rejects(
-          new DTAlgodClient(stub, '')
-            .simulateTransactions(request())
-            .rounds([100])
-            .skipValidityWindow()
-            .do(),
-          (err: Error) =>
-            err instanceof DTUnsupportedError &&
-            /skip-validity-window/.test(err.message)
-        );
-      });
-
       it('sends protocol and decodes the override at the top level', async () => {
         const stub = new StubClient([
           msgpack(
@@ -2851,39 +2549,6 @@ describe('time travel', () => {
         assert.strictEqual(results[2].protocolOverride!.applied, false);
       });
 
-      it('throws DTUnsupportedError when protocol-override is missing', async () => {
-        const single = new StubClient([msgpack(response({}))]);
-        await assert.rejects(
-          new DTAlgodClient(single, '')
-            .simulateTransactions(request())
-            .protocol('v42')
-            .do(),
-          (err: Error) =>
-            err instanceof DTUnsupportedError &&
-            /without a protocol-override;/.test(err.message)
-        );
-        const rounds = new StubClient([
-          msgpack(
-            response({
-              roundResults: [
-                roundResult(100, override('v24', 'v42')),
-                roundResult(200),
-              ],
-            })
-          ),
-        ]);
-        await assert.rejects(
-          new DTAlgodClient(rounds, '')
-            .simulateTransactions(request())
-            .rounds([100, 200])
-            .protocol('v42')
-            .doRaw(),
-          (err: Error) =>
-            err instanceof DTUnsupportedError &&
-            /in round result 1/.test(err.message)
-        );
-      });
-
       it('sends no protocol for an empty string', async () => {
         const stub = new StubClient([msgpack(response({}))]);
         await new DTAlgodClient(stub, '')
@@ -2892,23 +2557,6 @@ describe('time travel', () => {
           .protocol('')
           .do();
         assert.strictEqual(sent(stub).protocol, undefined);
-      });
-
-      it('names protocol when a node cannot decode it', async () => {
-        const stub = new StubClient([
-          badRequest(
-            'failed to decode object: json decode error [pos 1]: only encoded map or array can be decoded into a struct'
-          ),
-        ]);
-        await assert.rejects(
-          new DTAlgodClient(stub, '')
-            .simulateTransactions(request())
-            .protocol('v42')
-            .do(),
-          (err: Error) =>
-            err instanceof DTUnsupportedError &&
-            /sets protocol/.test(err.message)
-        );
       });
 
       it('encodes applied false and group 0 like the node', () => {
@@ -3432,33 +3080,6 @@ describe('versions: rounds, keys and pages', () => {
       assert.strictEqual(range.versions[0].changedRound, undefined);
     });
 
-    it('throws DTUnsupportedError when the node ignored rounds', async () => {
-      const stub = new StubClient([
-        // A dt3 node drops rounds and lists the versions of the whole range.
-        ok({
-          round: 9,
-          versions: [
-            { round: 2, timestamp: 20, deleted: false },
-            { round: 5, timestamp: 50, deleted: false },
-          ],
-        }),
-        ok({ round: 9, versions: [] }),
-      ]);
-      const client = new DTAlgodClient(stub, '');
-      await assert.rejects(
-        client.getAssetVersions(7).rounds([5, 7]).do(),
-        (err: unknown) =>
-          err instanceof DTUnsupportedError &&
-          err.returnedRound === BigInt(2) &&
-          /ignored rounds/.test(err.message)
-      );
-      await assert.rejects(
-        client.accountAssetVersions(addr, 7).rounds([5]).do(),
-        (err: unknown) =>
-          err instanceof DTUnsupportedError && /no entries/.test(err.message)
-      );
-    });
-
     it('pages through rounds with the next requested round as the token', async () => {
       const entry = (round: number) => ({
         round,
@@ -3555,57 +3176,6 @@ describe('versions: rounds, keys and pages', () => {
       assert.strictEqual(first.appsLocalState?.[1].changedKeys, undefined);
       assert.strictEqual(first.createdApps?.[0].changedKeys, undefined);
       assert.deepStrictEqual(second.createdApps?.[0].changedKeys, [key('g')]);
-    });
-
-    it('throws DTUnsupportedError when the node rejects include=keys', async () => {
-      const stub = new StubClient([badRequest('invalid include value: keys')]);
-      await assert.rejects(
-        new DTAlgodClient(stub, '')
-          .accountApplicationVersions(addr, 8)
-          .include('keys')
-          .do(),
-        (err: unknown) =>
-          err instanceof DTUnsupportedError &&
-          (err.cause as { status?: number }).status === 400
-      );
-    });
-
-    it('throws DTUnsupportedError when the node ignored include=keys', async () => {
-      const stub = new StubClient([
-        ok({
-          round: 9,
-          versions: [
-            { round: 2, timestamp: 20, deleted: true },
-            { round: 3, timestamp: 30, deleted: false },
-          ],
-        }),
-        ok({
-          round: 9,
-          versions: [
-            {
-              round: 2,
-              timestamp: 20,
-              'apps-local-state': [{ 'app-id': 8, deleted: false }],
-            },
-          ],
-        }),
-        // Without keys, the same answers are fine.
-        ok({
-          round: 9,
-          versions: [{ round: 3, timestamp: 30, deleted: false }],
-        }),
-      ]);
-      const client = new DTAlgodClient(stub, '');
-      await assert.rejects(
-        client.getApplicationVersions(8).include('keys').do(),
-        (err: unknown) =>
-          err instanceof DTUnsupportedError && /ignored keys/.test(err.message)
-      );
-      await assert.rejects(
-        client.accountApplicationVersions(addr, 8).include('keys').do(),
-        DTUnsupportedError
-      );
-      await client.getApplicationVersions(8).include('values').do();
     });
   });
 
@@ -3772,12 +3342,6 @@ describe('versions: rounds, keys and pages', () => {
       assert.match(encodeJSON(m), /"changed-round":[12]/);
     }
   });
-
-  it('lists the new features', () => {
-    for (const f of ['versions-rounds', 'versions-keys', 'versions-pages']) {
-      assert.ok(DTAlgodClient.features.includes(f), f);
-    }
-  });
 });
 
 describe('getAssetHolders', () => {
@@ -3846,37 +3410,12 @@ describe('getAssetHolders', () => {
     assert.deepStrictEqual(request.query, { limit: '1' });
   });
 
-  it('checks the round of every page', async () => {
-    const moved = new StubClient([
-      ok({ round: 777, holders: [holder(A, 1)], 'next-token': A }),
-      ok({ round: 778, holders: [] }),
-    ]);
-    const pages = new DTAlgodClient(moved, '').getAssetHolders(7).pages();
-    await pages.next();
-    await assert.rejects(
-      pages.next(),
-      (err: unknown) =>
-        err instanceof DTUnsupportedError &&
-        err.requestedRound === BigInt(777) &&
-        err.returnedRound === BigInt(778)
-    );
-    const stub = new StubClient([ok({ round: 9, holders: [] })]);
-    await assert.rejects(
-      new DTAlgodClient(stub, '').getAssetHolders(7).round(5).do(),
-      DTUnsupportedError
-    );
-  });
-
   it('maps a node without holders to DTUnsupportedError', async () => {
     const unsupported = [
       status404('Not Found'),
       badRequest(
-        'Invalid format for parameter asset-id: error binding string parameter: strconv.ParseUint: parsing "7/holders": invalid syntax'
-      ),
-      badRequest(
         'asset holders require EnableTimeTravel and TimeTravelHoldersIndex'
       ),
-      badRequest('asset holders need a time travel store with N = 1, not 16'),
     ];
     for (const answer of unsupported) {
       // eslint-disable-next-line no-await-in-loop
@@ -3931,7 +3470,6 @@ describe('getAssetHolders', () => {
       decodeJSON(encodeJSON(fast), algosdk.dtModels.AssetHoldersResponse),
       fast
     );
-    assert.ok(DTAlgodClient.features.includes('holders'));
   });
 });
 
@@ -4188,8 +3726,8 @@ describe('response headers and error helpers', () => {
     assert.strictEqual(algosdk.effortOf(headers)?.opcodes, 700);
     // The builder's checks apply as in do().
     await assert.rejects(
-      client.getAssetVersions(7).rounds([5]).doWithHeaders(),
-      DTUnsupportedError
+      client.getAssetVersions(7).rounds([5]).minRound(1).doWithHeaders(),
+      /rounds cannot be combined with minRound or maxRound/
     );
   });
 
@@ -4263,6 +3801,15 @@ describe('response headers and error helpers', () => {
       headers: { 'retry-after': 'soon' },
     });
     assert.strictEqual(algosdk.retryAfterSeconds(junk), undefined);
+    // The deltas of old rounds have their own busy message.
+    const reeval = await errorFor({
+      status: 503,
+      json: {
+        message: 'every slot for re-evaluating old rounds is in use',
+      },
+      headers: { 'retry-after': '1' },
+    });
+    assert.strictEqual(algosdk.isNodeBusy(reeval), true);
     // Another 503 is not busy.
     const history = await errorFor({
       status: 503,
@@ -4284,8 +3831,8 @@ describe('response headers and error helpers', () => {
     assert.strictEqual(algosdk.isTimeLimitExceeded(timeLimit), true);
     assert.strictEqual(algosdk.isNodeBusy(timeLimit), false);
     for (const message of [
-      'too many boxes at one round',
-      'too many objects to merge',
+      'one round of boxes is too large: 1200 boxes',
+      'too many objects to merge: use exclude or the per-resource versions endpoints',
     ]) {
       // eslint-disable-next-line no-await-in-loop
       const err = await errorFor({ status: 400, json: { message } });
@@ -4319,8 +3866,5 @@ describe('response headers and error helpers', () => {
       ),
       false
     );
-    for (const f of ['response-headers', 'error-helpers']) {
-      assert.ok(DTAlgodClient.features.includes(f), f);
-    }
   });
 });

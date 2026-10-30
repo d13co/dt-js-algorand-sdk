@@ -1,14 +1,13 @@
 import { HTTPClientResponse } from '../../../client.js';
 import { ensureBigInt } from '../../../../utils/utils.js';
 import GetApplicationBoxes from '../getApplicationBoxes.js';
-import { BoxesResponse } from '../models/types.js';
-import { checkRound, readAtRound } from './errors.js';
+import { readAtRound } from './errors.js';
 
 /**
  * {@link GetApplicationBoxes} whose `round` works at any past round on a
- * time-travel algod, and is checked against the response.
+ * time-travel algod.
  *
- * Without time travel, algod keeps only its last few rounds (`MaxAcctLookback`,
+ * With time travel off, algod keeps only its last few rounds (`MaxAcctLookback`,
  * default 4) and answers 400 `given round is no longer available` for older
  * ones, which is thrown as a {@link DTUnsupportedError}.
  */
@@ -47,12 +46,6 @@ export default class GetApplicationBoxesAt extends GetApplicationBoxes {
     return super.next(nextToken);
   }
 
-  prepare(response: HTTPClientResponse): BoxesResponse {
-    const boxes = super.prepare(response);
-    checkRound(this.requestedRound, boxes.round, response);
-    return boxes;
-  }
-
   protected executeRequest(
     headers?: Record<string, string>,
     customOptions?: Record<string, unknown>
@@ -61,20 +54,5 @@ export default class GetApplicationBoxesAt extends GetApplicationBoxes {
       this.requestedRound,
       super.executeRequest(headers, customOptions)
     );
-  }
-
-  /**
-   * Execute the request, returning the response body as received. With
-   * `round`, the response is also decoded to check its round.
-   * @param headers - Additional headers to send in the request. Optional.
-   * @param customOptions - Additional options to pass to the underlying BaseHTTPClient. Optional.
-   */
-  async doRaw(
-    headers?: Record<string, string>,
-    customOptions?: Record<string, unknown>
-  ): Promise<Uint8Array> {
-    const res = await this.executeRequest(headers, customOptions);
-    if (this.requestedRound !== undefined) this.prepare(res);
-    return res.body;
   }
 }

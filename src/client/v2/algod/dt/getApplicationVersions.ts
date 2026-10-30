@@ -72,13 +72,9 @@ export default class GetApplicationVersions extends VersionsRequest<
    * must have `changedKeys`, even an empty list.
    */
   // eslint-disable-next-line class-methods-use-this
-  protected keysIgnored(page: ApplicationVersionsResponse): boolean {
-    return page.versions.some((v) => !v.deleted && v.changedKeys === undefined);
-  }
 
+  // eslint-disable-next-line class-methods-use-this
   prepare(response: HTTPClientResponse): ApplicationVersionsResponse {
-    return this.checkPage(
-      decodeDTJSON(response.getJSONText(), ApplicationVersionsResponse)
-    );
+    return decodeDTJSON(response.getJSONText(), ApplicationVersionsResponse);
   }
 }

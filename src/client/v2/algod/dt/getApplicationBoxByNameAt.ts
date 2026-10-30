@@ -1,8 +1,7 @@
 import { HTTPClientResponse } from '../../../client.js';
 import { ensureBigInt } from '../../../../utils/utils.js';
 import GetApplicationBoxByName from '../getApplicationBoxByName.js';
-import { Box } from '../models/types.js';
-import { checkRound, readAtRound } from './errors.js';
+import { readAtRound } from './errors.js';
 
 /**
  * {@link GetApplicationBoxByName} with `round`: read the box as it was at the
@@ -17,9 +16,9 @@ export default class GetApplicationBoxByNameAt extends GetApplicationBoxByName {
   /**
    * Return the box as of the end of this round instead of the latest round.
    *
-   * Stock algod ignores this parameter and answers for the latest round, so
-   * the response is checked: a response for a different round throws a
-   * {@link DTUnsupportedError}.
+   * A node with time travel off rejects `round`, even the latest one, which is
+   * thrown as a {@link DTUnsupportedError}. Stock algod ignores it and answers
+   * for the latest round: check `supportsDT()` before relying on it.
    *
    * #### Example
    * ```typescript
@@ -39,12 +38,6 @@ export default class GetApplicationBoxByNameAt extends GetApplicationBoxByName {
     return this;
   }
 
-  prepare(response: HTTPClientResponse): Box {
-    const box = super.prepare(response);
-    checkRound(this.requestedRound, box.round, response);
-    return box;
-  }
-
   protected executeRequest(
     headers?: Record<string, string>,
     customOptions?: Record<string, unknown>
@@ -53,20 +46,5 @@ export default class GetApplicationBoxByNameAt extends GetApplicationBoxByName {
       this.requestedRound,
       super.executeRequest(headers, customOptions)
     );
-  }
-
-  /**
-   * Execute the request, returning the response body as received. With
-   * `round`, the response is also decoded to check its round.
-   * @param headers - Additional headers to send in the request. Optional.
-   * @param customOptions - Additional options to pass to the underlying BaseHTTPClient. Optional.
-   */
-  async doRaw(
-    headers?: Record<string, string>,
-    customOptions?: Record<string, unknown>
-  ): Promise<Uint8Array> {
-    const res = await this.executeRequest(headers, customOptions);
-    if (this.requestedRound !== undefined) this.prepare(res);
-    return res.body;
   }
 }

@@ -13,11 +13,9 @@ export default class GetApplicationByIDAt extends GetApplicationByID {
   /**
    * Answer as of the end of this round instead of the latest round.
    *
-   * The response does not say which round it is for, so it cannot be checked:
-   * stock algod ignores this parameter and answers for the latest round. Use
-   * `supportsDT()` to find out whether the node has time travel. A
-   * time-travel build without `EnableTimeTravel` rejects the round, which is
-   * thrown as a {@link DTUnsupportedError}.
+   * A node with time travel off rejects `round`, even the latest one, which is
+   * thrown as a {@link DTUnsupportedError}. Stock algod ignores it and answers
+   * for the latest round: check `supportsDT()` before relying on it.
    *
    * @param round - The round to answer at.
    * @category query

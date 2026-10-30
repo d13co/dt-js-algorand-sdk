@@ -3044,6 +3044,11 @@ export class QueryLimits implements Encodable {
           omitEmpty: false,
         },
         {
+          key: 'max-call-state-bytes',
+          valueSchema: new Uint64Schema(),
+          omitEmpty: false,
+        },
+        {
           key: 'max-response-bytes',
           valueSchema: new Uint64Schema(),
           omitEmpty: false,
@@ -3071,6 +3076,14 @@ export class QueryLimits implements Encodable {
   public maxCallLogBytes: number;
 
   /**
+   * The most bytes of ledger state one call may read (accounts, holdings and
+   * local states, asset and app params, boxes, each counted once). A call that
+   * reads more fails with its own error, and the other calls run on. 0 means
+   * no limit (node config `MaxAPIQueryCallStateBytes`).
+   */
+  public maxCallStateBytes: number;
+
+  /**
    * The most bytes of logs and errors a request may return, across its calls
    * and rounds: a round listed twice counts twice, and each log counts
    * `QUERY_LOG_OVERHEAD_BYTES` (48) more than its length. A request that goes
@@ -3091,6 +3104,8 @@ export class QueryLimits implements Encodable {
    * @param maxCallBudget - The most opcode budget of a call, and its default.
    * @param maxCallLogBytes - The most bytes each program of a call may log; 0
    * means the protocol's limits.
+   * @param maxCallStateBytes - The most bytes of ledger state a call may read;
+   * 0 means no limit.
    * @param maxResponseBytes - The most bytes of logs and errors a request may
    * return; 0 means no limit.
    * @param maxRounds - The most entries a request may list in `rounds`.
@@ -3099,18 +3114,21 @@ export class QueryLimits implements Encodable {
     maxCalls,
     maxCallBudget,
     maxCallLogBytes,
+    maxCallStateBytes,
     maxResponseBytes,
     maxRounds,
   }: {
     maxCalls: number | bigint;
     maxCallBudget: number | bigint;
     maxCallLogBytes: number | bigint;
+    maxCallStateBytes: number | bigint;
     maxResponseBytes: number | bigint;
     maxRounds: number | bigint;
   }) {
     this.maxCalls = ensureSafeInteger(maxCalls);
     this.maxCallBudget = ensureSafeInteger(maxCallBudget);
     this.maxCallLogBytes = ensureSafeInteger(maxCallLogBytes);
+    this.maxCallStateBytes = ensureSafeInteger(maxCallStateBytes);
     this.maxResponseBytes = ensureSafeInteger(maxResponseBytes);
     this.maxRounds = ensureSafeInteger(maxRounds);
   }
@@ -3125,6 +3143,7 @@ export class QueryLimits implements Encodable {
       ['max-calls', this.maxCalls],
       ['max-call-budget', this.maxCallBudget],
       ['max-call-log-bytes', this.maxCallLogBytes],
+      ['max-call-state-bytes', this.maxCallStateBytes],
       ['max-response-bytes', this.maxResponseBytes],
       ['max-rounds', this.maxRounds],
     ]);
@@ -3138,6 +3157,7 @@ export class QueryLimits implements Encodable {
       maxCalls: data.get('max-calls') ?? 0,
       maxCallBudget: data.get('max-call-budget') ?? 0,
       maxCallLogBytes: data.get('max-call-log-bytes') ?? 0,
+      maxCallStateBytes: data.get('max-call-state-bytes') ?? 0,
       maxResponseBytes: data.get('max-response-bytes') ?? 0,
       maxRounds: data.get('max-rounds') ?? 0,
     });
@@ -3149,10 +3169,8 @@ export class QueryLimits implements Encodable {
  * allows (`GET /v2/transactions/simulate/limits`, tag `dtalgorand`). The values
  * are the ones the node applies, after it clamps its configuration.
  *
- * `query` is undefined when the node has no `POST /v2/query` (stock algod, an
- * older fork build, or queries disabled): fall back to simulate then.
- * `maxExecTraceBytes` and `timeLimitSeconds` are undefined when the node did
- * not report them (older fork builds).
+ * `query` is undefined when the node has queries disabled
+ * (`MaxAPIQueryCalls` 0): fall back to simulate then.
  */
 export class SimulateLimitsResponse implements Encodable {
   private static encodingSchemaValue: Schema | undefined;
@@ -3192,14 +3210,9 @@ export class SimulateLimitsResponse implements Encodable {
           omitEmpty: false,
         },
         {
-          key: 'max-exec-trace-bytes',
-          valueSchema: new OptionalSchema(new Uint64Schema()),
-          omitEmpty: true,
-        },
-        {
           key: 'time-limit-seconds',
-          valueSchema: new OptionalSchema(new Uint64Schema()),
-          omitEmpty: true,
+          valueSchema: new Uint64Schema(),
+          omitEmpty: false,
         },
         {
           key: 'query',
@@ -3213,11 +3226,11 @@ export class SimulateLimitsResponse implements Encodable {
 
   /**
    * The limits of stock algod, which has no limits endpoint: one transaction
-   * group per request, no `rounds`, 320,000 extra opcode budget and the
-   * consensus limits on unnamed resources. `reported` is false: `timeTravel`
-   * and `developerApi` are unknown and set to false, so do not gate on them.
-   * A stock algod with its own `EnableDeveloperAPI` (LocalNet has it) does
-   * allow `execTraceConfig`.
+   * group per request, no `rounds`, no time travel, no queries, 320,000 extra
+   * opcode budget and the consensus limits on unnamed resources. `reported`
+   * is false. `developerApi` and `timeLimitSeconds` are unknown and set to
+   * false and 0: a stock algod with its own `EnableDeveloperAPI` (LocalNet
+   * has it) does allow `execTraceConfig`.
    */
   static stock(): SimulateLimitsResponse {
     return new SimulateLimitsResponse({
@@ -3227,6 +3240,7 @@ export class SimulateLimitsResponse implements Encodable {
       resourceLimitMultiplier: 1,
       timeTravel: false,
       developerApi: false,
+      timeLimitSeconds: 0,
       reported: false,
     });
   }
@@ -3259,8 +3273,11 @@ export class SimulateLimitsResponse implements Encodable {
   public resourceLimitMultiplier: number;
 
   /**
-   * Whether `round` and `rounds` may name any round since genesis, not only
-   * the node's last few rounds (node config `EnableTimeTravel`).
+   * Whether the node has time travel (node config `EnableTimeTravel`): reads
+   * at past rounds, the `...Versions` methods, `getAssetHolders` (which also
+   * needs the holders index), and simulate `round` and `rounds` at any round
+   * since genesis, not only the node's last few rounds.
+   * {@link DTAlgodClient.supportsDT} reads it.
    */
   public timeTravel: boolean;
 
@@ -3271,27 +3288,16 @@ export class SimulateLimitsResponse implements Encodable {
   public developerApi: boolean;
 
   /**
-   * The most bytes of execution trace a simulate request may return with
-   * `execTraceConfig`; 0 means no limit (node config
-   * `MaxAPISimulateExecTraceBytes`). Undefined when the node did not report
-   * it. Encoding leaves out a 0, so a JSON round trip of this object turns
-   * "no limit" into undefined.
+   * How long, in seconds, the node works on a simulate, query, versions or
+   * delta request before giving up with a 504 (`isTimeLimitExceeded`); 0
+   * means no limit. The node derives it from its `RestWriteTimeoutSeconds`,
+   * leaving time to write the answer.
    */
-  public maxExecTraceBytes?: number;
-
-  /**
-   * How long, in seconds, the node evaluates a simulate or query request
-   * before giving up with a 504; 0 means no limit (node config
-   * `MaxAPISimulateTimeLimitSeconds`). Undefined when the node did not
-   * report it. Encoding leaves out a 0, so a JSON round trip of this object
-   * turns "no limit" into undefined.
-   */
-  public timeLimitSeconds?: number;
+  public timeLimitSeconds: number;
 
   /**
    * The limits of `POST /v2/query` (`DTAlgodClient.query`). Undefined
-   * when the node has no query endpoint or has queries disabled: use
-   * simulate then.
+   * when the node has queries disabled: use simulate then.
    */
   public query?: QueryLimits;
 
@@ -3312,12 +3318,9 @@ export class SimulateLimitsResponse implements Encodable {
    * @param timeTravel - Whether any round since genesis can be simulated.
    * @param developerApi - Whether `execTraceConfig` and the protocol `future`
    * are allowed.
-   * @param maxExecTraceBytes - The most bytes of execution trace; 0 means no
-   * limit. Undefined when not reported.
    * @param timeLimitSeconds - The time limit of a request; 0 means no limit.
-   * Undefined when not reported.
    * @param query - The limits of `POST /v2/query`; undefined when the node has
-   * no queries.
+   * queries disabled.
    * @param reported - Whether the node reported these limits. Not encoded;
    * defaults to false, and decoding sets it to true.
    */
@@ -3328,7 +3331,6 @@ export class SimulateLimitsResponse implements Encodable {
     resourceLimitMultiplier,
     timeTravel,
     developerApi,
-    maxExecTraceBytes,
     timeLimitSeconds,
     query,
     reported = false,
@@ -3339,8 +3341,7 @@ export class SimulateLimitsResponse implements Encodable {
     resourceLimitMultiplier: number | bigint;
     timeTravel: boolean;
     developerApi: boolean;
-    maxExecTraceBytes?: number | bigint;
-    timeLimitSeconds?: number | bigint;
+    timeLimitSeconds: number | bigint;
     query?: QueryLimits;
     reported?: boolean;
   }) {
@@ -3350,14 +3351,7 @@ export class SimulateLimitsResponse implements Encodable {
     this.resourceLimitMultiplier = ensureSafeInteger(resourceLimitMultiplier);
     this.timeTravel = timeTravel;
     this.developerApi = developerApi;
-    this.maxExecTraceBytes =
-      typeof maxExecTraceBytes === 'undefined'
-        ? undefined
-        : ensureSafeInteger(maxExecTraceBytes);
-    this.timeLimitSeconds =
-      typeof timeLimitSeconds === 'undefined'
-        ? undefined
-        : ensureSafeInteger(timeLimitSeconds);
+    this.timeLimitSeconds = ensureSafeInteger(timeLimitSeconds);
     this.query = query;
     this.reported = reported;
   }
@@ -3375,7 +3369,6 @@ export class SimulateLimitsResponse implements Encodable {
       ['resource-limit-multiplier', this.resourceLimitMultiplier],
       ['time-travel', this.timeTravel],
       ['developer-api', this.developerApi],
-      ['max-exec-trace-bytes', this.maxExecTraceBytes],
       ['time-limit-seconds', this.timeLimitSeconds],
       [
         'query',
@@ -3397,8 +3390,7 @@ export class SimulateLimitsResponse implements Encodable {
       resourceLimitMultiplier: data.get('resource-limit-multiplier') ?? 0,
       timeTravel: data.get('time-travel') ?? false,
       developerApi: data.get('developer-api') ?? false,
-      maxExecTraceBytes: data.get('max-exec-trace-bytes'),
-      timeLimitSeconds: data.get('time-limit-seconds'),
+      timeLimitSeconds: data.get('time-limit-seconds') ?? 0,
       query:
         typeof data.get('query') !== 'undefined'
           ? QueryLimits.fromEncodingData(data.get('query'))

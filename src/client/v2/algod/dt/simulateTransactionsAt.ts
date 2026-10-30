@@ -6,18 +6,14 @@ import SimulateRawTransactions, {
 import { SimulateRequest } from '../models/types.js';
 import { DTSimulateRequest, DTSimulateResponse } from './models.js';
 import { ensureUint64 } from '../../../../utils/utils.js';
-import {
-  SimulateFeatures,
-  simulateWithFeatures,
-  DTUnsupportedError,
-} from './errors.js';
+import { simulateWithRounds } from './errors.js';
 
 /**
  * {@link SimulateRawTransactions} with the fork's simulate features: several
  * transaction groups per request, `parallelGroups`, `rounds`, the validity
- * window modes and `protocol`. Requires a
- * node built from the time-travel fork; a stock node's rejection of these
- * features is thrown as a {@link DTUnsupportedError}.
+ * window modes and `protocol`. Requires a dtalgod node. A node with `rounds`
+ * disabled (`MaxAPISimulateRounds` 0, `maxRounds` 0 in `simulateLimits()`)
+ * is thrown as a {@link DTUnsupportedError}.
  *
  * The request is copied when this is made (its group list too, not the groups
  * themselves) and encoded when it is sent, so the builders apply.
@@ -149,22 +145,6 @@ export default class SimulateTransactionsAt extends SimulateRawTransactions {
     return rounds !== undefined && rounds.length > 0 ? rounds : undefined;
   }
 
-  /** What the request uses beyond what stock algod simulates. */
-  private features(): SimulateFeatures {
-    const fields: string[] = [];
-    // false is left out of the encoding, like an unset field.
-    if (this.request.parallelGroups) {
-      fields.push('parallel-groups');
-    }
-    if (this.requestedRounds()) fields.push('rounds');
-    if (this.request.skipValidityWindow) fields.push('skip-validity-window');
-    if (this.request.rewriteValidityWindow) {
-      fields.push('rewrite-validity-window');
-    }
-    if (this.request.protocol) fields.push('protocol');
-    return { groups: this.request.txnGroups.length, fields };
-  }
-
   /**
    * Why the request is invalid in a way the node would reject as a whole, or
    * undefined. Checked before sending, for a clearer error than the node's.
@@ -187,102 +167,6 @@ export default class SimulateTransactionsAt extends SimulateRawTransactions {
     return undefined;
   }
 
-  /**
-   * Throws a {@link DTUnsupportedError} if the request set a fork option the
-   * response does not show was applied: a validity window mode missing from
-   * `evalOverrides`, or `protocol` without a `protocolOverride` (at the top
-   * level, or in each round result without an `error`).
-   */
-  private checkOptionsApplied(data: DTSimulateResponse) {
-    const { skipValidityWindow, rewriteValidityWindow, protocol } =
-      this.request;
-    const overrides = data.evalOverrides;
-    const modes: [boolean | undefined, boolean | undefined, string][] = [
-      [
-        skipValidityWindow,
-        overrides?.skipValidityWindow,
-        'skip-validity-window',
-      ],
-      [
-        rewriteValidityWindow,
-        overrides?.rewriteValidityWindow,
-        'rewrite-validity-window',
-      ],
-    ];
-    for (const [asked, echoed, name] of modes) {
-      if (asked && !echoed) {
-        throw new DTUnsupportedError(
-          `Asked for ${name} but the node's eval-overrides do not show it; it does not support it`
-        );
-      }
-    }
-    if (!protocol) return;
-    const missing = (where: string) =>
-      new DTUnsupportedError(
-        `Asked for protocol ${protocol} but the node answered without a protocol-override${where}; it does not support simulating under another protocol`
-      );
-    if (!this.requestedRounds()) {
-      if (data.protocolOverride === undefined) throw missing('');
-      return;
-    }
-    data.roundResults!.forEach((result, i) => {
-      if (result.error === undefined && result.protocolOverride === undefined) {
-        throw missing(` in round result ${i}`);
-      }
-    });
-  }
-
-  /**
-   * Throws a {@link DTUnsupportedError} if the request listed rounds
-   * and the response does not have one result per entry, each for the round
-   * asked for (any round for a 0 entry, which the node resolves).
-   */
-  private checkRoundResults(data: DTSimulateResponse) {
-    const rounds = this.requestedRounds();
-    if (!rounds) return;
-    const results = data.roundResults;
-    if (results === undefined || results.length !== rounds.length) {
-      throw new DTUnsupportedError(
-        `Asked to simulate at ${rounds.length} rounds but the node answered with ${results === undefined ? 'no round-results' : `${results.length} round results`}; it does not support simulating at several rounds`
-      );
-    }
-    rounds.forEach((requested, i) => {
-      const returned = results[i].lastRound;
-      if (requested !== BigInt(0) && returned !== requested) {
-        throw new DTUnsupportedError(
-          `Round result ${i} is for round ${returned}, not the round asked for, ${requested}`,
-          { requestedRound: requested, returnedRound: returned }
-        );
-      }
-    });
-  }
-
-  /**
-   * Throws a {@link DTUnsupportedError} if the response does not have
-   * one group result per requested group: at the top level, or in each round
-   * result without an `error`. The node returns one per group, including
-   * groups it did not simulate, so results can be matched to groups by index.
-   */
-  private checkGroupResults(data: DTSimulateResponse) {
-    const expected = this.request.txnGroups.length;
-    const check = (actual: number, where: string) => {
-      if (actual !== expected) {
-        throw new DTUnsupportedError(
-          `Simulated ${expected} transaction groups but the node answered with ${actual} group results${where}`
-        );
-      }
-    };
-    if (!this.requestedRounds()) {
-      check(data.txnGroups.length, '');
-      return;
-    }
-    data.roundResults!.forEach((result, i) => {
-      if (result.error === undefined) {
-        check(result.txnGroups.length, ` in round result ${i}`);
-      }
-    });
-  }
-
   protected executeRequest(
     headers?: Record<string, string>,
     customOptions?: Record<string, unknown>
@@ -290,8 +174,7 @@ export default class SimulateTransactionsAt extends SimulateRawTransactions {
     const invalid = this.invalidReason();
     if (invalid !== undefined) return Promise.reject(new Error(invalid));
     // Encoded here, not in the constructor, so that the builders apply.
-    return simulateWithFeatures(
-      this.features(),
+    return simulateWithRounds(
       this.c.post({
         relativePath: this.path(),
         data: encodeMsgpack(this.request),
@@ -304,9 +187,6 @@ export default class SimulateTransactionsAt extends SimulateRawTransactions {
 
   prepare(response: HTTPClientResponse): DTSimulateResponse {
     const data = decodeMsgpack(response.body, DTSimulateResponse);
-    this.checkRoundResults(data);
-    this.checkGroupResults(data);
-    this.checkOptionsApplied(data);
     data.requestGroupCount = this.request.txnGroups.length;
     return data;
   }
@@ -335,22 +215,5 @@ export default class SimulateTransactionsAt extends SimulateRawTransactions {
   ): Promise<{ data: DTSimulateResponse; headers: Record<string, string> }> {
     const res = await super.doWithHeaders(headers, customOptions);
     return { data: res.data as DTSimulateResponse, headers: res.headers };
-  }
-
-  /**
-   * Execute the request, returning the response body as received. With
-   * `rounds` or `protocol`, the response is also decoded to check that the
-   * node applied them.
-   * @param headers - Additional headers to send in the request. Optional.
-   * @param customOptions - Additional options to pass to the underlying BaseHTTPClient. Optional.
-   */
-  async doRaw(
-    headers?: Record<string, string>,
-    customOptions?: Record<string, unknown>
-  ): Promise<Uint8Array> {
-    const res = await this.executeRequest(headers, customOptions);
-    // The validity window modes require rounds.
-    if (this.requestedRounds() || this.request.protocol) this.prepare(res);
-    return res.body;
   }
 }

@@ -3,11 +3,7 @@ import { HTTPClientResponse } from '../../../client.js';
 import { Query } from '../../../baseHTTPClient.js';
 import { ensureBigInt } from '../../../../utils/utils.js';
 import { bytesToBase64 } from '../../../../encoding/binarydata.js';
-import {
-  describe,
-  isMissingVersionsRoute,
-  DTUnsupportedError,
-} from './errors.js';
+import { describe, DTUnsupportedError } from './errors.js';
 import { pageThrough } from './paging.js';
 
 export type VersionsOrder = 'asc' | 'desc';
@@ -48,17 +44,18 @@ export function encodeVersionsFilter(what: string, bytes: Uint8Array) {
  * the rounds at which an object changed over an inclusive round range, a page
  * at a time, or with `rounds()` the object as of each listed round.
  *
- * On a node without time travel the routes don't exist (they are only
- * registered with `EnableTimeTravel`), which is thrown as a
- * {@link DTUnsupportedError} with the HTTP error as its `cause`. The endpoints never 404 otherwise: an
- * object that never existed in the range has no versions.
+ * On a node with time travel off the routes don't exist (they are only
+ * registered with `EnableTimeTravel`): the 404 is thrown as a
+ * {@link DTUnsupportedError} with the HTTP error as its `cause`. The
+ * endpoints never 404 otherwise: an object that never existed in the range has
+ * no versions.
  */
 export default abstract class VersionsRequest<
   Entry extends { round: bigint },
   Response extends { round: bigint; versions: Entry[]; nextToken?: string },
   Include extends string = VersionsInclude,
 > extends JSONRequest<Response> {
-  /** The rounds of `rounds()`, deduplicated, to check the answer against. */
+  /** The rounds of `rounds()`, deduplicated. */
   protected requestedRounds?: Set<bigint>;
 
   /**
@@ -108,10 +105,7 @@ export default abstract class VersionsRequest<
    * - The rounds go in the URL, about 9 bytes each: 10,000 rounds make a 90 KB
    *   URL, beyond the header limits of many proxies. Split long lists into
    *   several requests.
-   *
-   * A node that ignores `rounds` (dt-algorand `v5.0.4-dt3` and older) answers
-   * with range versions instead; the client sees entries for rounds it did
-   * not ask for, or none, and throws a {@link DTUnsupportedError}.
+
    *
    * #### Example
    * ```typescript
@@ -152,9 +146,9 @@ export default abstract class VersionsRequest<
   /**
    * Versions per page (with `rounds`, rounds per page): default 100, at most
    * 10,000, or 1,000 with `include('values')` or `include('keys')`. A page
-   * also ends early once its values reach 1 MB, before 100,000 lookups with
-   * `rounds`, and on newer builds at a 64 MB read budget, so a short page does
-   * not mean there are no more: only a missing `nextToken` does.
+   * also ends early once its values reach 1 MB, and with `rounds` before
+   * 100,000 lookups or 64 MB read, so a short page does not mean there are no
+   * more: only a missing `nextToken` does.
    *
    * @param limit - Maximum number of versions per page.
    * @category query
@@ -181,9 +175,7 @@ export default abstract class VersionsRequest<
    * Include additional items in the response. Use `values` to include each
    * version's new value (absent on deletions). On the application state
    * endpoints, use `keys` to list the state keys each version changed
-   * (`changedKeys`). A node that does not know `keys` (dt-algorand
-   * `v5.0.4-dt3` and older) rejects it, thrown as a
-   * {@link DTUnsupportedError}.
+   * (`changedKeys`).
    *
    * @param include - The additional items to include in the response.
    * @category query
@@ -213,60 +205,6 @@ export default abstract class VersionsRequest<
       return `rounds lists ${rounds.size} distinct rounds, more than the ${MAX_VERSIONS_ROUNDS} a request may have`;
     }
     return undefined;
-  }
-
-  /** Whether `include('keys')` was set. */
-  protected includesKeys() {
-    return (
-      typeof this.query.include === 'string' &&
-      this.query.include.split(',').includes('keys')
-    );
-  }
-
-  /**
-   * Whether a page answered with `include('keys')` lacks the changed keys
-   * where they must be: the node ignored `keys`. Only the application state
-   * endpoints override it.
-   */
-  // eslint-disable-next-line class-methods-use-this, @typescript-eslint/no-unused-vars
-  protected keysIgnored(_page: Response): boolean {
-    return false;
-  }
-
-  /**
-   * Checks that a decoded page applied `rounds` and `include('keys')`, and
-   * throws a {@link DTUnsupportedError} if it did not. Each builder's
-   * `prepare` calls it.
-   *
-   * With `rounds`, every entry must be for a requested round, and a page
-   * cannot be empty: rounds mode gives one entry per round, even for an object
-   * that did not exist then. A node without `rounds` drops the parameter and
-   * answers with range versions.
-   *
-   * @param page - The decoded page.
-   */
-  protected checkPage(page: Response): Response {
-    const rounds = this.requestedRounds;
-    if (rounds) {
-      if (page.versions.length === 0) {
-        throw new DTUnsupportedError(
-          `${this.path()} answered rounds with no entries; the node ignored rounds and does not support versions as of rounds`
-        );
-      }
-      const stray = page.versions.find((v) => !rounds.has(v.round));
-      if (stray) {
-        throw new DTUnsupportedError(
-          `${this.path()} answered an entry for round ${stray.round}, which was not requested; the node ignored rounds and does not support versions as of rounds`,
-          { returnedRound: stray.round }
-        );
-      }
-    }
-    if (this.includesKeys() && this.keysIgnored(page)) {
-      throw new DTUnsupportedError(
-        `${this.path()} answered include=keys without changed-keys; the node ignored keys and does not support them`
-      );
-    }
-    return page;
   }
 
   protected executeRequest(
@@ -353,16 +291,10 @@ export default abstract class VersionsRequest<
         customOptions,
       });
     } catch (err) {
-      if (isMissingVersionsRoute(err)) {
+      // The routes are only registered with EnableTimeTravel.
+      if (describe(err).status === 404) {
         throw new DTUnsupportedError(
-          `${this.path()} does not exist: the node does not have time travel (EnableTimeTravel)`,
-          { cause: err }
-        );
-      }
-      const { status, text } = describe(err);
-      if (status === 400 && /invalid include value: keys/.test(text)) {
-        throw new DTUnsupportedError(
-          `${this.path()} rejected include=keys: the node does not support the changed keys of application state`,
+          `${this.path()} does not exist: the node has time travel off (EnableTimeTravel)`,
           { cause: err }
         );
       }

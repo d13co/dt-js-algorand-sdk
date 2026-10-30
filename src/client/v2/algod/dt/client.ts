@@ -55,8 +55,11 @@ import { decodeMsgpack } from '../../../../encoding/encoding.js';
 export class DTAlgodClient extends AlgodClient {
   /**
    * What this build of the client supports, for code that finds
-   * `DTAlgodClient` at runtime on an algosdk that may be stock or an
-   * older fork build:
+   * `DTAlgodClient` at runtime on an algosdk that may be stock algosdk
+   * rather than dtalgosdk (algokit-utils and generated clients check it). It
+   * lists what the SDK has, not what the node has: use
+   * {@link DTAlgodClient.simulateLimits}, {@link DTAlgodClient.supportsDT}
+   * and {@link DTAlgodClient.supportsAssetHolders} for the node.
    * - `reads-at-round`: `.round()` on the account, asset, application, box and
    *   supply reads;
    * - `versions`: the `...Versions` methods;
@@ -79,7 +82,7 @@ export class DTAlgodClient extends AlgodClient {
    * - `versions-keys`: `include('keys')` on `getApplicationVersions`,
    *   `accountVersions` and `accountApplicationVersions`, and `changedKeys`;
    * - `versions-pages`: `pages()` on the `...Versions` methods;
-   * - `holders`: `getAssetHolders`;
+   * - `holders`: `getAssetHolders` and `supportsAssetHolders`;
    * - `response-headers`: `doWithHeaders()` on every request, and
    *   `effortOf` / `parseEffortHeader` for the `X-Algod-Effort` header;
    * - `error-helpers`: `isNodeBusy`, `retryAfterSeconds`,
@@ -124,7 +127,7 @@ export class DTAlgodClient extends AlgodClient {
    * `BaseHTTPClient`, if any. Returns `algod` itself if it already is a
    * `DTAlgodClient`. Calling it again with the same client returns
    * the same `DTAlgodClient`, so what it caches, such as
-   * `supportsDT()`, is kept.
+   * `simulateLimits()`, is kept.
    *
    * `algod` may come from another copy of algosdk (it is read by shape, not
    * `instanceof`), but transactions and models passed to this client must come
@@ -160,7 +163,7 @@ export class DTAlgodClient extends AlgodClient {
     return client;
   }
 
-  private supportsDTResult?: Promise<boolean>;
+  private supportsAssetHoldersResult?: Promise<boolean>;
 
   private simulateLimitsResult?: Promise<SimulateLimitsResponse>;
 
@@ -249,9 +252,8 @@ export class DTAlgodClient extends AlgodClient {
    * Given an asset ID, return the asset, at the latest round or, with
    * `.round()`, at a past round.
    *
-   * The response does not say which round it is for, so unlike the other
-   * reads, a stock algod that ignores `.round()` cannot be detected here: it
-   * answers with the latest asset. Check `supportsDT()` first.
+   * Stock algod ignores `.round()` and answers with the latest asset: check
+   * `supportsDT()` first.
    *
    * @param index - The asset ID to look up.
    * @category GET
@@ -264,9 +266,8 @@ export class DTAlgodClient extends AlgodClient {
    * Given an application ID, return the application, at the latest round or,
    * with `.round()`, at a past round.
    *
-   * The response does not say which round it is for, so unlike the other
-   * reads, a stock algod that ignores `.round()` cannot be detected here: it
-   * answers with the latest application. Check `supportsDT()` first.
+   * Stock algod ignores `.round()` and answers with the latest application:
+   * check `supportsDT()` first.
    *
    * @param index - The application ID to look up.
    * @category GET
@@ -342,10 +343,6 @@ export class DTAlgodClient extends AlgodClient {
    * Given an application ID, list the rounds at which any of its boxes was
    * created, written or deleted, with the boxes that changed in each.
    *
-   * `supportsDT()` probes the single-box versions route, so a
-   * time-travel node built before this endpoint passes it, then answers this
-   * one with a 404, thrown as a {@link DTUnsupportedError}.
-   *
    * #### Example
    * ```typescript
    * const res = await algodClient
@@ -392,8 +389,8 @@ export class DTAlgodClient extends AlgodClient {
    * Given an asset ID, list the accounts that hold it at a round (the latest
    * by default), in address order, with their balance and frozen flag. Needs
    * a time-travel node with the asset holders index (`TimeTravelHoldersIndex`);
-   * one without it, or without the endpoint, is thrown as a
-   * {@link DTUnsupportedError}.
+   * one with either off is thrown as a {@link DTUnsupportedError}.
+   * {@link DTAlgodClient.supportsAssetHolders} finds out first.
    *
    * Pages can be short or empty while more holders remain: page with
    * `pages()` or `iterate()`, which pin the first page's round, or pass the
@@ -509,10 +506,10 @@ export class DTAlgodClient extends AlgodClient {
    * setting. The resources it then reports may not fit in a group that can be
    * submitted.
    *
-   * A stock node's rejection of several groups or of the fork's fields is
-   * thrown as a {@link DTUnsupportedError}, as is a response without one
-   * round result per listed round, each for the round asked for, or without
-   * the validity window mode or `protocolOverride` asked for.
+   * A node with `rounds` disabled (`maxRounds` 0 in
+   * {@link DTAlgodClient.simulateLimits}) is thrown as a
+   * {@link DTUnsupportedError}. Several groups, `rounds` and the fork's
+   * fields need a dtalgod node: stock algod rejects them with a 400.
    *
    * #### Example
    * ```typescript
@@ -611,11 +608,12 @@ export class DTAlgodClient extends AlgodClient {
    * round really ran: past rounds then report a `protocolOverride` with
    * notes. Pass `protocol('round')` for the chain's own rules.
    *
-   * Only fork nodes with queries on have it: the `query` of
-   * {@link DTAlgodClient.simulateLimits} is undefined otherwise, and has the
-   * limits to split requests by (`maxCalls`, `maxRounds`, `maxCallBudget`,
-   * `maxCallLogBytes`, `maxResponseBytes`). A node without the endpoint (404)
-   * or with queries disabled is thrown as a {@link DTUnsupportedError}. Results
+   * Queries can be disabled on a node (`MaxAPIQueryCalls` 0): the `query` of
+   * {@link DTAlgodClient.simulateLimits} is undefined then, and otherwise has
+   * the limits to split requests by (`maxCalls`, `maxRounds`,
+   * `maxCallBudget`, `maxCallLogBytes`, `maxCallStateBytes`,
+   * `maxResponseBytes`). A node with queries disabled is thrown as a
+   * {@link DTUnsupportedError}. Results
    * over `maxResponseBytes` fail with a 400 that `isQueryResponseTooLarge`
    * recognizes; split the request and retry. A busy node answers 503 with
    * `Retry-After`, and a request over the node's time limit 504.
@@ -652,8 +650,8 @@ export class DTAlgodClient extends AlgodClient {
 
   /**
    * The node's simulate limits (`GET /v2/transactions/simulate/limits`), as
-   * it reports them. A node without the endpoint (stock algod, or a fork build
-   * older than it) answers 404, thrown as a {@link DTUnsupportedError}.
+   * it reports them. Every dtalgod node has the endpoint; stock algod answers
+   * 404, thrown as a {@link DTUnsupportedError}.
    * {@link DTAlgodClient.simulateLimits} caches the answer and falls back to
    * stock algod's limits instead.
    *
@@ -670,18 +668,16 @@ export class DTAlgodClient extends AlgodClient {
    * `future`) are on. Pass `maxRounds` to {@link packSimulateRounds}, and
    * split groups into requests of at most `maxTxnGroups`.
    *
-   * A node without the limits endpoint answers 404; the limits are then
-   * those of stock algod ({@link SimulateLimitsResponse.stock}), with
-   * `reported` false: one group per request and no `rounds`. An older fork
-   * build may allow more, but staying within these always works. Its
-   * `timeTravel` and `developerApi` are unknown and read false: check
-   * `reported` before gating on them, and use
-   * {@link DTAlgodClient.supportsDT} for time travel.
+   * This is also how the client tells what the node has: every dtalgod node
+   * serves the limits, and its optional features show in them (`timeTravel`,
+   * `query`, `maxRounds` above 0, `maxTxnGroups` above 1, `developerApi`).
+   * Only the asset holders index does not: see
+   * {@link DTAlgodClient.supportsAssetHolders}.
    *
-   * `query` has the limits of {@link DTAlgodClient.query}, and is undefined
-   * when the node has no query endpoint (or has queries disabled): use
-   * simulate then. `maxExecTraceBytes` and `timeLimitSeconds` are undefined
-   * when the node did not report them.
+   * Stock algod has no limits endpoint and answers 404; the limits are then
+   * those of stock algod ({@link SimulateLimitsResponse.stock}), with
+   * `reported` false: one group per request, no `rounds`, no time travel and
+   * no queries.
    *
    * The answer is cached on the client and shared, so it is frozen (its
    * `query` too). Other errors, such as network failures, are rethrown and
@@ -719,12 +715,14 @@ export class DTAlgodClient extends AlgodClient {
   }
 
   /**
-   * Whether the node has time travel, found by probing a `/versions` route,
-   * which only exists with `EnableTimeTravel`. A
-   * {@link DTUnsupportedError} (route missing, or no history) means
-   * no; a response, or any other 400 (the route exists but rejected the
-   * probe), means yes. The answer is cached on the client. Other errors, such
-   * as network failures, are rethrown and not cached.
+   * Whether the node has time travel (`EnableTimeTravel`): reads at past
+   * rounds, the `...Versions` methods and simulate at any round since
+   * genesis. It is the `timeTravel` of {@link DTAlgodClient.simulateLimits},
+   * so it costs no request once the limits are cached, and is false on stock
+   * algod. Errors, such as network failures, are rethrown and not cached.
+   *
+   * A node with time travel whose history is not trusted yet answers reads at
+   * past rounds with a 503 that `isHistoryUnavailable` recognizes.
    *
    * #### Example
    * ```typescript
@@ -733,25 +731,53 @@ export class DTAlgodClient extends AlgodClient {
    * }
    * ```
    */
-  supportsDT(): Promise<boolean> {
-    if (!this.supportsDTResult) {
-      this.supportsDTResult = this.getApplicationBoxVersions(
-        0,
-        new Uint8Array([0])
-      )
-        .limit(1)
-        .do()
-        .then(
-          () => true,
-          (err) => {
+  async supportsDT(): Promise<boolean> {
+    return (await this.simulateLimits()).timeTravel;
+  }
+
+  /**
+   * Whether the node can list asset holders ({@link DTAlgodClient.getAssetHolders}):
+   * it has time travel and the asset holders index (`TimeTravelHoldersIndex`).
+   * The limits do not report the index, so a node with time travel is probed
+   * with a holders request that it rejects without reading anything
+   * (`limit=0`). The answer is cached on the client. Errors, such as network
+   * failures or a 503 for history that is not served, are rethrown and not
+   * cached.
+   *
+   * A node whose index is on but not built yet still says yes here, and
+   * answers `getAssetHolders` with a 503 that `isHistoryUnavailable`
+   * recognizes.
+   *
+   * #### Example
+   * ```typescript
+   * if (await algodClient.supportsAssetHolders()) {
+   *   for await (const h of algodClient.getAssetHolders(assetId).iterate()) {
+   *     console.log(h.address, h.amount);
+   *   }
+   * }
+   * ```
+   */
+  supportsAssetHolders(): Promise<boolean> {
+    if (!this.supportsAssetHoldersResult) {
+      this.supportsAssetHoldersResult = this.supportsDT()
+        .then(async (timeTravel) => {
+          if (!timeTravel) return false;
+          try {
+            await this.getAssetHolders(0).limit(0).do();
+            return true;
+          } catch (err) {
             if (err instanceof DTUnsupportedError) return false;
-            // The route exists but rejected the probe's parameters.
+            // The node checks the index before the limit, so rejecting the
+            // limit means the index is on.
             if ((err as { status?: number }).status === 400) return true;
-            this.supportsDTResult = undefined;
             throw err;
           }
-        );
+        })
+        .catch((err) => {
+          this.supportsAssetHoldersResult = undefined;
+          throw err;
+        });
     }
-    return this.supportsDTResult;
+    return this.supportsAssetHoldersResult;
   }
 }

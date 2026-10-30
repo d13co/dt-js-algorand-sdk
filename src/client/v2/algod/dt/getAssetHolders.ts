@@ -2,41 +2,31 @@ import JSONRequest from '../../jsonrequest.js';
 import { HTTPClient, HTTPClientResponse } from '../../../client.js';
 import { Query } from '../../../baseHTTPClient.js';
 import { ensureBigInt } from '../../../../utils/utils.js';
-import { checkRound, describe, DTUnsupportedError } from './errors.js';
+import { describe, DTUnsupportedError } from './errors.js';
 import { decodeDTJSON } from './json.js';
 import { pageThrough } from './paging.js';
 import { AssetHolder, AssetHoldersResponse } from './models.js';
 
 /**
- * Why a node that rejected a holders request does not have the endpoint, or
- * undefined if the error is about something else:
- * - a 404 without a JSON message of the handler (`Not Found`): no such route,
- *   on stock algod or a fork build before holders. The handler's own 404 says
- *   `asset does not exist`, and passes through;
- * - stock algod's router handing `{id}/holders` to the asset lookup as its
- *   ID, which rejects it (400);
- * - a node with time travel but without the holders index, or with a store
- *   it cannot serve holders from (400).
+ * Why a dtalgod node that rejected a holders request does not serve holders,
+ * or undefined if the error is about something else:
+ * - a 404 without the handler's `asset does not exist`: the route is only
+ *   registered with time travel on (`EnableTimeTravel`);
+ * - a 400 from a node with time travel but the holders index off
+ *   (`TimeTravelHoldersIndex`).
  */
-function holdersUnsupportedReason(err: unknown) {
+export function holdersUnsupportedReason(err: unknown) {
   const { status, text } = describe(err);
   if (status === 404 && !/asset does not exist/.test(text)) {
-    return 'it has no holders endpoint (stock algod, or a fork build before it)';
+    return 'it has time travel off (EnableTimeTravel)';
   }
-  if (status !== 400) return undefined;
   if (
-    /Invalid format for parameter asset-id: .*parsing \\?"[^"\\]*\/holders\\?": invalid syntax/.test(
+    status === 400 &&
+    /asset holders require EnableTimeTravel and TimeTravelHoldersIndex/.test(
       text
     )
   ) {
-    return 'it has no holders endpoint (stock algod)';
-  }
-  if (
-    /asset holders require EnableTimeTravel and TimeTravelHoldersIndex|asset holders need a time travel store/.test(
-      text
-    )
-  ) {
-    return 'it does not have the asset holders index (EnableTimeTravel, TimeTravelHoldersIndex, and a store with N = 1)';
+    return 'it has the asset holders index off (TimeTravelHoldersIndex)';
   }
   return undefined;
 }
@@ -55,8 +45,9 @@ function holdersUnsupportedReason(err: unknown) {
  * `round()` was set; a manual `next()` loop must pass `round(first.round)`
  * itself.
  *
- * A node without the endpoint, or without the holders index, is thrown as a
- * {@link DTUnsupportedError}. An asset that does not exist (also at a round
+ * A node with time travel or the holders index off is thrown as a
+ * {@link DTUnsupportedError}; `supportsAssetHolders()` finds out without
+ * listing anything. An asset that does not exist (also at a round
  * before its creation) is the node's 404, and an index still being built its
  * 503, both thrown as the HTTP error (`isHistoryUnavailable` recognizes the
  * 503).
@@ -91,8 +82,7 @@ export default class GetAssetHolders extends JSONRequest<AssetHoldersResponse> {
   }
 
   /**
-   * List the holders at this round. Defaults to the latest round. The
-   * response is checked to be for that round.
+   * List the holders at this round. Defaults to the latest round.
    *
    * @param round - The round.
    * @category query
@@ -134,7 +124,7 @@ export default class GetAssetHolders extends JSONRequest<AssetHoldersResponse> {
   }
 
   prepare(response: HTTPClientResponse): AssetHoldersResponse {
-    return this.decode(response, this.requestedRound);
+    return this.decode(response);
   }
 
   /**
@@ -158,8 +148,7 @@ export default class GetAssetHolders extends JSONRequest<AssetHoldersResponse> {
           query.round = pinned.toString();
         }
         const page = this.decode(
-          await this.getPage(query, headers, customOptions),
-          pinned
+          await this.getPage(query, headers, customOptions)
         );
         pinned = page.round;
         return page;
@@ -185,13 +174,8 @@ export default class GetAssetHolders extends JSONRequest<AssetHoldersResponse> {
   }
 
   // eslint-disable-next-line class-methods-use-this
-  private decode(
-    response: HTTPClientResponse,
-    requested: bigint | undefined
-  ): AssetHoldersResponse {
-    const page = decodeDTJSON(response.getJSONText(), AssetHoldersResponse);
-    checkRound(requested, page.round, response);
-    return page;
+  private decode(response: HTTPClientResponse): AssetHoldersResponse {
+    return decodeDTJSON(response.getJSONText(), AssetHoldersResponse);
   }
 
   private async getPage(

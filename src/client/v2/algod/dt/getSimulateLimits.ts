@@ -6,8 +6,8 @@ import { DTUnsupportedError } from './errors.js';
 
 /**
  * The limits a node places on simulate requests
- * (`GET /v2/transactions/simulate/limits`). Only nodes built from the fork
- * serve it; a 404 is thrown as a {@link DTUnsupportedError}.
+ * (`GET /v2/transactions/simulate/limits`). Every dtalgod node serves it, so
+ * a 404 means stock algod, thrown as a {@link DTUnsupportedError}.
  */
 export default class GetSimulateLimits extends JSONRequest<SimulateLimitsResponse> {
   // eslint-disable-next-line class-methods-use-this
@@ -29,7 +29,7 @@ export default class GetSimulateLimits extends JSONRequest<SimulateLimitsRespons
     } catch (err) {
       if ((err as { status?: number })?.status === 404) {
         throw new DTUnsupportedError(
-          'The node has no simulate limits endpoint; it is stock algod or an older fork build',
+          'The node has no simulate limits endpoint: it is stock algod, not dtalgod',
           { cause: err }
         );
       }

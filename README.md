@@ -13,7 +13,7 @@ This is `dtalgosdk`, a fork of [algosdk](https://www.npmjs.com/package/algosdk) 
 - **Simulate** with several groups per request (in sequence or with `parallelGroups()`), at several rounds per request (`rounds()`), with the validity window skipped or moved to each round (`skipValidityWindow()`, `rewriteValidityWindow()`), and under a later consensus protocol (`protocol()`).
 - **Query**: `query()` runs read-only TEAL calls (one program or deployed app, many calls) at several rounds per request through the fork's `POST /v2/query`, returning each call's logs, cost and error per round, without transactions, signatures or fees.
 - **Helpers**: `DTSimulateRequest.fromTransactions()` for unsigned transactions, `packSimulateRounds()` to split rounds into requests, `groupResults()` for each group's outcome or a typed `SimulateGroupError`, `simulateLimits()` for the node's limits (including its query limits), `isQueryResponseTooLarge()` to split a query whose results are over the node's limit, `isNodeBusy()` / `retryAfterSeconds()` / `isTimeLimitExceeded()` / `isHistoryUnavailable()` for the node's busy, time limit and history errors, and `doWithHeaders()` / `effortOf()` for response headers.
-- **Stock algod detection**: `supportsDT()`, and a `DTUnsupportedError` when a node lacks a feature, so code can fall back.
+- **Feature detection**: `simulateLimits()`, `supportsDT()` and `supportsAssetHolders()` say which optional features the node has on (time travel, the holders index, query, simulate rounds), and a `DTUnsupportedError` is thrown when a request needs one that is off, so code can fall back.
 - **Fix**: ABI dynamic arrays and tuples decode `Uint8Array` subarrays correctly.
 - **Faster decoding**: time-travel pages are parsed with `JSON.parse` when no integer needs a bigint, addresses already checked skip their checksum, and base64 is faster in browsers.
 
@@ -28,7 +28,7 @@ npm (`package.json`):
 ```json
 {
   "dependencies": {
-    "algosdk": "npm:dtalgosdk@3.9.0-dt.3.0.0.1"
+    "algosdk": "npm:dtalgosdk@3.9.0-dt.4.0.0.1"
   },
   "overrides": {
     "algosdk": "$algosdk"
@@ -40,7 +40,7 @@ pnpm 10 and later (`pnpm-workspace.yaml`; pnpm 11 and later read overrides only 
 
 ```yaml
 overrides:
-  algosdk: npm:dtalgosdk@3.9.0-dt.3.0.0.1
+  algosdk: npm:dtalgosdk@3.9.0-dt.4.0.0.1
 ```
 
 pnpm 9 (`package.json`; it warns about an unmet `algosdk` peer dependency, which is harmless):
@@ -49,7 +49,7 @@ pnpm 9 (`package.json`; it warns about an unmet `algosdk` peer dependency, which
 {
   "pnpm": {
     "overrides": {
-      "algosdk": "npm:dtalgosdk@3.9.0-dt.3.0.0.1"
+      "algosdk": "npm:dtalgosdk@3.9.0-dt.4.0.0.1"
     }
   }
 }
@@ -60,17 +60,17 @@ Yarn and Bun (`package.json`):
 ```json
 {
   "dependencies": {
-    "algosdk": "npm:dtalgosdk@3.9.0-dt.3.0.0.1"
+    "algosdk": "npm:dtalgosdk@3.9.0-dt.4.0.0.1"
   },
   "resolutions": {
-    "algosdk": "npm:dtalgosdk@3.9.0-dt.3.0.0.1"
+    "algosdk": "npm:dtalgosdk@3.9.0-dt.4.0.0.1"
   }
 }
 ```
 
 Yarn 4 refuses versions published less than a day ago (`npmMinimalAgeGate`). To install a new dtalgosdk release right away, add `npmPreapprovedPackages: ["dtalgosdk"]` to `.yarnrc.yml`.
 
-`npm ls algosdk` or `pnpm why algosdk` (`yarn why dtalgosdk` on Yarn) should then list only `dtalgosdk@3.9.0-dt.3.0.0.1`. Pin the exact version: dtalgosdk versions are prereleases, and ranges such as `^3.9.0` do not match them. A version reads `<algosdk version>-dt.<dt-algorand release>.<SDK release>`: `3.9.0-dt.3.0.0.1` is built on algosdk 3.9.0, covers the API of dt-algorand dt3 (`v5.0.4-dt3`), and is SDK release 0.0.1 for that pair.
+`npm ls algosdk` or `pnpm why algosdk` (`yarn why dtalgosdk` on Yarn) should then list only `dtalgosdk@3.9.0-dt.4.0.0.1`. Pin the exact version: dtalgosdk versions are prereleases, and ranges such as `^3.9.0` do not match them. A version reads `<algosdk version>-dt.<dt-algorand release>.<SDK release>`: `3.9.0-dt.4.0.0.1` is built on algosdk 3.9.0, covers the API of dt-algorand dt4 (`v5.0.5-dt4`), and is SDK release 0.0.1 for that pair.
 
 ### Quick start
 
@@ -108,7 +108,7 @@ Existing codebases using v2 of this library will be incompatible with v3. The v3
 ### [Node.js](https://nodejs.org/en/download/)
 
 ```
-$ npm install algosdk@npm:dtalgosdk@3.9.0-dt.3.0.0.1
+$ npm install algosdk@npm:dtalgosdk@3.9.0-dt.4.0.0.1
 ```
 
 This installs dtalgosdk under the name `algosdk`. If other dependencies use algosdk, also add the override from [Installing dtalgosdk in place of algosdk](#installing-dtalgosdk-in-place-of-algosdk), so that there is only one copy.
@@ -121,8 +121,8 @@ Include a minified browser bundle directly in your HTML like so. It defines the 
 
 ```html
 <script
-  src="https://unpkg.com/dtalgosdk@3.9.0-dt.3.0.0.1/dist/browser/algosdk.min.js"
-  integrity="sha384-S5Lg+mPDVQZDA1RXD//SlDRDz3aP+qN+ymcsjTUrhohY/GXdOimCcPsSyjEYwSOk"
+  src="https://unpkg.com/dtalgosdk@3.9.0-dt.4.0.0.1/dist/browser/algosdk.min.js"
+  integrity="sha384-p47tI55Mo5CkepSOagM8I2kSBCWhu8dyzDZs4ExuEe1BgZi2HHbh1LbQLeoP3o5x"
   crossorigin="anonymous"
 ></script>
 ```
@@ -131,8 +131,8 @@ or
 
 ```html
 <script
-  src="https://cdn.jsdelivr.net/npm/dtalgosdk@3.9.0-dt.3.0.0.1/dist/browser/algosdk.min.js"
-  integrity="sha384-S5Lg+mPDVQZDA1RXD//SlDRDz3aP+qN+ymcsjTUrhohY/GXdOimCcPsSyjEYwSOk"
+  src="https://cdn.jsdelivr.net/npm/dtalgosdk@3.9.0-dt.4.0.0.1/dist/browser/algosdk.min.js"
+  integrity="sha384-p47tI55Mo5CkepSOagM8I2kSBCWhu8dyzDZs4ExuEe1BgZi2HHbh1LbQLeoP3o5x"
   crossorigin="anonymous"
 ></script>
 ```

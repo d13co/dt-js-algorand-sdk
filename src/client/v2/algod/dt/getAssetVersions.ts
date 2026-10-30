@@ -31,9 +31,8 @@ export default class GetAssetVersions extends VersionsRequest<
     return `/v2/assets/${this.index}/versions`;
   }
 
+  // eslint-disable-next-line class-methods-use-this
   prepare(response: HTTPClientResponse): AssetVersionsResponse {
-    return this.checkPage(
-      decodeDTJSON(response.getJSONText(), AssetVersionsResponse)
-    );
+    return decodeDTJSON(response.getJSONText(), AssetVersionsResponse);
   }
 }

@@ -100,7 +100,7 @@ Yarn 4 refuses versions published less than a day ago (`npmMinimalAgeGate`). To 
 
 Then check that only one copy is installed: `npm ls algosdk` or `pnpm why algosdk` (`yarn why dt-algosdk` on Yarn) should list `dt-algosdk@3.9.0-dt.4.1.0.0` and nothing else.
 
-Pin the exact version, with no `^` or `~` (`npm install -E`): dt-algosdk versions are prereleases, so `^3.9.0` matches none of them, while a `^` or `~` range on a dt-algosdk version matches every later dt-algosdk built on the same algosdk version, breaking releases included. A version reads `<algosdk version>-dt.<dt-algorand release>.<SDK release>`: `3.9.0-dt.4.1.0.0` is built on algosdk 3.9.0, covers the API of dt-algorand dt4 (`v5.0.5-dt4`), and is SDK release 1.0.0 for that pair.
+Pin the exact version, with no `^` or `~` (`npm install -E`): dt-algosdk versions are prereleases, so `^3.9.0` matches none of them, while a `^` or `~` range on a dt-algosdk version matches every later dt-algosdk built on the same algosdk version, breaking releases included. A version reads `<algosdk version>-dt.<dt-algorand release>.<SDK release>`: `3.9.0-dt.4.1.0.0` is built on algosdk 3.9.0, covers the API of dt-algorand dt4 (`v5.0.5-dt4`), and is SDK release 1.0.0. The SDK release counts on across new algosdk and dt-algorand versions; it never starts over.
 
 To use a local checkout instead, run `npm run build` in it (and again after each change), then use it in place of the registry version. With pnpm, set the override to `link:/path/to/js-algorand-sdk`. With npm, put a tarball from `npm pack` in `dependencies` (`"algosdk": "file:./vendor/dt-algosdk-3.9.0-dt.4.1.0.0.tgz"`) and keep the override as `"$algosdk"`: npm rejects an override that differs from the direct dependency.
 
@@ -638,7 +638,7 @@ GitHub Actions publishes dt-algosdk, with [`.github/workflows/dtalgosdk.yml`](.g
 1. Choose the version, `<algosdk version>-dt.<dt-algorand release>.<SDK release>`:
    - the algosdk version the code is built on; change it when merging a new upstream release;
    - the number of the latest dt-algorand release (`v5.0.4-dt2` is 2) whose API the SDK covers. Nodes of older dt-algorand releases are not supported; the client detects only the optional features of the current release (see [Optional node features](#optional-node-features)). Keep the dot (`dt.2`, not `dt2`), so that npm compares it as a number and `dt.10` sorts after `dt.9`;
-   - the SDK's own release, `x.y.z`: bump `x` for a breaking change to the fork's API, `y` for features and `z` for fixes. Start it again at `1.0.0` when either of the parts before it changes.
+   - the SDK's own release, `x.y.z`: bump `x` for a breaking change to the fork's API, `y` for features and `z` for fixes. It never starts again: when the algosdk version or the dt-algorand release changes, it keeps counting from the last release, bumped as the change calls for.
 2. Set it and update the docs: `npm version <version> --no-git-tag-version`, `npm run build`, then `node scripts/ci/dtalgosdk-release.js update`. The script sets the version in the install snippets and CDN URLs in `README.md` and in this file, and the browser bundle's `integrity` hash in `README.md`.
 3. `npm test`, then `npm pack --dry-run` to check the contents (`dist/`, `src/`, `README.md`, `DTALGOSDK.md`, `LICENSE`).
 4. Commit and push `dtalgorand`, then tag the commit and push the tag: `git tag v<version>` and `git push d13co v<version>`.

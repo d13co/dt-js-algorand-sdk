@@ -70,7 +70,7 @@ Yarn and Bun (`package.json`):
 
 Yarn 4 refuses versions published less than a day ago (`npmMinimalAgeGate`). To install a new dt-algosdk release right away, add `npmPreapprovedPackages: ["dt-algosdk"]` to `.yarnrc.yml`.
 
-`npm ls algosdk` or `pnpm why algosdk` (`yarn why dt-algosdk` on Yarn) should then list only `dt-algosdk@3.9.0-dt.4.1.0.0`. Pin the exact version, with no `^` or `~` (`npm install -E`): dt-algosdk versions are prereleases, so `^3.9.0` matches none of them, while a `^` or `~` range on a dt-algosdk version matches every later dt-algosdk built on the same algosdk version, breaking releases included. A version reads `<algosdk version>-dt.<dt-algorand release>.<SDK release>`: `3.9.0-dt.4.1.0.0` is built on algosdk 3.9.0, covers the API of dt-algorand dt4 (`v5.0.5-dt4`), and is SDK release 1.0.0 for that pair.
+`npm ls algosdk` or `pnpm why algosdk` (`yarn why dt-algosdk` on Yarn) should then list only `dt-algosdk@3.9.0-dt.4.1.0.0`. Pin the exact version, with no `^` or `~` (`npm install -E`): dt-algosdk versions are prereleases, so `^3.9.0` matches none of them, while a `^` or `~` range on a dt-algosdk version matches every later dt-algosdk built on the same algosdk version, breaking releases included. A version reads `<algosdk version>-dt.<dt-algorand release>.<SDK release>`: `3.9.0-dt.4.1.0.0` is built on algosdk 3.9.0, covers the API of dt-algorand dt4 (`v5.0.5-dt4`), and is SDK release 1.0.0. The SDK release counts on across new algosdk and dt-algorand versions; it never starts over.
 
 ### Quick start
 

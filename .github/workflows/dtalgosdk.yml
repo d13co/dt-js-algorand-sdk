@@ -133,7 +133,8 @@ jobs:
           if npm view "dt-algosdk@$VERSION" version >/dev/null 2>&1; then
             echo "::notice::dt-algosdk@$VERSION is already on npm, not publishing it again"
           else
-            npm publish "package/dt-algosdk-$VERSION.tgz" --tag latest
+            # ./ makes npm read a file: without it, package/<file> is a GitHub shorthand
+            npm publish "./package/dt-algosdk-$VERSION.tgz" --tag latest
           fi
 
       - name: Create GitHub release

@@ -56,7 +56,7 @@ npm (`package.json`):
 ```json
 {
   "dependencies": {
-    "algosdk": "npm:dtalgosdk@3.9.0-dt.4.0.0.1"
+    "algosdk": "npm:dtalgosdk@3.9.0-dt.4.1.0.0"
   },
   "overrides": {
     "algosdk": "$algosdk"
@@ -68,7 +68,7 @@ pnpm 10 and later (`pnpm-workspace.yaml`; pnpm 11 and later read overrides only 
 
 ```yaml
 overrides:
-  algosdk: npm:dtalgosdk@3.9.0-dt.4.0.0.1
+  algosdk: npm:dtalgosdk@3.9.0-dt.4.1.0.0
 ```
 
 pnpm 9 (`package.json`; it warns about an unmet `algosdk` peer dependency, which is harmless):
@@ -77,7 +77,7 @@ pnpm 9 (`package.json`; it warns about an unmet `algosdk` peer dependency, which
 {
   "pnpm": {
     "overrides": {
-      "algosdk": "npm:dtalgosdk@3.9.0-dt.4.0.0.1"
+      "algosdk": "npm:dtalgosdk@3.9.0-dt.4.1.0.0"
     }
   }
 }
@@ -88,21 +88,21 @@ Yarn and Bun (`package.json`):
 ```json
 {
   "dependencies": {
-    "algosdk": "npm:dtalgosdk@3.9.0-dt.4.0.0.1"
+    "algosdk": "npm:dtalgosdk@3.9.0-dt.4.1.0.0"
   },
   "resolutions": {
-    "algosdk": "npm:dtalgosdk@3.9.0-dt.4.0.0.1"
+    "algosdk": "npm:dtalgosdk@3.9.0-dt.4.1.0.0"
   }
 }
 ```
 
 Yarn 4 refuses versions published less than a day ago (`npmMinimalAgeGate`). To install a new dtalgosdk release right away, add `npmPreapprovedPackages: ["dtalgosdk"]` to `.yarnrc.yml`.
 
-Then check that only one copy is installed: `npm ls algosdk` or `pnpm why algosdk` (`yarn why dtalgosdk` on Yarn) should list `dtalgosdk@3.9.0-dt.4.0.0.1` and nothing else.
+Then check that only one copy is installed: `npm ls algosdk` or `pnpm why algosdk` (`yarn why dtalgosdk` on Yarn) should list `dtalgosdk@3.9.0-dt.4.1.0.0` and nothing else.
 
-Pin the exact version: dtalgosdk versions are prereleases, and ranges such as `^3.9.0` do not match them. A version reads `<algosdk version>-dt.<dt-algorand release>.<SDK release>`: `3.9.0-dt.4.0.0.1` is built on algosdk 3.9.0, covers the API of dt-algorand dt4 (`v5.0.5-dt4`), and is SDK release 0.0.1 for that pair.
+Pin the exact version: dtalgosdk versions are prereleases, and ranges such as `^3.9.0` do not match them. A version reads `<algosdk version>-dt.<dt-algorand release>.<SDK release>`: `3.9.0-dt.4.1.0.0` is built on algosdk 3.9.0, covers the API of dt-algorand dt4 (`v5.0.5-dt4`), and is SDK release 1.0.0 for that pair.
 
-To use a local checkout instead, run `npm run build` in it (and again after each change), then use it in place of the registry version. With pnpm, set the override to `link:/path/to/js-algorand-sdk`. With npm, put a tarball from `npm pack` in `dependencies` (`"algosdk": "file:./vendor/dtalgosdk-3.9.0-dt.4.0.0.1.tgz"`) and keep the override as `"$algosdk"`: npm rejects an override that differs from the direct dependency.
+To use a local checkout instead, run `npm run build` in it (and again after each change), then use it in place of the registry version. With pnpm, set the override to `link:/path/to/js-algorand-sdk`. With npm, put a tarball from `npm pack` in `dependencies` (`"algosdk": "file:./vendor/dtalgosdk-3.9.0-dt.4.1.0.0.tgz"`) and keep the override as `"$algosdk"`: npm rejects an override that differs from the direct dependency.
 
 ## New exports
 

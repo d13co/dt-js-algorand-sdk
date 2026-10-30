@@ -1,6 +1,6 @@
 {
   "name": "dtalgosdk",
-  "version": "3.9.0-dt.4.0.0.1",
+  "version": "3.9.0-dt.4.1.0.0",
   "description": "algosdk with time-travel algod support: reads at past rounds, change history, asset holders, multi-group, multi-round simulate, and read-only TEAL queries",
   "main": "dist/cjs/index.js",
   "module": "dist/esm/index.js",

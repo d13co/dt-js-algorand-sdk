@@ -28,7 +28,7 @@ npm (`package.json`):
 ```json
 {
   "dependencies": {
-    "algosdk": "npm:dtalgosdk@3.9.0-dt.4.0.0.1"
+    "algosdk": "npm:dtalgosdk@3.9.0-dt.4.1.0.0"
   },
   "overrides": {
     "algosdk": "$algosdk"
@@ -40,7 +40,7 @@ pnpm 10 and later (`pnpm-workspace.yaml`; pnpm 11 and later read overrides only 
 
 ```yaml
 overrides:
-  algosdk: npm:dtalgosdk@3.9.0-dt.4.0.0.1
+  algosdk: npm:dtalgosdk@3.9.0-dt.4.1.0.0
 ```
 
 pnpm 9 (`package.json`; it warns about an unmet `algosdk` peer dependency, which is harmless):
@@ -49,7 +49,7 @@ pnpm 9 (`package.json`; it warns about an unmet `algosdk` peer dependency, which
 {
   "pnpm": {
     "overrides": {
-      "algosdk": "npm:dtalgosdk@3.9.0-dt.4.0.0.1"
+      "algosdk": "npm:dtalgosdk@3.9.0-dt.4.1.0.0"
     }
   }
 }
@@ -60,17 +60,17 @@ Yarn and Bun (`package.json`):
 ```json
 {
   "dependencies": {
-    "algosdk": "npm:dtalgosdk@3.9.0-dt.4.0.0.1"
+    "algosdk": "npm:dtalgosdk@3.9.0-dt.4.1.0.0"
   },
   "resolutions": {
-    "algosdk": "npm:dtalgosdk@3.9.0-dt.4.0.0.1"
+    "algosdk": "npm:dtalgosdk@3.9.0-dt.4.1.0.0"
   }
 }
 ```
 
 Yarn 4 refuses versions published less than a day ago (`npmMinimalAgeGate`). To install a new dtalgosdk release right away, add `npmPreapprovedPackages: ["dtalgosdk"]` to `.yarnrc.yml`.
 
-`npm ls algosdk` or `pnpm why algosdk` (`yarn why dtalgosdk` on Yarn) should then list only `dtalgosdk@3.9.0-dt.4.0.0.1`. Pin the exact version: dtalgosdk versions are prereleases, and ranges such as `^3.9.0` do not match them. A version reads `<algosdk version>-dt.<dt-algorand release>.<SDK release>`: `3.9.0-dt.4.0.0.1` is built on algosdk 3.9.0, covers the API of dt-algorand dt4 (`v5.0.5-dt4`), and is SDK release 0.0.1 for that pair.
+`npm ls algosdk` or `pnpm why algosdk` (`yarn why dtalgosdk` on Yarn) should then list only `dtalgosdk@3.9.0-dt.4.1.0.0`. Pin the exact version: dtalgosdk versions are prereleases, and ranges such as `^3.9.0` do not match them. A version reads `<algosdk version>-dt.<dt-algorand release>.<SDK release>`: `3.9.0-dt.4.1.0.0` is built on algosdk 3.9.0, covers the API of dt-algorand dt4 (`v5.0.5-dt4`), and is SDK release 1.0.0 for that pair.
 
 ### Quick start
 
@@ -108,7 +108,7 @@ Existing codebases using v2 of this library will be incompatible with v3. The v3
 ### [Node.js](https://nodejs.org/en/download/)
 
 ```
-$ npm install algosdk@npm:dtalgosdk@3.9.0-dt.4.0.0.1
+$ npm install algosdk@npm:dtalgosdk@3.9.0-dt.4.1.0.0
 ```
 
 This installs dtalgosdk under the name `algosdk`. If other dependencies use algosdk, also add the override from [Installing dtalgosdk in place of algosdk](#installing-dtalgosdk-in-place-of-algosdk), so that there is only one copy.
@@ -121,7 +121,7 @@ Include a minified browser bundle directly in your HTML like so. It defines the 
 
 ```html
 <script
-  src="https://unpkg.com/dtalgosdk@3.9.0-dt.4.0.0.1/dist/browser/algosdk.min.js"
+  src="https://unpkg.com/dtalgosdk@3.9.0-dt.4.1.0.0/dist/browser/algosdk.min.js"
   integrity="sha384-kRYLPxjG6jcgpCivGOasfvJ2avIDZObsvdZEG0YBdhKKC6JbOj6sApwckojSTW6w"
   crossorigin="anonymous"
 ></script>
@@ -131,7 +131,7 @@ or
 
 ```html
 <script
-  src="https://cdn.jsdelivr.net/npm/dtalgosdk@3.9.0-dt.4.0.0.1/dist/browser/algosdk.min.js"
+  src="https://cdn.jsdelivr.net/npm/dtalgosdk@3.9.0-dt.4.1.0.0/dist/browser/algosdk.min.js"
   integrity="sha384-kRYLPxjG6jcgpCivGOasfvJ2avIDZObsvdZEG0YBdhKKC6JbOj6sApwckojSTW6w"
   crossorigin="anonymous"
 ></script>

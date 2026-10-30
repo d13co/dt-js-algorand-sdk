@@ -12,7 +12,7 @@ import { simulateWithRounds } from './errors.js';
  * {@link SimulateRawTransactions} with the fork's simulate features: several
  * transaction groups per request, `parallelGroups`, `rounds`, the validity
  * window modes and `protocol`. Requires a dtalgod node. A node with `rounds`
- * disabled (`MaxAPISimulateRounds` 0, `maxRounds` 0 in `simulateLimits()`)
+ * disabled (`MaxAPISimulateRounds` 0, `simulate.maxRounds` 0 in `capabilities()`)
  * is thrown as a {@link DTUnsupportedError}.
  *
  * The request is copied when this is made (its group list too, not the groups

@@ -23,7 +23,8 @@ import {
   SimulateProtocolOverride,
   SimulateProtocolNote,
   SimulateProtocolNoteHit,
-  SimulateLimitsResponse,
+  CapabilitiesResponse,
+  SimulateLimits,
   QueryLimits,
   QueryRequest,
   QueryRequestParams,
@@ -141,15 +142,17 @@ const status = (code: number) => () => ({
   status: code,
   json: { message: 'nope' },
 });
-/** What a dtalgod node with time travel answers to the limits request. */
-const nodeLimits = {
-  'max-txn-groups': 8,
-  'max-rounds': 4,
-  'max-extra-opcode-budget': 640000,
-  'resource-limit-multiplier': 2,
-  'time-limit-seconds': 108,
+/** What a dtalgod node with time travel answers to GET /v2/capabilities. */
+const nodeCaps = {
   'time-travel': true,
   'developer-api': false,
+  'time-limit-seconds': 108,
+  simulate: {
+    'max-txn-groups': 8,
+    'max-rounds': 4,
+    'max-extra-opcode-budget': 640000,
+    'resource-limit-multiplier': 2,
+  },
 };
 
 const badRequest = (message: string) => () => ({
@@ -545,7 +548,7 @@ describe('time travel', () => {
       'pack-rounds',
       'validity-window',
       'simulate-protocol',
-      'simulate-limits',
+      'capabilities',
       'query',
     ]) {
       assert.ok(DTAlgodClient.features.includes(f), f);
@@ -559,40 +562,35 @@ describe('time travel', () => {
   });
 
   describe('supportsDT', () => {
-    it('reads timeTravel from the limits, sharing their request', async () => {
-      const stub = new StubClient([ok(nodeLimits)]);
+    it('reads timeTravel from the capabilities, sharing their request', async () => {
+      const stub = new StubClient([ok(nodeCaps)]);
       const client = new DTAlgodClient(stub, '');
       assert.strictEqual(await client.supportsDT(), true);
       assert.strictEqual(await client.supportsDT(), true);
-      await client.simulateLimits();
+      await client.capabilities();
       assert.strictEqual(stub.calls.length, 1);
-      assert.strictEqual(
-        stub.calls[0].path,
-        '/v2/transactions/simulate/limits'
-      );
+      assert.strictEqual(stub.calls[0].path, '/v2/capabilities');
     });
 
     it('is false on a dtalgod node with time travel off', async () => {
-      const stub = new StubClient([
-        ok({ ...nodeLimits, 'time-travel': false }),
-      ]);
+      const stub = new StubClient([ok({ ...nodeCaps, 'time-travel': false })]);
       assert.strictEqual(await new DTAlgodClient(stub, '').supportsDT(), false);
     });
 
-    it('is false on stock algod, which has no limits endpoint', async () => {
+    it('is false on stock algod, which has no capabilities endpoint', async () => {
       const stub = new StubClient([status(404)]);
       assert.strictEqual(await new DTAlgodClient(stub, '').supportsDT(), false);
     });
 
     it('rethrows other errors without caching them', async () => {
-      const stub = new StubClient([status(401), ok(nodeLimits)]);
+      const stub = new StubClient([status(401), ok(nodeCaps)]);
       const client = new DTAlgodClient(stub, '');
       await assert.rejects(client.supportsDT());
       assert.strictEqual(await client.supportsDT(), true);
     });
 
     it('shares one request between concurrent calls', async () => {
-      const stub = new StubClient([ok(nodeLimits)]);
+      const stub = new StubClient([ok(nodeCaps)]);
       const client = new DTAlgodClient(stub, '');
       assert.deepStrictEqual(
         await Promise.all([client.supportsDT(), client.supportsDT()]),
@@ -605,7 +603,7 @@ describe('time travel', () => {
   describe('supportsAssetHolders', () => {
     it('is true when the node rejects the probe limit, and is cached', async () => {
       const stub = new StubClient([
-        ok(nodeLimits),
+        ok(nodeCaps),
         badRequest('limit must be between 1 and 10000'),
       ]);
       const client = new DTAlgodClient(stub, '');
@@ -618,7 +616,7 @@ describe('time travel', () => {
 
     it('is false with the holders index off', async () => {
       const stub = new StubClient([
-        ok(nodeLimits),
+        ok(nodeCaps),
         badRequest(
           'asset holders require EnableTimeTravel and TimeTravelHoldersIndex'
         ),
@@ -631,7 +629,7 @@ describe('time travel', () => {
 
     it('is false without time travel, without probing', async () => {
       for (const answer of [
-        ok({ ...nodeLimits, 'time-travel': false }),
+        ok({ ...nodeCaps, 'time-travel': false }),
         status(404),
       ]) {
         const stub = new StubClient([answer]);
@@ -646,7 +644,7 @@ describe('time travel', () => {
 
     it('rethrows other errors without caching them', async () => {
       const stub = new StubClient([
-        ok(nodeLimits),
+        ok(nodeCaps),
         () => ({
           status: 503,
           json: { message: 'the time travel history is not served: x' },
@@ -662,66 +660,74 @@ describe('time travel', () => {
     });
   });
 
-  describe('simulateLimits', () => {
-    const limits = nodeLimits;
+  describe('capabilities', () => {
+    const caps = nodeCaps;
 
-    it('decodes the node limits and caches them', async () => {
-      const stub = new StubClient([ok(limits)]);
+    it('decodes the node capabilities and caches them', async () => {
+      const stub = new StubClient([ok(caps)]);
       const client = new DTAlgodClient(stub, '');
-      const got = await client.simulateLimits();
-      assert.ok(got instanceof SimulateLimitsResponse);
+      const got = await client.capabilities();
+      assert.ok(got instanceof CapabilitiesResponse);
+      assert.ok(got.simulate instanceof SimulateLimits);
       assert.deepStrictEqual(
-        { ...got },
+        { ...got, simulate: { ...got.simulate } },
         {
-          maxTxnGroups: 8,
-          maxRounds: 4,
-          maxExtraOpcodeBudget: 640000,
-          resourceLimitMultiplier: 2,
           timeTravel: true,
           developerApi: false,
           timeLimitSeconds: 108,
+          simulate: {
+            maxTxnGroups: 8,
+            maxRounds: 4,
+            maxExtraOpcodeBudget: 640000,
+            resourceLimitMultiplier: 2,
+          },
           query: undefined,
           reported: true,
         }
       );
-      assert.strictEqual(await client.simulateLimits(), got);
+      assert.strictEqual(await client.capabilities(), got);
       assert.ok(Object.isFrozen(got));
+      assert.ok(Object.isFrozen(got.simulate));
       assert.strictEqual(stub.calls.length, 1);
-      assert.strictEqual(
-        stub.calls[0].path,
-        '/v2/transactions/simulate/limits'
-      );
+      assert.strictEqual(stub.calls[0].path, '/v2/capabilities');
     });
 
     it('decodes 0 rounds and false flags, which a node sends', async () => {
       const stub = new StubClient([
-        ok({ ...limits, 'max-rounds': 0, 'time-travel': false }),
+        ok({
+          ...caps,
+          'time-travel': false,
+          simulate: { ...caps.simulate, 'max-rounds': 0 },
+        }),
       ]);
-      const got = await new DTAlgodClient(stub, '').simulateLimits();
-      assert.strictEqual(got.maxRounds, 0);
+      const got = await new DTAlgodClient(stub, '').capabilities();
+      assert.strictEqual(got.simulate.maxRounds, 0);
       assert.strictEqual(got.timeTravel, false);
     });
 
-    it('falls back to the stock limits on a 404, and caches them', async () => {
+    it('falls back to the stock capabilities on a 404, and caches them', async () => {
       const stub = new StubClient([status(404)]);
       const client = new DTAlgodClient(stub, '');
-      const got = await client.simulateLimits();
-      assert.deepStrictEqual(got, SimulateLimitsResponse.stock());
-      assert.strictEqual(got.maxTxnGroups, 1);
-      assert.strictEqual(got.maxRounds, 0);
-      assert.strictEqual(got.maxExtraOpcodeBudget, 320000);
+      const got = await client.capabilities();
+      assert.deepStrictEqual(got, CapabilitiesResponse.stock());
+      assert.strictEqual(got.simulate.maxTxnGroups, 1);
+      assert.strictEqual(got.simulate.maxRounds, 0);
+      assert.strictEqual(got.simulate.maxExtraOpcodeBudget, 320000);
+      assert.strictEqual(got.simulate.resourceLimitMultiplier, 1);
       assert.strictEqual(got.timeTravel, false);
+      assert.strictEqual(got.developerApi, false);
       assert.strictEqual(got.query, undefined);
       assert.strictEqual(got.reported, false);
       assert.ok(Object.isFrozen(got));
-      assert.strictEqual(await client.simulateLimits(), got);
+      assert.ok(Object.isFrozen(got.simulate));
+      assert.strictEqual(await client.capabilities(), got);
       assert.strictEqual(stub.calls.length, 1);
     });
 
-    it('throws a 404 as DTUnsupportedError from getSimulateLimits', async () => {
+    it('throws a 404 as DTUnsupportedError from getCapabilities', async () => {
       const stub = new StubClient([status(404)]);
       await assert.rejects(
-        new DTAlgodClient(stub, '').getSimulateLimits().do(),
+        new DTAlgodClient(stub, '').getCapabilities().do(),
         (err) =>
           err instanceof DTUnsupportedError &&
           (err.cause as { status?: number }).status === 404
@@ -729,40 +735,43 @@ describe('time travel', () => {
     });
 
     it('rethrows other errors without caching them', async () => {
-      const stub = new StubClient([status(503), ok(limits)]);
+      const stub = new StubClient([status(503), ok(caps)]);
       const client = new DTAlgodClient(stub, '');
       await assert.rejects(
-        client.simulateLimits(),
+        client.capabilities(),
         (err) =>
           !(err instanceof DTUnsupportedError) &&
           (err as { status?: number }).status === 503
       );
-      assert.strictEqual((await client.simulateLimits()).maxTxnGroups, 8);
+      assert.strictEqual(
+        (await client.capabilities()).simulate.maxTxnGroups,
+        8
+      );
       assert.strictEqual(stub.calls.length, 2);
     });
 
     it('shares one request between concurrent calls', async () => {
-      const stub = new StubClient([ok(limits)]);
+      const stub = new StubClient([ok(caps)]);
       const client = new DTAlgodClient(stub, '');
       const [a, b] = await Promise.all([
-        client.simulateLimits(),
-        client.simulateLimits(),
+        client.capabilities(),
+        client.capabilities(),
       ]);
       assert.strictEqual(a, b);
       assert.strictEqual(stub.calls.length, 1);
     });
 
     it('is shared by DTAlgodClient.from for the same client', async () => {
-      const stub = new StubClient([ok(limits)]);
+      const stub = new StubClient([ok(caps)]);
       const algod = new AlgodClient(stub, '');
-      await DTAlgodClient.from(algod).simulateLimits();
-      await DTAlgodClient.from(algod).simulateLimits();
+      await DTAlgodClient.from(algod).capabilities();
+      await DTAlgodClient.from(algod).capabilities();
       assert.strictEqual(stub.calls.length, 1);
     });
 
     // What a node with queries on answers (dtalgorand e30b77b27, defaults).
     const withQuery = {
-      ...limits,
+      ...caps,
       query: {
         'max-call-budget': 320000,
         'max-call-log-bytes': 65536,
@@ -775,7 +784,7 @@ describe('time travel', () => {
 
     it('decodes the query limits, frozen', async () => {
       const stub = new StubClient([ok(withQuery)]);
-      const got = await new DTAlgodClient(stub, '').simulateLimits();
+      const got = await new DTAlgodClient(stub, '').capabilities();
       assert.ok(got.query instanceof QueryLimits);
       assert.deepStrictEqual(
         { ...got.query },
@@ -804,7 +813,7 @@ describe('time travel', () => {
           },
         }),
       ]);
-      const got = await new DTAlgodClient(stub, '').simulateLimits();
+      const got = await new DTAlgodClient(stub, '').capabilities();
       assert.strictEqual(got.timeLimitSeconds, 0);
       assert.strictEqual(got.query!.maxCallLogBytes, 0);
       assert.strictEqual(got.query!.maxCallStateBytes, 0);
@@ -812,30 +821,30 @@ describe('time travel', () => {
     });
 
     it('leaves query undefined when queries are disabled', async () => {
-      const stub = new StubClient([ok(limits)]);
-      const got = await new DTAlgodClient(stub, '').simulateLimits();
+      const stub = new StubClient([ok(caps)]);
+      const got = await new DTAlgodClient(stub, '').capabilities();
       assert.strictEqual(got.query, undefined);
-      const stock = SimulateLimitsResponse.stock();
+      const stock = CapabilitiesResponse.stock();
       assert.strictEqual(stock.query, undefined);
       assert.strictEqual(stock.timeLimitSeconds, 0);
       assert.ok(!/query/.test(algosdk.encodeJSON(stock)));
     });
 
-    it('encodes the limits as the node does', () => {
-      for (const body of [limits, withQuery]) {
+    it('encodes the capabilities as the node does', () => {
+      for (const body of [caps, withQuery]) {
         const decoded = algosdk.decodeJSON(
           JSON.stringify(body),
-          SimulateLimitsResponse
+          CapabilitiesResponse
         );
         assert.deepStrictEqual(JSON.parse(algosdk.encodeJSON(decoded)), body);
       }
     });
 
     it('does not encode reported', () => {
-      const encoded = algosdk.encodeJSON(SimulateLimitsResponse.stock());
+      const encoded = algosdk.encodeJSON(CapabilitiesResponse.stock());
       assert.ok(!/reported/.test(encoded));
       assert.strictEqual(
-        algosdk.decodeJSON(encoded, SimulateLimitsResponse).reported,
+        algosdk.decodeJSON(encoded, CapabilitiesResponse).reported,
         true
       );
     });

@@ -20,13 +20,13 @@ import GetApplicationBoxesAt from './getApplicationBoxesAt.js';
 import GetApplicationBoxVersions from './getApplicationBoxVersions.js';
 import GetApplicationBoxesVersions from './getApplicationBoxesVersions.js';
 import SimulateTransactionsAt from './simulateTransactionsAt.js';
-import GetSimulateLimits from './getSimulateLimits.js';
+import GetCapabilities from './getCapabilities.js';
 import RunQuery from './query.js';
 import { DTUnsupportedError } from './errors.js';
 import {
   QueryRequest,
   QueryRequestParams,
-  SimulateLimitsResponse,
+  CapabilitiesResponse,
 } from './models.js';
 import {
   SimulateRequest,
@@ -58,7 +58,7 @@ export class DTAlgodClient extends AlgodClient {
    * `DTAlgodClient` at runtime on an algosdk that may be stock algosdk
    * rather than dtalgosdk (algokit-utils and generated clients check it). It
    * lists what the SDK has, not what the node has: use
-   * {@link DTAlgodClient.simulateLimits}, {@link DTAlgodClient.supportsDT}
+   * {@link DTAlgodClient.capabilities}, {@link DTAlgodClient.supportsDT}
    * and {@link DTAlgodClient.supportsAssetHolders} for the node.
    * - `reads-at-round`: `.round()` on the account, asset, application, box and
    *   supply reads;
@@ -74,9 +74,10 @@ export class DTAlgodClient extends AlgodClient {
    *   in `simulateTransactions`, and `maxSpan: null` in `packSimulateRounds`;
    * - `simulate-protocol`: `protocol()` in `simulateTransactions`, and
    *   `protocolOverride` on the response and its round results;
-   * - `simulate-limits`: `simulateLimits()` and `getSimulateLimits()`;
-   * - `query`: `query()`, and `query` (plus `timeLimitSeconds`) on
-   *   `simulateLimits()`;
+   * - `capabilities`: `capabilities()` and `getCapabilities()`
+   *   (`GET /v2/capabilities`: `timeTravel`, `developerApi`,
+   *   `timeLimitSeconds`, the `simulate` limits and the `query` limits);
+   * - `query`: `query()`, and `query` on `capabilities()`;
    * - `versions-rounds`: `rounds()` on the `...Versions` methods, and
    *   `changedRound` on their entries;
    * - `versions-keys`: `include('keys')` on `getApplicationVersions`,
@@ -112,7 +113,7 @@ export class DTAlgodClient extends AlgodClient {
     'pack-rounds',
     'validity-window',
     'simulate-protocol',
-    'simulate-limits',
+    'capabilities',
     'query',
     'versions-rounds',
     'versions-keys',
@@ -132,7 +133,7 @@ export class DTAlgodClient extends AlgodClient {
    * `BaseHTTPClient`, if any. Returns `algod` itself if it already is a
    * `DTAlgodClient`. Calling it again with the same client returns
    * the same `DTAlgodClient`, so what it caches, such as
-   * `simulateLimits()`, is kept.
+   * `capabilities()`, is kept.
    *
    * `algod` may come from another copy of algosdk (it is read by shape, not
    * `instanceof`), but transactions and models passed to this client must come
@@ -170,7 +171,7 @@ export class DTAlgodClient extends AlgodClient {
 
   private supportsAssetHoldersResult?: Promise<boolean>;
 
-  private simulateLimitsResult?: Promise<SimulateLimitsResponse>;
+  private capabilitiesResult?: Promise<CapabilitiesResponse>;
 
   /**
    * Given an account address, return the account information, at the latest
@@ -475,8 +476,8 @@ export class DTAlgodClient extends AlgodClient {
    * {@link AlgodClient.simulateTransactions}:
    *
    * - `txnGroups` may hold several groups, up to the node's
-   *   `MaxAPISimulateGroups` (default 16; {@link DTAlgodClient.simulateLimits}
-   *   has the node's value). By default they run in order as
+   *   `MaxAPISimulateGroups` (default 16; `simulate.maxTxnGroups` of
+   *   {@link DTAlgodClient.capabilities} has the node's value). By default they run in order as
    *   consecutive groups of one simulated block: each group sees the effects
    *   of the groups before it, a transaction or lease used by an earlier group
    *   is a duplicate, and the groups share the block's byte limit, so a group
@@ -486,7 +487,7 @@ export class DTAlgodClient extends AlgodClient {
    *   `fixSigners`) or a corrupted evaluator: every later group is then
    *   reported as not simulated. Each group's failure is in its own
    *   `failureMessage` / `failedAt` (0-based). `extraOpcodeBudget` applies to
-   *   each group, up to the node's `maxExtraOpcodeBudget`.
+   *   each group, up to the node's `simulate.maxExtraOpcodeBudget`.
    * - With `.parallelGroups()` (or `parallelGroups` on a
    *   {@link DTSimulateRequest}), every group is simulated alone
    *   against the state at the start round, concurrently.
@@ -513,8 +514,8 @@ export class DTAlgodClient extends AlgodClient {
    * setting. The resources it then reports may not fit in a group that can be
    * submitted.
    *
-   * A node with `rounds` disabled (`maxRounds` 0 in
-   * {@link DTAlgodClient.simulateLimits}) is thrown as a
+   * A node with `rounds` disabled (`simulate.maxRounds` 0 in
+   * {@link DTAlgodClient.capabilities}) is thrown as a
    * {@link DTUnsupportedError}. Several groups, `rounds` and the fork's
    * fields need a dtalgod node: stock algod rejects them with a 400.
    *
@@ -616,7 +617,7 @@ export class DTAlgodClient extends AlgodClient {
    * notes. Pass `protocol('round')` for the chain's own rules.
    *
    * Queries can be disabled on a node (`MaxAPIQueryCalls` 0): the `query` of
-   * {@link DTAlgodClient.simulateLimits} is undefined then, and otherwise has
+   * {@link DTAlgodClient.capabilities} is undefined then, and otherwise has
    * the limits to split requests by (`maxCalls`, `maxRounds`,
    * `maxCallBudget`, `maxCallLogBytes`, `maxCallStateBytes`,
    * `maxResponseBytes`). A node with queries disabled is thrown as a
@@ -627,7 +628,7 @@ export class DTAlgodClient extends AlgodClient {
    *
    * #### Example
    * ```typescript
-   * const { query } = await algodClient.simulateLimits();
+   * const { query } = await algodClient.capabilities();
    * if (query) {
    *   const res = await algodClient
    *     .query({
@@ -656,76 +657,77 @@ export class DTAlgodClient extends AlgodClient {
   }
 
   /**
-   * The node's simulate limits (`GET /v2/transactions/simulate/limits`), as
-   * it reports them. Every dtalgod node has the endpoint; stock algod answers
-   * 404, thrown as a {@link DTUnsupportedError}.
-   * {@link DTAlgodClient.simulateLimits} caches the answer and falls back to
-   * stock algod's limits instead.
+   * The node's capabilities (`GET /v2/capabilities`), as it reports them.
+   * Every dtalgod node has the endpoint; stock algod answers 404, thrown as a
+   * {@link DTUnsupportedError}. {@link DTAlgodClient.capabilities} caches the
+   * answer and falls back to stock algod's capabilities instead.
    *
    * @category GET
    */
-  getSimulateLimits() {
-    return new GetSimulateLimits(this.c);
+  getCapabilities() {
+    return new GetCapabilities(this.c);
   }
 
   /**
-   * The limits to build simulate requests within: how many groups and
-   * `rounds` entries a request may hold, the most `extraOpcodeBudget`, and
-   * whether time travel and the developer API (`execTraceConfig`, protocol
-   * `future`) are on. Pass `maxRounds` to {@link packSimulateRounds}, and
-   * split groups into requests of at most `maxTxnGroups`.
+   * The fork features the node has on, and the limits to build simulate and
+   * query requests within. `simulate` has how many groups and `rounds`
+   * entries a simulate request may hold and the most `extraOpcodeBudget`:
+   * pass `simulate.maxRounds` to {@link packSimulateRounds}, and split groups
+   * into requests of at most `simulate.maxTxnGroups`. `query` has the query
+   * limits, and is undefined when queries are disabled.
    *
-   * This is also how the client tells what the node has: every dtalgod node
-   * serves the limits, and its optional features show in them (`timeTravel`,
-   * `query`, `maxRounds` above 0, `maxTxnGroups` above 1, `developerApi`).
-   * Only the asset holders index does not: see
-   * {@link DTAlgodClient.supportsAssetHolders}.
+   * This is how the client tells what the node has: every dtalgod node
+   * serves its capabilities, and its optional features show in them
+   * (`timeTravel`, `developerApi`, `query`, `simulate.maxRounds` above 0,
+   * `simulate.maxTxnGroups` above 1). Only the asset holders index does not:
+   * see {@link DTAlgodClient.supportsAssetHolders}.
    *
-   * Stock algod has no limits endpoint and answers 404; the limits are then
-   * those of stock algod ({@link SimulateLimitsResponse.stock}), with
-   * `reported` false: one group per request, no `rounds`, no time travel and
-   * no queries.
+   * Stock algod has no capabilities endpoint and answers 404; the answer is
+   * then stock algod's ({@link CapabilitiesResponse.stock}), with `reported`
+   * false: no time travel, no queries, one group per simulate request and no
+   * `rounds`.
    *
    * The answer is cached on the client and shared, so it is frozen (its
-   * `query` too). Other errors, such as network failures, are rethrown and
-   * not cached.
+   * `simulate` and `query` too). Other errors, such as network failures, are
+   * rethrown and not cached.
    *
    * #### Example
    * ```typescript
-   * const limits = await algodClient.simulateLimits();
-   * if (limits.maxRounds === 0) {
+   * const { simulate } = await algodClient.capabilities();
+   * if (simulate.maxRounds === 0) {
    *   // No `rounds`: send one request per round, with `round` set.
    * } else {
    *   const { windows } = algosdk.packSimulateRounds(rounds, {
-   *     maxRounds: limits.maxRounds,
+   *     maxRounds: simulate.maxRounds,
    *   });
    * }
    * ```
    */
-  simulateLimits(): Promise<SimulateLimitsResponse> {
-    if (!this.simulateLimitsResult) {
-      this.simulateLimitsResult = this.getSimulateLimits()
+  capabilities(): Promise<CapabilitiesResponse> {
+    if (!this.capabilitiesResult) {
+      this.capabilitiesResult = this.getCapabilities()
         .do()
         .catch((err) => {
           if (err instanceof DTUnsupportedError) {
-            return SimulateLimitsResponse.stock();
+            return CapabilitiesResponse.stock();
           }
-          this.simulateLimitsResult = undefined;
+          this.capabilitiesResult = undefined;
           throw err;
         })
-        .then((limits) => {
-          if (limits.query) Object.freeze(limits.query);
-          return Object.freeze(limits);
+        .then((caps) => {
+          Object.freeze(caps.simulate);
+          if (caps.query) Object.freeze(caps.query);
+          return Object.freeze(caps);
         });
     }
-    return this.simulateLimitsResult;
+    return this.capabilitiesResult;
   }
 
   /**
    * Whether the node has time travel (`EnableTimeTravel`): reads at past
    * rounds, the `...Versions` methods and simulate at any round since
-   * genesis. It is the `timeTravel` of {@link DTAlgodClient.simulateLimits},
-   * so it costs no request once the limits are cached, and is false on stock
+   * genesis. It is the `timeTravel` of {@link DTAlgodClient.capabilities},
+   * so it costs no request once they are cached, and is false on stock
    * algod. Errors, such as network failures, are rethrown and not cached.
    *
    * A node with time travel whose history is not trusted yet answers reads at
@@ -739,7 +741,7 @@ export class DTAlgodClient extends AlgodClient {
    * ```
    */
   async supportsDT(): Promise<boolean> {
-    return (await this.simulateLimits()).timeTravel;
+    return (await this.capabilities()).timeTravel;
   }
 
   /**

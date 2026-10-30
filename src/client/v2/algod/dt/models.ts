@@ -3022,7 +3022,7 @@ export class DTSimulateResponse extends SimulateResponse {
 
 /**
  * The limits a node places on `POST /v2/query` requests
- * ({@link SimulateLimitsResponse.query}). The values are the ones the node
+ * ({@link CapabilitiesResponse.query}). The values are the ones the node
  * applies, after it clamps its configuration.
  */
 export class QueryLimits implements Encodable {
@@ -3165,14 +3165,11 @@ export class QueryLimits implements Encodable {
 }
 
 /**
- * The limits a node places on simulate requests, and the simulate features it
- * allows (`GET /v2/transactions/simulate/limits`, tag `dtalgorand`). The values
- * are the ones the node applies, after it clamps its configuration.
- *
- * `query` is undefined when the node has queries disabled
- * (`MaxAPIQueryCalls` 0): fall back to simulate then.
+ * The limits a node places on `POST /v2/transactions/simulate` requests
+ * ({@link CapabilitiesResponse.simulate}). The values are the ones the node
+ * applies, after it clamps its configuration.
  */
-export class SimulateLimitsResponse implements Encodable {
+export class SimulateLimits implements Encodable {
   private static encodingSchemaValue: Schema | undefined;
 
   static get encodingSchema(): Schema {
@@ -3198,51 +3195,10 @@ export class SimulateLimitsResponse implements Encodable {
           key: 'resource-limit-multiplier',
           valueSchema: new Uint64Schema(),
           omitEmpty: false,
-        },
-        {
-          key: 'time-travel',
-          valueSchema: new BooleanSchema(),
-          omitEmpty: false,
-        },
-        {
-          key: 'developer-api',
-          valueSchema: new BooleanSchema(),
-          omitEmpty: false,
-        },
-        {
-          key: 'time-limit-seconds',
-          valueSchema: new Uint64Schema(),
-          omitEmpty: false,
-        },
-        {
-          key: 'query',
-          valueSchema: new OptionalSchema(QueryLimits.encodingSchema),
-          omitEmpty: true,
         }
       );
     }
     return this.encodingSchemaValue;
-  }
-
-  /**
-   * The limits of stock algod, which has no limits endpoint: one transaction
-   * group per request, no `rounds`, no time travel, no queries, 320,000 extra
-   * opcode budget and the consensus limits on unnamed resources. `reported`
-   * is false. `developerApi` and `timeLimitSeconds` are unknown and set to
-   * false and 0: a stock algod with its own `EnableDeveloperAPI` (LocalNet
-   * has it) does allow `execTraceConfig`.
-   */
-  static stock(): SimulateLimitsResponse {
-    return new SimulateLimitsResponse({
-      maxTxnGroups: 1,
-      maxRounds: 0,
-      maxExtraOpcodeBudget: 320000,
-      resourceLimitMultiplier: 1,
-      timeTravel: false,
-      developerApi: false,
-      timeLimitSeconds: 0,
-      reported: false,
-    });
   }
 
   /**
@@ -3273,17 +3229,139 @@ export class SimulateLimitsResponse implements Encodable {
   public resourceLimitMultiplier: number;
 
   /**
+   * Creates a new `SimulateLimits` object.
+   * @param maxTxnGroups - The most transaction groups a request may hold.
+   * @param maxRounds - The most entries a request may list in `rounds`; 0 means
+   * `rounds` is disabled.
+   * @param maxExtraOpcodeBudget - The most `extraOpcodeBudget`, per group.
+   * @param resourceLimitMultiplier - The factor on the unnamed-resource limits.
+   */
+  constructor({
+    maxTxnGroups,
+    maxRounds,
+    maxExtraOpcodeBudget,
+    resourceLimitMultiplier,
+  }: {
+    maxTxnGroups: number | bigint;
+    maxRounds: number | bigint;
+    maxExtraOpcodeBudget: number | bigint;
+    resourceLimitMultiplier: number | bigint;
+  }) {
+    this.maxTxnGroups = ensureSafeInteger(maxTxnGroups);
+    this.maxRounds = ensureSafeInteger(maxRounds);
+    this.maxExtraOpcodeBudget = ensureSafeInteger(maxExtraOpcodeBudget);
+    this.resourceLimitMultiplier = ensureSafeInteger(resourceLimitMultiplier);
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  getEncodingSchema(): Schema {
+    return SimulateLimits.encodingSchema;
+  }
+
+  toEncodingData(): Map<string, unknown> {
+    return new Map<string, unknown>([
+      ['max-txn-groups', this.maxTxnGroups],
+      ['max-rounds', this.maxRounds],
+      ['max-extra-opcode-budget', this.maxExtraOpcodeBudget],
+      ['resource-limit-multiplier', this.resourceLimitMultiplier],
+    ]);
+  }
+
+  static fromEncodingData(data: unknown): SimulateLimits {
+    if (!(data instanceof Map)) {
+      throw new Error(`Invalid decoded SimulateLimits: ${data}`);
+    }
+    return new SimulateLimits({
+      maxTxnGroups: data.get('max-txn-groups') ?? 0,
+      maxRounds: data.get('max-rounds') ?? 0,
+      maxExtraOpcodeBudget: data.get('max-extra-opcode-budget') ?? 0,
+      resourceLimitMultiplier: data.get('resource-limit-multiplier') ?? 0,
+    });
+  }
+}
+
+/**
+ * The fork features a node has on, and the limits it places on simulate and
+ * query requests (`GET /v2/capabilities`, tag `dtalgorand`). Every dtalgod
+ * node serves it; stock algod answers 404. The values are the ones the node
+ * applies, after it clamps its configuration.
+ *
+ * `query` is undefined when the node has queries disabled
+ * (`MaxAPIQueryCalls` 0): fall back to simulate then.
+ */
+export class CapabilitiesResponse implements Encodable {
+  private static encodingSchemaValue: Schema | undefined;
+
+  static get encodingSchema(): Schema {
+    if (!this.encodingSchemaValue) {
+      this.encodingSchemaValue = new NamedMapSchema([]);
+      (this.encodingSchemaValue as NamedMapSchema).pushEntries(
+        {
+          key: 'time-travel',
+          valueSchema: new BooleanSchema(),
+          omitEmpty: false,
+        },
+        {
+          key: 'developer-api',
+          valueSchema: new BooleanSchema(),
+          omitEmpty: false,
+        },
+        {
+          key: 'time-limit-seconds',
+          valueSchema: new Uint64Schema(),
+          omitEmpty: false,
+        },
+        {
+          key: 'simulate',
+          valueSchema: SimulateLimits.encodingSchema,
+          omitEmpty: false,
+        },
+        {
+          key: 'query',
+          valueSchema: new OptionalSchema(QueryLimits.encodingSchema),
+          omitEmpty: true,
+        }
+      );
+    }
+    return this.encodingSchemaValue;
+  }
+
+  /**
+   * The capabilities of stock algod, which has no capabilities endpoint: no
+   * time travel, no queries, and simulate with one transaction group per
+   * request, no `rounds`, 320,000 extra opcode budget and the consensus limits
+   * on unnamed resources. `reported` is false. `developerApi` and
+   * `timeLimitSeconds` are unknown and set to false and 0: a stock algod with
+   * its own `EnableDeveloperAPI` (LocalNet has it) does allow
+   * `execTraceConfig`.
+   */
+  static stock(): CapabilitiesResponse {
+    return new CapabilitiesResponse({
+      timeTravel: false,
+      developerApi: false,
+      timeLimitSeconds: 0,
+      simulate: new SimulateLimits({
+        maxTxnGroups: 1,
+        maxRounds: 0,
+        maxExtraOpcodeBudget: 320000,
+        resourceLimitMultiplier: 1,
+      }),
+      reported: false,
+    });
+  }
+
+  /**
    * Whether the node has time travel (node config `EnableTimeTravel`): reads
    * at past rounds, the `...Versions` methods, `getAssetHolders` (which also
-   * needs the holders index), and simulate `round` and `rounds` at any round
-   * since genesis, not only the node's last few rounds.
+   * needs the holders index), and simulate `round` and `rounds` and query
+   * `rounds` at any round since genesis, not only the node's last few rounds.
    * {@link DTAlgodClient.supportsDT} reads it.
    */
   public timeTravel: boolean;
 
   /**
-   * Whether requests may set `execTraceConfig` and the protocol `future`
-   * (node config `EnableDeveloperAPI`).
+   * Whether requests may set simulate's `execTraceConfig` and the protocol
+   * `future` in simulate and query (node config `EnableDeveloperAPI`).
    */
   public developerApi: boolean;
 
@@ -3295,6 +3373,9 @@ export class SimulateLimitsResponse implements Encodable {
    */
   public timeLimitSeconds: number;
 
+  /** The limits of `POST /v2/transactions/simulate`. */
+  public simulate: SimulateLimits;
+
   /**
    * The limits of `POST /v2/query` (`DTAlgodClient.query`). Undefined
    * when the node has queries disabled: use simulate then.
@@ -3302,74 +3383,58 @@ export class SimulateLimitsResponse implements Encodable {
   public query?: QueryLimits;
 
   /**
-   * Whether the node reported these limits: true when decoded from its
-   * response, false for {@link SimulateLimitsResponse.stock}, the fallback
-   * for a node without the endpoint. Not part of the response's encoding.
+   * Whether the node reported these capabilities: true when decoded from its
+   * response, false for {@link CapabilitiesResponse.stock}, the fallback for
+   * stock algod. Not part of the response's encoding.
    */
   public reported: boolean;
 
   /**
-   * Creates a new `SimulateLimitsResponse` object.
-   * @param maxTxnGroups - The most transaction groups a request may hold.
-   * @param maxRounds - The most entries a request may list in `rounds`; 0 means
-   * `rounds` is disabled.
-   * @param maxExtraOpcodeBudget - The most `extraOpcodeBudget`, per group.
-   * @param resourceLimitMultiplier - The factor on the unnamed-resource limits.
-   * @param timeTravel - Whether any round since genesis can be simulated.
+   * Creates a new `CapabilitiesResponse` object.
+   * @param timeTravel - Whether the node has time travel.
    * @param developerApi - Whether `execTraceConfig` and the protocol `future`
    * are allowed.
    * @param timeLimitSeconds - The time limit of a request; 0 means no limit.
+   * @param simulate - The limits of simulate requests.
    * @param query - The limits of `POST /v2/query`; undefined when the node has
    * queries disabled.
-   * @param reported - Whether the node reported these limits. Not encoded;
-   * defaults to false, and decoding sets it to true.
+   * @param reported - Whether the node reported these capabilities. Not
+   * encoded; defaults to false, and decoding sets it to true.
    */
   constructor({
-    maxTxnGroups,
-    maxRounds,
-    maxExtraOpcodeBudget,
-    resourceLimitMultiplier,
     timeTravel,
     developerApi,
     timeLimitSeconds,
+    simulate,
     query,
     reported = false,
   }: {
-    maxTxnGroups: number | bigint;
-    maxRounds: number | bigint;
-    maxExtraOpcodeBudget: number | bigint;
-    resourceLimitMultiplier: number | bigint;
     timeTravel: boolean;
     developerApi: boolean;
     timeLimitSeconds: number | bigint;
+    simulate: SimulateLimits;
     query?: QueryLimits;
     reported?: boolean;
   }) {
-    this.maxTxnGroups = ensureSafeInteger(maxTxnGroups);
-    this.maxRounds = ensureSafeInteger(maxRounds);
-    this.maxExtraOpcodeBudget = ensureSafeInteger(maxExtraOpcodeBudget);
-    this.resourceLimitMultiplier = ensureSafeInteger(resourceLimitMultiplier);
     this.timeTravel = timeTravel;
     this.developerApi = developerApi;
     this.timeLimitSeconds = ensureSafeInteger(timeLimitSeconds);
+    this.simulate = simulate;
     this.query = query;
     this.reported = reported;
   }
 
   // eslint-disable-next-line class-methods-use-this
   getEncodingSchema(): Schema {
-    return SimulateLimitsResponse.encodingSchema;
+    return CapabilitiesResponse.encodingSchema;
   }
 
   toEncodingData(): Map<string, unknown> {
     return new Map<string, unknown>([
-      ['max-txn-groups', this.maxTxnGroups],
-      ['max-rounds', this.maxRounds],
-      ['max-extra-opcode-budget', this.maxExtraOpcodeBudget],
-      ['resource-limit-multiplier', this.resourceLimitMultiplier],
       ['time-travel', this.timeTravel],
       ['developer-api', this.developerApi],
       ['time-limit-seconds', this.timeLimitSeconds],
+      ['simulate', this.simulate.toEncodingData()],
       [
         'query',
         typeof this.query !== 'undefined'
@@ -3379,18 +3444,17 @@ export class SimulateLimitsResponse implements Encodable {
     ]);
   }
 
-  static fromEncodingData(data: unknown): SimulateLimitsResponse {
+  static fromEncodingData(data: unknown): CapabilitiesResponse {
     if (!(data instanceof Map)) {
-      throw new Error(`Invalid decoded SimulateLimitsResponse: ${data}`);
+      throw new Error(`Invalid decoded CapabilitiesResponse: ${data}`);
     }
-    return new SimulateLimitsResponse({
-      maxTxnGroups: data.get('max-txn-groups') ?? 0,
-      maxRounds: data.get('max-rounds') ?? 0,
-      maxExtraOpcodeBudget: data.get('max-extra-opcode-budget') ?? 0,
-      resourceLimitMultiplier: data.get('resource-limit-multiplier') ?? 0,
+    return new CapabilitiesResponse({
       timeTravel: data.get('time-travel') ?? false,
       developerApi: data.get('developer-api') ?? false,
       timeLimitSeconds: data.get('time-limit-seconds') ?? 0,
+      simulate: SimulateLimits.fromEncodingData(
+        data.get('simulate') ?? new Map()
+      ),
       query:
         typeof data.get('query') !== 'undefined'
           ? QueryLimits.fromEncodingData(data.get('query'))

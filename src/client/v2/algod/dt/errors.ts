@@ -14,7 +14,7 @@ import { SimulateTransactionGroupResult } from '../models/types.js';
  * - queries are disabled (`MaxAPIQueryCalls` 0): `query`;
  * - simulate `rounds` is disabled (`MaxAPISimulateRounds` 0);
  * - the node has no simulate limits endpoint, which every dtalgod node has:
- *   it is stock algod (`getSimulateLimits`).
+ *   it is stock algod (`getCapabilities`).
  */
 export class DTUnsupportedError extends Error {
   /** The round that was asked for, when the error comes from a read at a round. */
@@ -279,7 +279,7 @@ export class SimulateGroupError extends Error {
 
 /**
  * The most bytes a `POST /v2/query` request body may have: a fixed limit of
- * the node, the same as simulate's, that `simulateLimits()` does not report.
+ * the node, the same as simulate's, that `capabilities()` does not report.
  * A planning hint for splitting requests (`encodeMsgpack(request).length`);
  * the client does not check it.
  */
@@ -377,7 +377,7 @@ export function retryAfterSeconds(err: unknown): number | undefined {
 /**
  * Whether an error is the node's 504 "the request reached the node's time
  * limit": the request ran longer than the node allows
- * (`RestWriteTimeoutSeconds`, `timeLimitSeconds` in `simulateLimits()`).
+ * (`RestWriteTimeoutSeconds`, `timeLimitSeconds` in `capabilities()`).
  * Retrying the same request will fail again: split it (fewer groups, calls,
  * rounds, or a shorter versions page) instead.
  *

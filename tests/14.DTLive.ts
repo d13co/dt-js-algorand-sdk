@@ -66,13 +66,13 @@ describe('time travel against a live node', function liveSuite() {
     assert.strictEqual(await c.supportsDT(), true);
   });
 
-  it('reports its simulate limits', async () => {
-    const l = await c.simulateLimits();
-    assert.strictEqual(l.reported, true);
-    assert.strictEqual(l.timeTravel, true);
-    assert.ok(l.maxTxnGroups >= 1);
-    assert.ok(l.maxExtraOpcodeBudget >= 320000);
-    assert.ok(l.resourceLimitMultiplier >= 1);
+  it('reports its capabilities', async () => {
+    const caps = await c.capabilities();
+    assert.strictEqual(caps.reported, true);
+    assert.strictEqual(caps.timeTravel, true);
+    assert.ok(caps.simulate.maxTxnGroups >= 1);
+    assert.ok(caps.simulate.maxExtraOpcodeBudget >= 320000);
+    assert.ok(caps.simulate.resourceLimitMultiplier >= 1);
   });
 
   describe('reads at a round', () => {
@@ -315,7 +315,7 @@ describe('time travel against a live node', function liveSuite() {
 
     before(async function needsQuery() {
       if (!c) this.skip();
-      const { query } = await c.simulateLimits();
+      const { query } = await c.capabilities();
       // Queries are optional (MaxAPIQueryCalls).
       if (!query) this.skip();
       limits = query!;

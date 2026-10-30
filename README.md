@@ -12,8 +12,8 @@ This is `dtalgosdk`, a fork of [algosdk](https://www.npmjs.com/package/algosdk) 
 - **Asset holders**: `getAssetHolders()` lists every holder of an asset at a round.
 - **Simulate** with several groups per request (in sequence or with `parallelGroups()`), at several rounds per request (`rounds()`), with the validity window skipped or moved to each round (`skipValidityWindow()`, `rewriteValidityWindow()`), and under a later consensus protocol (`protocol()`).
 - **Query**: `query()` runs read-only TEAL calls (one program or deployed app, many calls) at several rounds per request through the fork's `POST /v2/query`, returning each call's logs, cost and error per round, without transactions, signatures or fees.
-- **Helpers**: `DTSimulateRequest.fromTransactions()` for unsigned transactions, `packSimulateRounds()` to split rounds into requests, `groupResults()` for each group's outcome or a typed `SimulateGroupError`, `simulateLimits()` for the node's limits (including its query limits), `isQueryResponseTooLarge()` to split a query whose results are over the node's limit, `isNodeBusy()` / `retryAfterSeconds()` / `isTimeLimitExceeded()` / `isHistoryUnavailable()` for the node's busy, time limit and history errors, and `doWithHeaders()` / `effortOf()` for response headers.
-- **Feature detection**: `simulateLimits()`, `supportsDT()` and `supportsAssetHolders()` say which optional features the node has on (time travel, the holders index, query, simulate rounds), and a `DTUnsupportedError` is thrown when a request needs one that is off, so code can fall back.
+- **Helpers**: `DTSimulateRequest.fromTransactions()` for unsigned transactions, `packSimulateRounds()` to split rounds into requests, `groupResults()` for each group's outcome or a typed `SimulateGroupError`, `capabilities()` for the node's features and its simulate and query limits, `isQueryResponseTooLarge()` to split a query whose results are over the node's limit, `isNodeBusy()` / `retryAfterSeconds()` / `isTimeLimitExceeded()` / `isHistoryUnavailable()` for the node's busy, time limit and history errors, and `doWithHeaders()` / `effortOf()` for response headers.
+- **Feature detection**: `capabilities()`, `supportsDT()` and `supportsAssetHolders()` say which optional features the node has on (time travel, the holders index, query, simulate rounds), and a `DTUnsupportedError` is thrown when a request needs one that is off, so code can fall back.
 - **Fix**: ABI dynamic arrays and tuples decode `Uint8Array` subarrays correctly.
 - **Faster decoding**: time-travel pages are parsed with `JSON.parse` when no integer needs a bigint, addresses already checked skip their checksum, and base64 is faster in browsers.
 
@@ -122,7 +122,7 @@ Include a minified browser bundle directly in your HTML like so. It defines the 
 ```html
 <script
   src="https://unpkg.com/dtalgosdk@3.9.0-dt.4.0.0.1/dist/browser/algosdk.min.js"
-  integrity="sha384-EbIT4hUDb3D+0PfV1xpcQR2E3Ry+hzhyE/BPVsy8bhDwQlaaRgwR1bxmIUn0H2Xc"
+  integrity="sha384-kRYLPxjG6jcgpCivGOasfvJ2avIDZObsvdZEG0YBdhKKC6JbOj6sApwckojSTW6w"
   crossorigin="anonymous"
 ></script>
 ```
@@ -132,7 +132,7 @@ or
 ```html
 <script
   src="https://cdn.jsdelivr.net/npm/dtalgosdk@3.9.0-dt.4.0.0.1/dist/browser/algosdk.min.js"
-  integrity="sha384-EbIT4hUDb3D+0PfV1xpcQR2E3Ry+hzhyE/BPVsy8bhDwQlaaRgwR1bxmIUn0H2Xc"
+  integrity="sha384-kRYLPxjG6jcgpCivGOasfvJ2avIDZObsvdZEG0YBdhKKC6JbOj6sApwckojSTW6w"
   crossorigin="anonymous"
 ></script>
 ```

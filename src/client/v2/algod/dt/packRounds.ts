@@ -2,15 +2,15 @@ import { ensureUint64 } from '../../../../utils/utils.js';
 
 /**
  * The default for a node's `MaxAPISimulateGroups`: how many transaction groups
- * one simulate request may hold. `DTAlgodClient.simulateLimits()` has the
- * node's value.
+ * one simulate request may hold. `simulate.maxTxnGroups` of
+ * `DTAlgodClient.capabilities()` has the node's value.
  */
 export const DEFAULT_MAX_SIMULATE_GROUPS = 16;
 
 /**
  * The default for a node's `MaxAPISimulateRounds`: how many entries a simulate
  * request's `rounds` may list, duplicates included.
- * `DTAlgodClient.simulateLimits()` has the node's value.
+ * `simulate.maxRounds` of `DTAlgodClient.capabilities()` has the node's value.
  */
 export const DEFAULT_MAX_SIMULATE_ROUNDS = 16;
 
@@ -82,8 +82,8 @@ export interface PackedSimulateRounds {
  * @param rounds - The rounds, as `rounds()` takes them. 0 (the latest round)
  * is not allowed: look the round up first, with `status()`.
  * @param options - `maxRounds`: the most rounds per request, the node's
- * `MaxAPISimulateRounds` (default 16): pass `maxRounds` from
- * `DTAlgodClient.simulateLimits()`. `maxSpan`: the most rounds between the
+ * `MaxAPISimulateRounds` (default 16): pass `simulate.maxRounds` from
+ * `DTAlgodClient.capabilities()`. `maxSpan`: the most rounds between the
  * first and the last of a request (default 1000, `MaxTxnLife`), or null for
  * no limit.
  * @throws RangeError for a round of 0 or an invalid option, including a

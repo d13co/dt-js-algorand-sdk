@@ -1,23 +1,23 @@
 import JSONRequest from '../../jsonrequest.js';
 import { HTTPClientResponse } from '../../../client.js';
 import { decodeJSON } from '../../../../encoding/encoding.js';
-import { SimulateLimitsResponse } from './models.js';
+import { CapabilitiesResponse } from './models.js';
 import { DTUnsupportedError } from './errors.js';
 
 /**
- * The limits a node places on simulate requests
- * (`GET /v2/transactions/simulate/limits`). Every dtalgod node serves it, so
- * a 404 means stock algod, thrown as a {@link DTUnsupportedError}.
+ * The fork features a node has on and the limits it places on simulate and
+ * query requests (`GET /v2/capabilities`). Every dtalgod node serves it, so a
+ * 404 means stock algod, thrown as a {@link DTUnsupportedError}.
  */
-export default class GetSimulateLimits extends JSONRequest<SimulateLimitsResponse> {
+export default class GetCapabilities extends JSONRequest<CapabilitiesResponse> {
   // eslint-disable-next-line class-methods-use-this
   path() {
-    return '/v2/transactions/simulate/limits';
+    return '/v2/capabilities';
   }
 
   // eslint-disable-next-line class-methods-use-this
-  prepare(response: HTTPClientResponse): SimulateLimitsResponse {
-    return decodeJSON(response.getJSONText(), SimulateLimitsResponse);
+  prepare(response: HTTPClientResponse): CapabilitiesResponse {
+    return decodeJSON(response.getJSONText(), CapabilitiesResponse);
   }
 
   protected async executeRequest(
@@ -29,7 +29,7 @@ export default class GetSimulateLimits extends JSONRequest<SimulateLimitsRespons
     } catch (err) {
       if ((err as { status?: number })?.status === 404) {
         throw new DTUnsupportedError(
-          'The node has no simulate limits endpoint: it is stock algod, not dtalgod',
+          'The node has no capabilities endpoint: it is stock algod, not dtalgod',
           { cause: err }
         );
       }

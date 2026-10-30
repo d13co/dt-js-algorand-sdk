@@ -3,7 +3,7 @@
  * Live checks of DTAlgodClient against a real MainNet time-travel node
  * (`EnableTimeTravel: true`). Skipped unless DT_ALGOD_SERVER is set:
  *
- *   DT_ALGOD_SERVER=http://10.114.0.27:4000 npx mocha --import=tsx tests/14.DTLive.ts
+ *   DT_ALGOD_SERVER=https://mainnet-api-dt.d13.co npx mocha --import=tsx tests/14.DTLive.ts
  *
  * DT_ALGOD_TOKEN sets the API token, if the node needs one.
  */

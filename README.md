@@ -142,9 +142,9 @@ Information about hosting the package for yourself, finding the browser bundles 
 ## Quick Start
 
 ```javascript
-const token = 'Your algod API token';
-const server = 'http://127.0.0.1';
-const port = 8080;
+const token = '';
+const server = 'https://mainnet-api-dt.d13.co';
+const port = 443;
 const client = new algosdk.Algodv2(token, server, port);
 
 (async () => {

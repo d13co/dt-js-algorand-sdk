@@ -104,6 +104,7 @@ export {
   effortOf,
   MAX_QUERY_REQUEST_BYTES,
   QUERY_LOG_OVERHEAD_BYTES,
+  TT_ROUND_HEADER,
 } from './client/v2/algod/dt/index.js';
 export type { RunQuery, GetAssetHolders } from './client/v2/algod/dt/index.js';
 export * as dtModels from './client/v2/algod/dt/models.js';

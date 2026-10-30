@@ -131,6 +131,12 @@ class StubClient implements BaseHTTPClient {
 }
 
 const ok = (json: unknown) => () => ({ status: 200, json });
+/** An answer marked as given as of `round`, as a time travel node sends it. */
+const okAt = (round: number, json: unknown) => () => ({
+  status: 200,
+  json,
+  headers: { 'X-Algod-Tt-Round': String(round) },
+});
 const status = (code: number) => () => ({
   status: code,
   json: { message: 'nope' },
@@ -157,7 +163,11 @@ describe('time travel', () => {
   describe('getApplicationBoxByName', () => {
     it('sends round and accepts a response for that round', async () => {
       const stub = new StubClient([
-        ok({ round: 45000000, name: 'Y29uZmln', value: 'AAAAAAAAAAE=' }),
+        okAt(45000000, {
+          round: 45000000,
+          name: 'Y29uZmln',
+          value: 'AAAAAAAAAAE=',
+        }),
       ]);
       const box = await new DTAlgodClient(stub, '')
         .getApplicationBoxByName(1234, name)
@@ -177,7 +187,9 @@ describe('time travel', () => {
     });
 
     it('keeps round 0', async () => {
-      const stub = new StubClient([ok({ round: 0, name: 'AA==', value: '' })]);
+      const stub = new StubClient([
+        okAt(0, { round: 0, name: 'AA==', value: '' }),
+      ]);
       await new DTAlgodClient(stub, '')
         .getApplicationBoxByName(1, new Uint8Array([0]))
         .round(0)
@@ -521,6 +533,7 @@ describe('time travel', () => {
   it('lists the features that algokit-utils and generated clients check', () => {
     // algokit-utils' REQUIRED_DT_FEATURES and optional ones, and ghostkit's.
     for (const f of [
+      'round-header',
       'reads-at-round',
       'versions',
       'simulate-groups',
@@ -1293,8 +1306,8 @@ describe('time travel', () => {
 
     it('sends round on asset and application lookups', async () => {
       const stub = new StubClient([
-        ok({ index: 7, params: { creator: addr, decimals: 0, total: 1 } }),
-        ok({ id: 8, params: { creator: addr } }),
+        okAt(3, { index: 7, params: { creator: addr, decimals: 0, total: 1 } }),
+        okAt(4, { id: 8, params: { creator: addr } }),
       ]);
       const client = new DTAlgodClient(stub, '');
       await client.getAssetByID(7).round(3).do();
@@ -1574,6 +1587,125 @@ describe('time travel', () => {
         (err: { status?: number }) =>
           !(err instanceof DTUnsupportedError) && err.status === 400
       );
+    });
+
+    it('throws an answer without X-Algod-TT-Round as DTUnsupportedError', async () => {
+      // Stock algod ignores round and answers as of its latest round.
+      const stub = new StubClient([
+        ok({ index: 7, params: { creator: addr, decimals: 0, total: 1 } }),
+        ok({ amount: 5, address: addr }),
+      ]);
+      const client = new DTAlgodClient(stub, '');
+      const isIgnored = (err: unknown) =>
+        err instanceof DTUnsupportedError &&
+        err.requestedRound === BigInt(3) &&
+        err.cause === undefined &&
+        /without x-algod-tt-round/.test(err.message);
+      await assert.rejects(client.getAssetByID(7).round(3).do(), isIgnored);
+      await assert.rejects(
+        client.accountInformation(addr).round(3).doWithHeaders(),
+        isIgnored
+      );
+    });
+
+    it('passes a 404 marked with the round through as the HTTP error', async () => {
+      const stub = new StubClient([
+        () => ({
+          status: 404,
+          json: { message: 'asset does not exist' },
+          headers: { 'x-algod-tt-round': '3' },
+        }),
+      ]);
+      await assert.rejects(
+        new DTAlgodClient(stub, '').getAssetByID(7).round(3).do(),
+        (err: { status?: number }) =>
+          !(err instanceof DTUnsupportedError) && err.status === 404
+      );
+    });
+
+    it('throws a 404 without X-Algod-TT-Round as DTUnsupportedError', async () => {
+      const stub = new StubClient([status(404)]);
+      await assert.rejects(
+        new DTAlgodClient(stub, '').supply().round(3).do(),
+        (err: unknown) =>
+          err instanceof DTUnsupportedError &&
+          err.requestedRound === BigInt(3) &&
+          (err.cause as { status?: number }).status === 404
+      );
+    });
+
+    it('passes other errors without X-Algod-TT-Round through', async () => {
+      const stub = new StubClient([status(500)]);
+      await assert.rejects(
+        new DTAlgodClient(stub, '').getAssetByID(7).round(3).do(),
+        (err: { status?: number }) =>
+          !(err instanceof DTUnsupportedError) && err.status === 500
+      );
+    });
+
+    it('throws an answer marked with another round as DTUnsupportedError', async () => {
+      const stub = new StubClient([
+        okAt(4, { index: 7, params: { creator: addr, decimals: 0, total: 1 } }),
+        () => ({
+          status: 200,
+          json: { id: 8, params: { creator: addr } },
+          headers: { 'x-algod-tt-round': 'soon' },
+        }),
+      ]);
+      const client = new DTAlgodClient(stub, '');
+      const isMismatch = (err: unknown) =>
+        err instanceof DTUnsupportedError &&
+        err.requestedRound === BigInt(3) &&
+        /as round/.test(err.message);
+      await assert.rejects(client.getAssetByID(7).round(3).do(), isMismatch);
+      await assert.rejects(
+        client.getApplicationByID(8).round(3).do(),
+        isMismatch
+      );
+    });
+
+    it('needs no X-Algod-TT-Round without round', async () => {
+      const stub = new StubClient([
+        ok({ index: 7, params: { creator: addr, decimals: 0, total: 1 } }),
+        status(404),
+      ]);
+      const client = new DTAlgodClient(stub, '');
+      await client.getAssetByID(7).do();
+      await assert.rejects(
+        client.getApplicationByID(8).do(),
+        (err: { status?: number }) =>
+          !(err instanceof DTUnsupportedError) && err.status === 404
+      );
+    });
+
+    it('checks the round of a boxes page instead of the header', async () => {
+      // algod without time travel serves /boxes for its last few rounds,
+      // without the header; a node that lists no boxes answers as of its
+      // latest round.
+      const stub = new StubClient([
+        ok({ round: 6, boxes: [] }),
+        ok({ round: 9, boxes: [] }),
+        ok({ boxes: [] }),
+      ]);
+      const client = new DTAlgodClient(stub, '');
+      const page = await client.getApplicationBoxes(1).round(6).do();
+      assert.strictEqual(page.round, 6);
+      for (let i = 0; i < 2; i++) {
+        // eslint-disable-next-line no-await-in-loop
+        await assert.rejects(
+          client.getApplicationBoxes(1).round(6).do(),
+          (err: unknown) =>
+            err instanceof DTUnsupportedError &&
+            err.requestedRound === BigInt(6) &&
+            /at round 6 but the node answered for round (9|unknown)/.test(
+              err.message
+            )
+        );
+      }
+    });
+
+    it('exports the header name', () => {
+      assert.strictEqual(algosdk.TT_ROUND_HEADER, 'x-algod-tt-round');
     });
   });
   describe('simulate', () => {
@@ -3360,7 +3492,7 @@ describe('getAssetHolders', () => {
 
   it('sends round, limit and next, and decodes a page', async () => {
     const stub = new StubClient([
-      ok({
+      okAt(50000000, {
         round: 50000000,
         holders: [holder(A, 82072), holder(B, 0, true)],
         'next-token': B,
@@ -3391,8 +3523,8 @@ describe('getAssetHolders', () => {
   it('pins the first page round, through an empty page', async () => {
     const stub = new StubClient([
       ok({ round: 777, holders: [holder(A, 1)], 'next-token': A }),
-      ok({ round: 777, holders: [], 'next-token': B }),
-      ok({ round: 777, holders: [holder(C, 3)] }),
+      okAt(777, { round: 777, holders: [], 'next-token': B }),
+      okAt(777, { round: 777, holders: [holder(C, 3)] }),
     ]);
     const request = new DTAlgodClient(stub, '').getAssetHolders(7).limit(1);
     const holders = [];
@@ -3452,6 +3584,61 @@ describe('getAssetHolders', () => {
           (err as { status?: number }).status === code
       );
     }
+  });
+
+  it('checks X-Algod-TT-Round on pages read at a round', async () => {
+    const marked404 = () => ({
+      status: 404,
+      json: { message: 'asset does not exist' },
+      headers: { 'x-algod-tt-round': '5' },
+    });
+    const stub = new StubClient([
+      // A page at round 5 without the header, then with another round.
+      ok({ round: 5, holders: [] }),
+      okAt(6, { round: 5, holders: [] }),
+      // A 404 at round 5 without the header, then marked with it.
+      status404('asset does not exist'),
+      marked404,
+      // The route missing: time travel off.
+      status404('Not Found'),
+    ]);
+    const client = new DTAlgodClient(stub, '');
+    const ignored = (err: unknown) =>
+      err instanceof DTUnsupportedError && err.requestedRound === BigInt(5);
+    for (let i = 0; i < 3; i++) {
+      // eslint-disable-next-line no-await-in-loop
+      await assert.rejects(client.getAssetHolders(7).round(5).do(), ignored);
+    }
+    await assert.rejects(
+      client.getAssetHolders(7).round(5).do(),
+      (err: unknown) =>
+        !(err instanceof DTUnsupportedError) &&
+        (err as { status?: number }).status === 404
+    );
+    await assert.rejects(
+      client.getAssetHolders(7).round(5).do(),
+      (err: unknown) =>
+        ignored(err) && /time travel off/.test((err as Error).message)
+    );
+  });
+
+  it('checks the pinned round of later pages', async () => {
+    const stub = new StubClient([
+      ok({ round: 777, holders: [holder(A, 1)], 'next-token': A }),
+      ok({ round: 778, holders: [holder(B, 1)] }),
+    ]);
+    const seen: string[] = [];
+    await assert.rejects(
+      (async () => {
+        for await (const h of new DTAlgodClient(stub, '')
+          .getAssetHolders(7)
+          .iterate())
+          seen.push(h.address);
+      })(),
+      (err: unknown) =>
+        err instanceof DTUnsupportedError && err.requestedRound === BigInt(777)
+    );
+    assert.deepStrictEqual(seen, [A]);
   });
 
   it('decodes holders as decodeJSON does, and round-trips them', () => {

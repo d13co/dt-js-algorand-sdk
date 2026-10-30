@@ -75,8 +75,8 @@ export class DTAlgodClient extends AlgodClient {
    * - `simulate-protocol`: `protocol()` in `simulateTransactions`, and
    *   `protocolOverride` on the response and its round results;
    * - `simulate-limits`: `simulateLimits()` and `getSimulateLimits()`;
-   * - `query`: `query()`, and `query` (plus `maxExecTraceBytes`,
-   *   `timeLimitSeconds`) on `simulateLimits()`;
+   * - `query`: `query()`, and `query` (plus `timeLimitSeconds`) on
+   *   `simulateLimits()`;
    * - `versions-rounds`: `rounds()` on the `...Versions` methods, and
    *   `changedRound` on their entries;
    * - `versions-keys`: `include('keys')` on `getApplicationVersions`,
@@ -86,7 +86,11 @@ export class DTAlgodClient extends AlgodClient {
    * - `response-headers`: `doWithHeaders()` on every request, and
    *   `effortOf` / `parseEffortHeader` for the `X-Algod-Effort` header;
    * - `error-helpers`: `isNodeBusy`, `retryAfterSeconds`,
-   *   `isTimeLimitExceeded`, `isRoundTooLarge`, `isHistoryUnavailable`.
+   *   `isTimeLimitExceeded`, `isRoundTooLarge`, `isHistoryUnavailable`;
+   * - `round-header`: reads at a round, holders pages included, check the
+   *   `X-Algod-TT-Round` header (`TT_ROUND_HEADER`; the boxes list checks its
+   *   `round`), so an answer as of another round, such as stock algod's as of
+   *   its latest round, is thrown as a {@link DTUnsupportedError}.
    *
    * #### Example
    * ```typescript
@@ -116,6 +120,7 @@ export class DTAlgodClient extends AlgodClient {
     'holders',
     'response-headers',
     'error-helpers',
+    'round-header',
   ]);
 
   /** The clients made by {@link DTAlgodClient.from}, by source client. */
@@ -252,8 +257,9 @@ export class DTAlgodClient extends AlgodClient {
    * Given an asset ID, return the asset, at the latest round or, with
    * `.round()`, at a past round.
    *
-   * Stock algod ignores `.round()` and answers with the latest asset: check
-   * `supportsDT()` first.
+   * Stock algod ignores `.round()` and answers with the latest asset, which
+   * the client detects (no `X-Algod-TT-Round` header) and throws as a
+   * {@link DTUnsupportedError}: check `supportsDT()` first.
    *
    * @param index - The asset ID to look up.
    * @category GET
@@ -266,8 +272,9 @@ export class DTAlgodClient extends AlgodClient {
    * Given an application ID, return the application, at the latest round or,
    * with `.round()`, at a past round.
    *
-   * Stock algod ignores `.round()` and answers with the latest application:
-   * check `supportsDT()` first.
+   * Stock algod ignores `.round()` and answers with the latest application,
+   * which the client detects (no `X-Algod-TT-Round` header) and throws as a
+   * {@link DTUnsupportedError}: check `supportsDT()` first.
    *
    * @param index - The application ID to look up.
    * @category GET

@@ -15,7 +15,9 @@ export default class SupplyAt extends Supply {
    *
    * A node with time travel off rejects `round`, even the latest one, which is
    * thrown as a {@link DTUnsupportedError}. Stock algod ignores it and answers
-   * for the latest round: check `supportsDT()` before relying on it.
+   * as of its latest round, without the `X-Algod-TT-Round` header that marks an
+   * answer (or a 404) given as of the round asked for: that is thrown as a
+   * {@link DTUnsupportedError} too, so check `supportsDT()` first.
    *
    * A round whose online stake the history does not record is a 404 (the
    * time travel history does not record this online stake).

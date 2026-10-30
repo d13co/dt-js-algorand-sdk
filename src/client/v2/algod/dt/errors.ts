@@ -6,6 +6,9 @@ import { SimulateTransactionGroupResult } from '../models/types.js';
  * needs, or when the node is not a dtalgod node:
  * - time travel is off (`EnableTimeTravel`): reads at a past round, the
  *   `/versions` endpoints and `getAssetHolders`;
+ * - the node answered a read at a round without `X-Algod-TT-Round`, or
+ *   marked with another round: it ignored `round` (stock algod, perhaps
+ *   behind a load balancer that mixes nodes);
  * - the asset holders index is off (`TimeTravelHoldersIndex`):
  *   `getAssetHolders`;
  * - queries are disabled (`MaxAPIQueryCalls` 0): `query`;
@@ -59,12 +62,56 @@ export function isPastRoundUnsupported(err: unknown) {
 }
 
 /**
+ * The response header, lowercased, with which a dtalgod node marks an answer
+ * given as of the round a read asked for with `round`: the 200, a 404 (not
+ * found at that round) and the other errors of the lookup at that round. Its
+ * value is the round. A refusal of the round does not carry it, and neither
+ * does an answer from a node that ignored `round`, such as algod without time
+ * travel, which answers as of its latest round.
+ */
+export const TT_ROUND_HEADER = 'x-algod-tt-round';
+
+/** The value of a response header, matched without regard to case. */
+export function headerValue(
+  headers: Record<string, string> | undefined,
+  name: string
+): string | undefined {
+  if (!headers) return undefined;
+  const key = Object.keys(headers).find((k) => k.toLowerCase() === name);
+  return key === undefined ? undefined : headers[key];
+}
+
+/**
+ * Throws a {@link DTUnsupportedError} unless the headers mark an answer given
+ * as of round `requested` ({@link TT_ROUND_HEADER}).
+ */
+function checkMarked(
+  requested: bigint,
+  headers: Record<string, string> | undefined,
+  cause?: unknown
+) {
+  const value = headerValue(headers, TT_ROUND_HEADER)?.trim();
+  if (value === undefined) {
+    throw new DTUnsupportedError(
+      `The node answered a read at round ${requested} without ${TT_ROUND_HEADER}, so it ignored round and answered as of its latest round: it is not a dtalgod node with time travel (EnableTimeTravel), or a proxy dropped the header`,
+      { requestedRound: requested, cause }
+    );
+  }
+  if (!/^\d+$/.test(value) || BigInt(value) !== requested) {
+    throw new DTUnsupportedError(
+      `The node marked its answer to a read at round ${requested} as round ${value} (${TT_ROUND_HEADER})`,
+      { requestedRound: requested, cause }
+    );
+  }
+}
+
+/**
  * Runs a read, turning a refusal to read a past round into a
- * {@link DTUnsupportedError}.
+ * {@link DTUnsupportedError}. Other errors pass through unchanged.
  * @param requested - The round that was asked for, if any.
  * @param request - The read.
  */
-export async function readAtRound(
+export async function refusalAtRound(
   requested: bigint | undefined,
   request: Promise<HTTPClientResponse>
 ) {
@@ -79,6 +126,41 @@ export async function readAtRound(
     }
     throw err;
   }
+}
+
+/**
+ * Runs a read and, when it asked for a round, checks that the node answered
+ * as of that round:
+ * - a refusal to read a past round is a {@link DTUnsupportedError};
+ * - a response or a 404 without {@link TT_ROUND_HEADER}, or marked with
+ *   another round, is a {@link DTUnsupportedError}: the node ignored `round`
+ *   (stock algod).
+ *
+ * Other errors pass through unchanged.
+ * @param requested - The round that was asked for, if any.
+ * @param request - The read.
+ */
+export async function readAtRound(
+  requested: bigint | undefined,
+  request: Promise<HTTPClientResponse>
+) {
+  if (requested === undefined) return request;
+  let response: HTTPClientResponse;
+  try {
+    response = await refusalAtRound(requested, request);
+  } catch (err) {
+    if (!(err instanceof DTUnsupportedError) && describe(err).status === 404) {
+      checkMarked(
+        requested,
+        (err as { response?: { headers?: Record<string, string> } }).response
+          ?.headers,
+        err
+      );
+    }
+    throw err;
+  }
+  checkMarked(requested, response.headers);
+  return response;
 }
 
 /**
@@ -280,13 +362,11 @@ export function isNodeBusy(err: unknown): boolean {
  * @param err - The error thrown by a request.
  */
 export function retryAfterSeconds(err: unknown): number | undefined {
-  const headers = (err as { response?: { headers?: Record<string, string> } })
-    ?.response?.headers;
-  if (!headers) return undefined;
-  const key = Object.keys(headers).find(
-    (k) => k.toLowerCase() === 'retry-after'
-  );
-  const value = key === undefined ? undefined : headers[key]?.trim();
+  const value = headerValue(
+    (err as { response?: { headers?: Record<string, string> } })?.response
+      ?.headers,
+    'retry-after'
+  )?.trim();
   if (!value) return undefined;
   if (/^\d+$/.test(value)) return Number(value);
   const at = Date.parse(value);

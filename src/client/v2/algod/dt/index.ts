@@ -12,6 +12,7 @@ export {
   isHistoryUnavailable,
   MAX_QUERY_REQUEST_BYTES,
   QUERY_LOG_OVERHEAD_BYTES,
+  TT_ROUND_HEADER,
 } from './errors.js';
 export {
   VersionsOrder,

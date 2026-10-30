@@ -114,6 +114,7 @@ From the package root (`import algosdk from 'algosdk'`):
 - `DEFAULT_MAX_SIMULATE_GROUPS` (16), `DEFAULT_MAX_SIMULATE_ROUNDS` (16), `MAX_TXN_LIFE` (1000)
 - `isNodeBusy`, `retryAfterSeconds`, `isTimeLimitExceeded`, `isRoundTooLarge`, `isHistoryUnavailable`
 - `EFFORT_HEADER` (`x-algod-effort`), `parseEffortHeader`, `effortOf`, and the type `Effort`
+- `TT_ROUND_HEADER` (`x-algod-tt-round`)
 - `isQueryResponseTooLarge`, `MAX_QUERY_REQUEST_BYTES` (1,000,000), `QUERY_LOG_OVERHEAD_BYTES` (48), and the type `RunQuery` (the builder `query()` returns)
 - the type `GetAssetHolders` (the builder `getAssetHolders()` returns)
 - the types `VersionsOrder`, `VersionsInclude`, `StateVersionsInclude`, `AccountVersionsExclude`, `MAX_VERSIONS_ROUNDS` (10,000) and `MAX_VERSIONS_KEY_BYTES` (64)
@@ -139,7 +140,7 @@ const algod = algosdk.DTAlgodClient.from(algorand.client.algod);
 
 `supportsDT()` and `supportsAssetHolders()` say whether the node has the optional features they name; see [Optional node features](#optional-node-features).
 
-`DTAlgodClient.features` lists what this build of the SDK has, for code that finds the class at runtime on an algosdk that may be stock algosdk rather than dtalgosdk, as algokit-utils and generated clients do: `reads-at-round`, `versions`, `simulate-groups`, `parallel-groups`, `simulate-rounds`, `from`, `group-results`, `from-transactions`, `pack-rounds`, `validity-window`, `simulate-protocol`, `simulate-limits`, `query`, `versions-rounds` (`rounds()` and `changedRound`), `versions-keys` (`include('keys')` and `changedKeys`), `versions-pages` (`pages()`), `holders` (`getAssetHolders`, `supportsAssetHolders`), `response-headers` (`doWithHeaders()`, `effortOf`, `parseEffortHeader`), `error-helpers` (`isNodeBusy`, `retryAfterSeconds`, `isTimeLimitExceeded`, `isRoundTooLarge`, `isHistoryUnavailable`). It says nothing about the node: ask the node with `simulateLimits()`, `supportsDT()` and `supportsAssetHolders()`.
+`DTAlgodClient.features` lists what this build of the SDK has, for code that finds the class at runtime on an algosdk that may be stock algosdk rather than dtalgosdk, as algokit-utils and generated clients do: `reads-at-round`, `versions`, `simulate-groups`, `parallel-groups`, `simulate-rounds`, `from`, `group-results`, `from-transactions`, `pack-rounds`, `validity-window`, `simulate-protocol`, `simulate-limits`, `query`, `versions-rounds` (`rounds()` and `changedRound`), `versions-keys` (`include('keys')` and `changedKeys`), `versions-pages` (`pages()`), `holders` (`getAssetHolders`, `supportsAssetHolders`), `response-headers` (`doWithHeaders()`, `effortOf`, `parseEffortHeader`), `error-helpers` (`isNodeBusy`, `retryAfterSeconds`, `isTimeLimitExceeded`, `isRoundTooLarge`, `isHistoryUnavailable`), `round-header` (reads at a round check `X-Algod-TT-Round`, `TT_ROUND_HEADER`). It says nothing about the node: ask the node with `simulateLimits()`, `supportsDT()` and `supportsAssetHolders()`.
 
 ```typescript
 const DT = (algosdk as any).DTAlgodClient;
@@ -177,7 +178,13 @@ const boxes = await algod
   .do();
 ```
 
-A dtalgod node with time travel off rejects `round` (400 `looking up past rounds requires EnableTimeTravel`, even for the latest round), thrown as a `DTUnsupportedError` with `requestedRound`. Stock algod ignores `round` and answers with the latest state, so check `supportsDT()` before relying on it. A node whose history is not trusted yet answers 503 `the time travel history is not served`, which `isHistoryUnavailable(err)` recognizes. `supply().round(R)` answers 404 for a round whose online stake the history does not record.
+A dtalgod node with time travel off rejects `round` (400 `looking up past rounds requires EnableTimeTravel`, even for the latest round), thrown as a `DTUnsupportedError` with `requestedRound`.
+
+A time travel node marks every answer given as of `R` with an `X-Algod-TT-Round: R` header: the 200, a 404 (not found at `R`) and the other errors of the lookup at `R`. Stock algod ignores `round` and answers with the latest state, without the header. So on a read at a round, `getAssetHolders` pages included, the client requires the header on a 200 or a 404: without it, or with another round, the answer is thrown as a `DTUnsupportedError` with `requestedRound` (and the 404 as its `cause`). A 404 marked with the round is the node's own 404, not found at that round. Other errors pass through as they are. `supportsDT()` tells a stock node apart once per client; the header also catches a load balancer that mixes nodes, where a later read lands on a stock node that would silently answer with its latest state.
+
+A proxy in front of the node must pass the header on: one that strips it breaks every read at a round, which then fails loudly rather than risk a wrong answer. `getApplicationBoxes` is the exception: stock algod serves its `round` for its last few rounds, correctly but without the header, so the client checks the page's `round` instead, and throws a page for another round as a `DTUnsupportedError` (a node with `MaxAPIBoxPerApplication` 0 answers empty as of its latest round).
+
+A node whose history is not trusted yet answers 503 `the time travel history is not served`, which `isHistoryUnavailable(err)` recognizes. `supply().round(R)` answers 404 for a round whose online stake the history does not record.
 
 When listing boxes at a past round, pass the same round on every page. The `next` cursor is exclusive: only names that sort strictly after it are returned (upstream's OpenAPI description says otherwise and is wrong). Listing at a past round walks every box the app has ever had under the prefix, deleted ones included, so narrow it with `.prefix()` where you can.
 
@@ -301,7 +308,7 @@ The node rejects `key` or `prefix` on an endpoint it does not apply to with a 40
 
 - `.limit(N)`: holders per page, default 1,000, from 1 to 10,000. A page also stops after examining 100,000 accounts that ever held the asset, so it can be short or empty while more remain: only a missing `nextToken` ends the list.
 - Every page must be read at the same round. `.pages()` and `.iterate()` send the first page's `round` with every later page when no `.round()` was set. A manual `.next(token)` loop must pass `.round(first.round)` too.
-- The response's `round` is checked against `.round()` (and against the pinned round), as for the reads at a round.
+- A page read at a round (`.round()`, or the pinned round) must carry `X-Algod-TT-Round` with that round, a 404 included, as for the [reads at a round](#reads-at-past-rounds); otherwise it is thrown as a `DTUnsupportedError`.
 
 ```typescript
 let supplyHeld = 0n;
@@ -585,7 +592,9 @@ const { data, headers } = await algod
 console.log(data.versions.length, algosdk.effortOf(headers)?.lookups);
 ```
 
-dt-algorand lists both `Retry-After` and `X-Algod-Effort` in `Access-Control-Expose-Headers`, so browsers can read them on a cross-origin request. A proxy in front of the node may still drop them, so have a default for `retryAfterSeconds`.
+A read at a round answers with `X-Algod-TT-Round` (`TT_ROUND_HEADER`), the round it was answered as of, which the client checks (see [Reads at past rounds](#reads-at-past-rounds)).
+
+dt-algorand lists `Retry-After`, `X-Algod-Effort` and `X-Algod-TT-Round` in `Access-Control-Expose-Headers`, so browsers can read them on a cross-origin request. A proxy in front of the node may still drop them, so have a default for `retryAfterSeconds`.
 
 ## Optional node features
 
@@ -601,7 +610,7 @@ dtalgosdk covers the API of the current dt-algorand release. Every dt-algorand n
 | Execution traces, protocol `future`                                     | `EnableDeveloperAPI`                       | `developerApi` of the limits                                   | the node's 400                                                                   |
 | `X-Algod-Effort`                                                        | `EnableEffortHeader`                       | the header is present                                          | `effortOf(headers)` is undefined                                                 |
 
-Against stock algod, `DTAlgodClient` works for everything inherited from `AlgodClient`. `simulateLimits()` falls back to stock algod's limits (`reported` false), so `supportsDT()` and `supportsAssetHolders()` are false and `query` is undefined. Gate the additions on these: stock algod ignores `round` and answers with the latest state, rejects the fork's simulate fields with its own 400, and answers the fork's routes unevenly: `getAssetVersions`, `accountAssetVersions`, `accountApplicationVersions` and `getAssetHolders` get its router's 400 (`Invalid format for parameter asset-id` or `application-id`), thrown as the plain HTTP error, while the other `...Versions` methods get a 404, thrown as a `DTUnsupportedError` that says time travel is off.
+Against stock algod, `DTAlgodClient` works for everything inherited from `AlgodClient`. `simulateLimits()` falls back to stock algod's limits (`reported` false), so `supportsDT()` and `supportsAssetHolders()` are false and `query` is undefined. Gate the additions on these: stock algod ignores `round` and answers with the latest state (a read at a round throws `DTUnsupportedError`, as the answer has no `X-Algod-TT-Round`), rejects the fork's simulate fields with its own 400, and answers the fork's routes unevenly: `getAssetVersions`, `accountAssetVersions`, `accountApplicationVersions` and `getAssetHolders` get its router's 400 (`Invalid format for parameter asset-id` or `application-id`), thrown as the plain HTTP error, while the other `...Versions` methods get a 404, thrown as a `DTUnsupportedError` that says time travel is off.
 
 ## Bug fixes and changes to upstream code
 

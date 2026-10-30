@@ -2,7 +2,7 @@ import JSONRequest from '../../jsonrequest.js';
 import { HTTPClient, HTTPClientResponse } from '../../../client.js';
 import { Query } from '../../../baseHTTPClient.js';
 import { ensureBigInt } from '../../../../utils/utils.js';
-import { describe, DTUnsupportedError } from './errors.js';
+import { describe, DTUnsupportedError, readAtRound } from './errors.js';
 import { decodeDTJSON } from './json.js';
 import { pageThrough } from './paging.js';
 import { AssetHolder, AssetHoldersResponse } from './models.js';
@@ -47,7 +47,9 @@ export function holdersUnsupportedReason(err: unknown) {
  *
  * A node with time travel or the holders index off is thrown as a
  * {@link DTUnsupportedError}; `supportsAssetHolders()` finds out without
- * listing anything. An asset that does not exist (also at a round
+ * listing anything. A page read at a round (with `round()`, or pinned by
+ * `pages()`) must be marked with it (`X-Algod-TT-Round`), a 404 included;
+ * otherwise it is thrown as a {@link DTUnsupportedError} too. An asset that does not exist (also at a round
  * before its creation) is the node's 404, and an index still being built its
  * 503, both thrown as the HTTP error (`isHistoryUnavailable` recognizes the
  * 503).
@@ -183,22 +185,25 @@ export default class GetAssetHolders extends JSONRequest<AssetHoldersResponse> {
     headers?: Record<string, string>,
     customOptions?: Record<string, unknown>
   ): Promise<HTTPClientResponse> {
-    try {
-      return await this.c.get({
+    const round =
+      query.round === undefined ? undefined : BigInt(String(query.round));
+    const request = this.c
+      .get({
         relativePath: this.path(),
         query,
         requestHeaders: headers,
         customOptions,
+      })
+      .catch((err) => {
+        const reason = holdersUnsupportedReason(err);
+        if (reason !== undefined) {
+          throw new DTUnsupportedError(
+            `The node cannot list asset holders: ${reason}`,
+            { requestedRound: round, cause: err }
+          );
+        }
+        throw err;
       });
-    } catch (err) {
-      const reason = holdersUnsupportedReason(err);
-      if (reason !== undefined) {
-        throw new DTUnsupportedError(
-          `The node cannot list asset holders: ${reason}`,
-          { cause: err }
-        );
-      }
-      throw err;
-    }
+    return readAtRound(round, request);
   }
 }

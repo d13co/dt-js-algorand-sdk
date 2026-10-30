@@ -141,10 +141,25 @@ describe('time travel against a live node', function liveSuite() {
       assert.strictEqual(app.id, XGOV);
     });
 
-    it('answers 404 for an asset before its creation', async () => {
-      await assert.rejects(c.getAssetByID(USDC).round(1000).do(), {
-        status: 404,
-      });
+    it('marks an answer at a round with X-Algod-TT-Round', async () => {
+      const { headers } = await c
+        .getAssetByID(USDC)
+        .round(PAST)
+        .doWithHeaders();
+      assert.strictEqual(headers['x-algod-tt-round'], PAST.toString());
+    });
+
+    it('answers 404 for an asset before its creation, marked with the round', async () => {
+      await assert.rejects(
+        c.getAssetByID(USDC).round(1000).do(),
+        (err: {
+          status?: number;
+          response?: { headers?: Record<string, string> };
+        }) =>
+          !(err instanceof DTUnsupportedError) &&
+          err.status === 404 &&
+          err.response?.headers?.['x-algod-tt-round'] === '1000'
+      );
     });
 
     it('rejects a round after the latest', async () => {

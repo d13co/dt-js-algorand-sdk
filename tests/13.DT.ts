@@ -1632,6 +1632,44 @@ describe('time travel', () => {
       );
     });
 
+    it('reads X-Algod-TT-Round from headers keyed by value, as algosdk 3.9.0 keys them', async () => {
+      // The HTTP client of algosdk 3.9.0 and earlier, as DTAlgodClient.from
+      // may use, keys response headers by value: { '3': 'x-algod-tt-round' }.
+      const stub = new StubClient([
+        () => ({
+          status: 200,
+          json: { index: 7, params: { creator: addr, decimals: 0, total: 1 } },
+          headers: {
+            '3': 'x-algod-tt-round',
+            'application/json': 'content-type',
+          },
+        }),
+        () => ({
+          status: 404,
+          json: { message: 'asset does not exist' },
+          headers: { '3': 'x-algod-tt-round' },
+        }),
+        () => ({
+          status: 200,
+          json: { index: 7, params: { creator: addr, decimals: 0, total: 1 } },
+          headers: { '4': 'x-algod-tt-round' },
+        }),
+      ]);
+      const client = new DTAlgodClient(stub, '');
+      const asset = await client.getAssetByID(7).round(3).do();
+      assert.strictEqual(asset.index, BigInt(7));
+      await assert.rejects(
+        client.getAssetByID(7).round(3).do(),
+        (err: { status?: number }) =>
+          !(err instanceof DTUnsupportedError) && err.status === 404
+      );
+      await assert.rejects(
+        client.getAssetByID(7).round(3).do(),
+        (err: unknown) =>
+          err instanceof DTUnsupportedError && /as round 4/.test(err.message)
+      );
+    });
+
     it('throws a 404 without X-Algod-TT-Round as DTUnsupportedError', async () => {
       const stub = new StubClient([status(404)]);
       await assert.rejects(
@@ -3355,7 +3393,7 @@ describe('versions: rounds, keys and pages', () => {
       assert.deepStrictEqual(request.query, { limit: '1' });
     });
 
-    it('throws when the node answers with the token it was sent', async () => {
+    it('throws when the node answers with a token it was already sent', async () => {
       const stub = new StubClient([
         ok({ round: 9, versions: [], 'next-token': 'a' }),
         ok({ round: 9, versions: [], 'next-token': 'a' }),
@@ -3369,7 +3407,7 @@ describe('versions: rounds, keys and pages', () => {
             seen.push(page);
           }
         })(),
-        /answered with the next-token it was sent \(a\)/
+        /answered with a next-token it was already sent \(a\)/
       );
       assert.strictEqual(seen.length, 1);
       // A token sent with next() counts too.
@@ -3380,7 +3418,25 @@ describe('versions: rounds, keys and pages', () => {
         .getAssetVersions(7)
         .next('z')
         .pages();
-      await assert.rejects(pages.next(), /next-token it was sent \(z\)/);
+      await assert.rejects(pages.next(), /already sent \(z\)/);
+      // So does a cycle through several tokens.
+      const cycle = new StubClient([
+        ok({ round: 9, versions: [], 'next-token': 'a' }),
+        ok({ round: 9, versions: [], 'next-token': 'b' }),
+        ok({ round: 9, versions: [], 'next-token': 'a' }),
+      ]);
+      const cycled = [];
+      await assert.rejects(
+        (async () => {
+          for await (const page of new DTAlgodClient(cycle, '')
+            .getAssetVersions(7)
+            .pages()) {
+            cycled.push(page);
+          }
+        })(),
+        /already sent \(a\)/
+      );
+      assert.strictEqual(cycled.length, 2);
     });
 
     it('iterate gives the versions of every page in order', async () => {
@@ -3877,7 +3933,6 @@ describe('response headers and error helpers', () => {
       undefined,
       '',
       'garbage',
-      'opcodes=700, lookups=3',
       effort.replace('lookups=3', 'lookups=three'),
       effort.replace('lookups=3', 'lookups'),
     ]) {
@@ -3885,6 +3940,19 @@ describe('response headers and error helpers', () => {
     }
     assert.deepStrictEqual(
       algosdk.effortOf({ 'X-Algod-Effort': effort }),
+      expected
+    );
+    // A key the header leaves out is undefined.
+    assert.deepStrictEqual(
+      algosdk.parseEffortHeader('opcodes=700, lookups=3'),
+      {
+        opcodes: 700,
+        lookups: 3,
+      }
+    );
+    // algosdk 3.9.0 and earlier key headers by value.
+    assert.deepStrictEqual(
+      algosdk.effortOf({ [effort]: 'x-algod-effort' }),
       expected
     );
     assert.strictEqual(algosdk.effortOf({}), undefined);

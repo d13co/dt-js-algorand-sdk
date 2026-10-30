@@ -70,14 +70,19 @@ Yarn and Bun (`package.json`):
 
 Yarn 4 refuses versions published less than a day ago (`npmMinimalAgeGate`). To install a new dtalgosdk release right away, add `npmPreapprovedPackages: ["dtalgosdk"]` to `.yarnrc.yml`.
 
-`npm ls algosdk` or `pnpm why algosdk` (`yarn why dtalgosdk` on Yarn) should then list only `dtalgosdk@3.9.0-dt.4.1.0.0`. Pin the exact version: dtalgosdk versions are prereleases, and ranges such as `^3.9.0` do not match them. A version reads `<algosdk version>-dt.<dt-algorand release>.<SDK release>`: `3.9.0-dt.4.1.0.0` is built on algosdk 3.9.0, covers the API of dt-algorand dt4 (`v5.0.5-dt4`), and is SDK release 1.0.0 for that pair.
+`npm ls algosdk` or `pnpm why algosdk` (`yarn why dtalgosdk` on Yarn) should then list only `dtalgosdk@3.9.0-dt.4.1.0.0`. Pin the exact version, with no `^` or `~` (`npm install -E`): dtalgosdk versions are prereleases, so `^3.9.0` matches none of them, while a `^` or `~` range on a dtalgosdk version matches every later dtalgosdk built on the same algosdk version, breaking releases included. A version reads `<algosdk version>-dt.<dt-algorand release>.<SDK release>`: `3.9.0-dt.4.1.0.0` is built on algosdk 3.9.0, covers the API of dt-algorand dt4 (`v5.0.5-dt4`), and is SDK release 1.0.0 for that pair.
 
 ### Quick start
 
 ```typescript
 import algosdk from 'algosdk';
 
-const algod = algosdk.DTAlgodClient.from(algorand.client.algod);
+const algod = new algosdk.DTAlgodClient(
+  '',
+  'https://mainnet-api-dt.d13.co',
+  443
+);
+// or wrap a client you already have: algosdk.DTAlgodClient.from(algorand.client.algod)
 
 // A box as it was at round 45,000,000.
 const box = await algod
@@ -108,7 +113,7 @@ Existing codebases using v2 of this library will be incompatible with v3. The v3
 ### [Node.js](https://nodejs.org/en/download/)
 
 ```
-$ npm install algosdk@npm:dtalgosdk@3.9.0-dt.4.1.0.0
+$ npm install -E algosdk@npm:dtalgosdk@3.9.0-dt.4.1.0.0
 ```
 
 This installs dtalgosdk under the name `algosdk`. If other dependencies use algosdk, also add the override from [Installing dtalgosdk in place of algosdk](#installing-dtalgosdk-in-place-of-algosdk), so that there is only one copy.
@@ -122,7 +127,7 @@ Include a minified browser bundle directly in your HTML like so. It defines the 
 ```html
 <script
   src="https://unpkg.com/dtalgosdk@3.9.0-dt.4.1.0.0/dist/browser/algosdk.min.js"
-  integrity="sha384-kRYLPxjG6jcgpCivGOasfvJ2avIDZObsvdZEG0YBdhKKC6JbOj6sApwckojSTW6w"
+  integrity="sha384-uYn+/StG2g/CidOhhPUXlMt0XyUgGYriM4nsrQWfwxjoJHIGeDMUZWhY7z84MT/2"
   crossorigin="anonymous"
 ></script>
 ```
@@ -132,7 +137,7 @@ or
 ```html
 <script
   src="https://cdn.jsdelivr.net/npm/dtalgosdk@3.9.0-dt.4.1.0.0/dist/browser/algosdk.min.js"
-  integrity="sha384-kRYLPxjG6jcgpCivGOasfvJ2avIDZObsvdZEG0YBdhKKC6JbOj6sApwckojSTW6w"
+  integrity="sha384-uYn+/StG2g/CidOhhPUXlMt0XyUgGYriM4nsrQWfwxjoJHIGeDMUZWhY7z84MT/2"
   crossorigin="anonymous"
 ></script>
 ```

@@ -13,7 +13,7 @@ import { SimulateTransactionGroupResult } from '../models/types.js';
  *   `getAssetHolders`;
  * - queries are disabled (`MaxAPIQueryCalls` 0): `query`;
  * - simulate `rounds` is disabled (`MaxAPISimulateRounds` 0);
- * - the node has no simulate limits endpoint, which every dtalgod node has:
+ * - the node has no capabilities endpoint, which every dtalgod node has:
  *   it is stock algod (`getCapabilities`).
  */
 export class DTUnsupportedError extends Error {
@@ -71,14 +71,26 @@ export function isPastRoundUnsupported(err: unknown) {
  */
 export const TT_ROUND_HEADER = 'x-algod-tt-round';
 
-/** The value of a response header, matched without regard to case. */
+/**
+ * The value of a response header, matched without regard to case.
+ *
+ * algosdk 3.9.0 and earlier key response headers by value instead of by name
+ * (`{ "5": "x-algod-tt-round" }`), so headers from the HTTP client of such a
+ * copy of algosdk (see `DTAlgodClient.from`) are read that way when the name is
+ * not a key.
+ *
+ * @param headers - The response headers.
+ * @param name - The header's name, lowercased.
+ */
 export function headerValue(
   headers: Record<string, string> | undefined,
   name: string
 ): string | undefined {
   if (!headers) return undefined;
-  const key = Object.keys(headers).find((k) => k.toLowerCase() === name);
-  return key === undefined ? undefined : headers[key];
+  const keys = Object.keys(headers);
+  const key = keys.find((k) => k.toLowerCase() === name);
+  if (key !== undefined) return headers[key];
+  return keys.find((k) => String(headers[k]).toLowerCase() === name);
 }
 
 /**

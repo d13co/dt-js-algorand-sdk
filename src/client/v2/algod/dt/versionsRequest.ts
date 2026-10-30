@@ -220,7 +220,7 @@ export default abstract class VersionsRequest<
    * Fetch every page, until a page has no `nextToken`. Pages may be short, or
    * even empty, and still have a `nextToken`; they are all yielded. The
    * builder's own query is not modified, so the request can be reused. A node
-   * that answers with the token it was sent throws an `Error`, rather than
+   * that answers with a token it was already sent throws an `Error`, rather than
    * paging forever.
    *
    * #### Example

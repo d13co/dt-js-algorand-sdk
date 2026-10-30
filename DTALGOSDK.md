@@ -100,7 +100,7 @@ Yarn 4 refuses versions published less than a day ago (`npmMinimalAgeGate`). To 
 
 Then check that only one copy is installed: `npm ls algosdk` or `pnpm why algosdk` (`yarn why dtalgosdk` on Yarn) should list `dtalgosdk@3.9.0-dt.4.1.0.0` and nothing else.
 
-Pin the exact version: dtalgosdk versions are prereleases, and ranges such as `^3.9.0` do not match them. A version reads `<algosdk version>-dt.<dt-algorand release>.<SDK release>`: `3.9.0-dt.4.1.0.0` is built on algosdk 3.9.0, covers the API of dt-algorand dt4 (`v5.0.5-dt4`), and is SDK release 1.0.0 for that pair.
+Pin the exact version, with no `^` or `~` (`npm install -E`): dtalgosdk versions are prereleases, so `^3.9.0` matches none of them, while a `^` or `~` range on a dtalgosdk version matches every later dtalgosdk built on the same algosdk version, breaking releases included. A version reads `<algosdk version>-dt.<dt-algorand release>.<SDK release>`: `3.9.0-dt.4.1.0.0` is built on algosdk 3.9.0, covers the API of dt-algorand dt4 (`v5.0.5-dt4`), and is SDK release 1.0.0 for that pair.
 
 To use a local checkout instead, run `npm run build` in it (and again after each change), then use it in place of the registry version. With pnpm, set the override to `link:/path/to/js-algorand-sdk`. With npm, put a tarball from `npm pack` in `dependencies` (`"algosdk": "file:./vendor/dtalgosdk-3.9.0-dt.4.1.0.0.tgz"`) and keep the override as `"$algosdk"`: npm rejects an override that differs from the direct dependency.
 
@@ -124,7 +124,7 @@ From the package root (`import algosdk from 'algosdk'`):
 
 ## DTAlgodClient
 
-`DTAlgodClient` extends `AlgodClient` and takes the same constructor arguments. It overrides the reads that gain a `.round()`, `simulateTransactions` and `simulateRawTransactions`, and adds the versions, query, limits and detection methods. Every other method is inherited unchanged.
+`DTAlgodClient` extends `AlgodClient` and takes the same constructor arguments. It overrides the reads that gain a `.round()`, `simulateTransactions` and `simulateRawTransactions`, and adds the versions, holders, query, capabilities and detection methods. Every other method is inherited unchanged.
 
 ```typescript
 const algod = new algosdk.DTAlgodClient(token, server, port);
@@ -136,7 +136,7 @@ To reuse a client you already have, such as algokit-utils' `algorand.client.algo
 const algod = algosdk.DTAlgodClient.from(algorand.client.algod);
 ```
 
-`from` sends requests through the existing client's HTTP client (same server, token, headers and custom `BaseHTTPClient`), returns its argument if it already is a `DTAlgodClient`, and returns the same `DTAlgodClient` each time it is called with the same client, so cached answers (`supportsDT()`, `capabilities()`) are shared. The source client may come from another copy of algosdk, since it is read by shape, but transactions and models passed to the new client must come from this copy.
+`from` sends requests through the existing client's HTTP client (same server, token, headers and custom `BaseHTTPClient`), returns its argument if it already is a `DTAlgodClient`, and returns the same `DTAlgodClient` each time it is called with the same client, so cached answers (`supportsDT()`, `capabilities()`) are shared. The source client may come from another copy of algosdk, since it is read by shape, but transactions and models passed to the new client must come from this copy. The HTTP client of algosdk 3.9.0 and earlier keys response headers by value (see [Bug fixes and changes to upstream code](#bug-fixes-and-changes-to-upstream-code)); the round, effort and `Retry-After` checks read both shapes, but `doWithHeaders()` returns the headers as that client gives them.
 
 `supportsDT()` and `supportsAssetHolders()` say whether the node has the optional features they name; see [Optional node features](#optional-node-features).
 
@@ -208,7 +208,7 @@ A version is a round at which the stored value changed: rewriting an identical v
 - `.next(token)`: the previous page's `nextToken`, passed back with the same other parameters. It stays valid as new blocks arrive.
 - `.include('values')`: each version's new value (absent on deletions). The application state endpoints also take `keys` (see [Changed keys](#changed-keys)).
 - `.rounds([...])`: the object as of each listed round instead of a range (see [Versions as of rounds](#versions-as-of-rounds)).
-- `.pages()`: an async iterator over every page, empty ones included, until a page has no `nextToken`. A node that answers with the token it was sent throws an `Error` instead of paging forever.
+- `.pages()`: an async iterator over every page, empty ones included, until a page has no `nextToken`. A node that answers with a token it was already sent throws an `Error` instead of paging forever.
 - `.iterate()`: an async iterator over every version, fetching pages as it goes.
 
 `accountVersions` also takes `.exclude('all' | 'none' | 'created-apps-params' | 'created-assets-params')`. Applying its versions after `minRound`, replacing objects by ID, to `accountInformation(address).round(minRound)` gives the account at any later round of the range.
@@ -589,7 +589,7 @@ for (let attempt = 0; ; attempt++) {
 
 `doWithHeaders()` runs any request as `do()` does, with the same checks, and returns `{ data, headers }`, the headers keyed by lowercased name. An HTTP error has them too, in `err.response.headers`.
 
-A dt-algorand node with `EnableEffortHeader` reports the work each request did in `X-Algod-Effort`, an RFC 9651 dictionary (`opcodes=700, lookups=3, history=2, scanned=10, response-bytes=512, eval-us=840`). `effortOf(headers)` parses it into an `Effort` (`opcodes`, `lookups`, `history`, `scanned`, `responseBytes`, `evalMicroseconds`), or gives undefined when it is absent or malformed (`parseEffortHeader(value)` takes the value itself). It is off by default and meant for a load balancer that bills on it and strips it, so most clients never see it: use it for diagnostics only.
+A dt-algorand node with `EnableEffortHeader` reports the work each request did in `X-Algod-Effort`, an RFC 9651 dictionary (`opcodes=700, lookups=3, history=2, scanned=10, response-bytes=512, eval-us=840`). `effortOf(headers)` parses it into an `Effort` (`opcodes`, `lookups`, `history`, `scanned`, `responseBytes`, `evalMicroseconds`), or gives undefined when it is absent or malformed (`parseEffortHeader(value)` takes the value itself). A field is undefined when the header leaves its key out. It is off by default and meant for a load balancer that bills on it and strips it, so most clients never see it: use it for diagnostics only.
 
 ```typescript
 const { data, headers } = await algod
@@ -638,7 +638,7 @@ GitHub Actions publishes dtalgosdk, with [`.github/workflows/dtalgosdk.yml`](.gi
 1. Choose the version, `<algosdk version>-dt.<dt-algorand release>.<SDK release>`:
    - the algosdk version the code is built on; change it when merging a new upstream release;
    - the number of the latest dt-algorand release (`v5.0.4-dt2` is 2) whose API the SDK covers. Nodes of older dt-algorand releases are not supported; the client detects only the optional features of the current release (see [Optional node features](#optional-node-features)). Keep the dot (`dt.2`, not `dt2`), so that npm compares it as a number and `dt.10` sorts after `dt.9`;
-   - the SDK's own release, `x.y.z`: bump `x` for a breaking change to the fork's API, `y` for features and `z` for fixes. Reset it to `0.0.1` when either of the parts before it changes.
+   - the SDK's own release, `x.y.z`: bump `x` for a breaking change to the fork's API, `y` for features and `z` for fixes. Start it again at `1.0.0` when either of the parts before it changes.
 2. Set it and update the docs: `npm version <version> --no-git-tag-version`, `npm run build`, then `node scripts/ci/dtalgosdk-release.js update`. The script sets the version in the install snippets and CDN URLs in `README.md` and in this file, and the browser bundle's `integrity` hash in `README.md`.
 3. `npm test`, then `npm pack --dry-run` to check the contents (`dist/`, `src/`, `README.md`, `DTALGOSDK.md`, `LICENSE`).
 4. Commit and push `dtalgorand`, then tag the commit and push the tag: `git tag v<version>` and `git push d13co v<version>`.

@@ -5,8 +5,8 @@
  * absence ends the paging. The query passed in is not modified, and each
  * request gets its own copy of it.
  *
- * A node that answers with the token it was sent would never end, so that
- * throws an `Error` instead.
+ * A node that answers with a token it was already sent would never end, so
+ * that throws an `Error` instead.
  *
  * @param query - The query of the first page.
  * @param fetchPage - Fetches and decodes the page for a query.
@@ -18,14 +18,16 @@ export async function* pageThrough<Page extends { nextToken?: string }>(
   what: string
 ): AsyncGenerator<Page, void, undefined> {
   const q = { ...query };
+  const sent = new Set<string>();
   for (;;) {
+    if (q.next) sent.add(String(q.next));
     // HTTPClient drops empty values from the query object it is given, so
     // each page gets its own copy. Each page needs the previous page's token.
     // eslint-disable-next-line no-await-in-loop
     const page = await fetchPage({ ...q });
-    if (page.nextToken && page.nextToken === q.next) {
+    if (page.nextToken && sent.has(page.nextToken)) {
       throw new Error(
-        `${what}: the node answered with the next-token it was sent (${q.next}), so paging would never end`
+        `${what}: the node answered with a next-token it was already sent (${page.nextToken}), so paging would never end`
       );
     }
     yield page;

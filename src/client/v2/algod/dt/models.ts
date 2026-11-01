@@ -3053,7 +3053,17 @@ export class QueryLimits implements Encodable {
           valueSchema: new Uint64Schema(),
           omitEmpty: false,
         },
-        { key: 'max-rounds', valueSchema: new Uint64Schema(), omitEmpty: false }
+        {
+          key: 'max-rounds',
+          valueSchema: new Uint64Schema(),
+          omitEmpty: false,
+        },
+        {
+          // Optional: older nodes don't report it
+          key: 'max-total-calls',
+          valueSchema: new OptionalSchema(new Uint64Schema()),
+          omitEmpty: true,
+        }
       );
     }
     return this.encodingSchemaValue;
@@ -3099,6 +3109,15 @@ export class QueryLimits implements Encodable {
   public maxRounds: number;
 
   /**
+   * The most call runs a request may ask for: its calls times the entries it
+   * lists in `rounds` (1 when it lists none), duplicates included. Split a
+   * request by this as well as by `maxCalls` and `maxRounds` (node config
+   * `MaxAPIQueryTotalCalls`). Nodes from before this limit don't report it;
+   * it is `maxCalls * maxRounds` for them.
+   */
+  public maxTotalCalls: number;
+
+  /**
    * Creates a new `QueryLimits` object.
    * @param maxCalls - The most calls a request may hold.
    * @param maxCallBudget - The most opcode budget of a call, and its default.
@@ -3109,6 +3128,8 @@ export class QueryLimits implements Encodable {
    * @param maxResponseBytes - The most bytes of logs and errors a request may
    * return; 0 means no limit.
    * @param maxRounds - The most entries a request may list in `rounds`.
+   * @param maxTotalCalls - The most calls times listed rounds a request may
+   * ask for; `maxCalls * maxRounds` when absent or 0, as on older nodes.
    */
   constructor({
     maxCalls,
@@ -3117,6 +3138,7 @@ export class QueryLimits implements Encodable {
     maxCallStateBytes,
     maxResponseBytes,
     maxRounds,
+    maxTotalCalls,
   }: {
     maxCalls: number | bigint;
     maxCallBudget: number | bigint;
@@ -3124,6 +3146,7 @@ export class QueryLimits implements Encodable {
     maxCallStateBytes: number | bigint;
     maxResponseBytes: number | bigint;
     maxRounds: number | bigint;
+    maxTotalCalls?: number | bigint;
   }) {
     this.maxCalls = ensureSafeInteger(maxCalls);
     this.maxCallBudget = ensureSafeInteger(maxCallBudget);
@@ -3131,6 +3154,11 @@ export class QueryLimits implements Encodable {
     this.maxCallStateBytes = ensureSafeInteger(maxCallStateBytes);
     this.maxResponseBytes = ensureSafeInteger(maxResponseBytes);
     this.maxRounds = ensureSafeInteger(maxRounds);
+    // Absent (or 0, which a node never reports): calls and rounds are the
+    // only limits, as on nodes from before this one
+    this.maxTotalCalls = maxTotalCalls
+      ? ensureSafeInteger(maxTotalCalls)
+      : ensureSafeInteger(this.maxCalls * this.maxRounds);
   }
 
   // eslint-disable-next-line class-methods-use-this
@@ -3146,6 +3174,7 @@ export class QueryLimits implements Encodable {
       ['max-call-state-bytes', this.maxCallStateBytes],
       ['max-response-bytes', this.maxResponseBytes],
       ['max-rounds', this.maxRounds],
+      ['max-total-calls', this.maxTotalCalls],
     ]);
   }
 
@@ -3160,6 +3189,7 @@ export class QueryLimits implements Encodable {
       maxCallStateBytes: data.get('max-call-state-bytes') ?? 0,
       maxResponseBytes: data.get('max-response-bytes') ?? 0,
       maxRounds: data.get('max-rounds') ?? 0,
+      maxTotalCalls: data.get('max-total-calls'),
     });
   }
 }
@@ -3747,8 +3777,9 @@ export class QueryRequest implements Encodable {
 
   /**
    * The rounds to query, at most the node's `maxRounds` entries, duplicates
-   * included; 0 is the latest round. Defaults to the latest round. A round
-   * after the latest one fails the request.
+   * included, and at most its `maxTotalCalls` divided by the calls; 0 is the
+   * latest round. Defaults to the latest round. A round after the latest one
+   * fails the request.
    */
   public rounds?: bigint[];
 
@@ -3766,7 +3797,10 @@ export class QueryRequest implements Encodable {
    */
   public budget?: number;
 
-  /** The calls, at most the node's `maxCalls`. */
+  /**
+   * The calls, at most the node's `maxCalls`, and at most its `maxTotalCalls`
+   * divided by the entries of `rounds` (1 without rounds).
+   */
   public calls: QueryCall[];
 
   /**

@@ -619,7 +619,7 @@ export class DTAlgodClient extends AlgodClient {
    * Queries can be disabled on a node (`MaxAPIQueryCalls` 0): the `query` of
    * {@link DTAlgodClient.capabilities} is undefined then, and otherwise has
    * the limits to split requests by (`maxCalls`, `maxRounds`,
-   * `maxCallBudget`, `maxCallLogBytes`, `maxCallStateBytes`,
+   * `maxTotalCalls`, `maxCallBudget`, `maxCallLogBytes`, `maxCallStateBytes`,
    * `maxResponseBytes`). A node with queries disabled is thrown as a
    * {@link DTUnsupportedError}. Results
    * over `maxResponseBytes` fail with a 400 that `isQueryResponseTooLarge`

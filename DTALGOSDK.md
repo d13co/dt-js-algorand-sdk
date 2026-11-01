@@ -501,6 +501,7 @@ Code that falls back from query to simulate (or back) must handle these:
 `(await algod.capabilities()).query` has the node's `QueryLimits`, or is undefined when the node has queries disabled (or is stock algod):
 
 - `maxCalls` calls and `maxRounds` round entries (duplicates included) per request;
+- `maxTotalCalls`, the most calls times round entries per request (no `rounds` counts as 1): 1,024 by default, so 1,024 calls at one round, or 64 calls at 16 rounds. Older nodes don't report it, and it is `maxCalls * maxRounds` for them;
 - `maxCallBudget`, the most (and default) budget per call;
 - `maxCallLogBytes`, the most bytes each program of a call may log, in up to 2048 logs (0 for the protocol's limits);
 - `maxResponseBytes`, the most bytes of logs and errors a request may return (0 for no limit). Each log counts `QUERY_LOG_OVERHEAD_BYTES` (48) more than its length, and a round listed twice counts twice.
@@ -509,10 +510,10 @@ The request body may be at most `MAX_QUERY_REQUEST_BYTES` (1,000,000) bytes of m
 
 - A node with queries disabled (`MaxAPIQueryCalls` 0: a 400 saying so) is thrown as a `DTUnsupportedError`.
 - Results over `maxResponseBytes` fail with a 400 that `isQueryResponseTooLarge(err)` recognizes: split the request and retry.
-- Other 400s (too many calls or rounds, a round after the latest, an unknown protocol, a bad address) pass through.
+- Other 400s (too many calls, rounds or calls in total, a round after the latest, an unknown protocol, a bad address) pass through.
 - A busy node answers 503 with `Retry-After` (query shares simulate's limiter), and a request over `timeLimitSeconds` 504.
 
-Detect query and fall back, splitting calls by `maxCalls` and rounds by `maxRounds` (the SDK ships no chunker):
+Detect query and fall back, splitting rounds by `maxRounds` (and `maxTotalCalls`), then calls by `maxCalls` and by `maxTotalCalls` over the request's rounds (the SDK ships no chunker). An empty `rounds` is one request at the latest round:
 
 ```typescript
 const { query } = await algod.capabilities();
@@ -520,12 +521,21 @@ if (!query) {
   // simulate instead
 } else {
   const results = [];
-  for (let r = 0; r < rounds.length; r += query.maxRounds) {
-    for (let c = 0; c < calls.length; c += query.maxCalls) {
+  const perRequest = Math.min(query.maxRounds, query.maxTotalCalls);
+  const chunks = [];
+  for (let r = 0; r < rounds.length; r += perRequest)
+    chunks.push(rounds.slice(r, r + perRequest));
+  if (!chunks.length) chunks.push([]); // no rounds: the latest, counted as 1
+  for (const some of chunks) {
+    const callsPer = Math.min(
+      query.maxCalls,
+      Math.floor(query.maxTotalCalls / Math.max(1, some.length))
+    );
+    for (let c = 0; c < calls.length; c += callsPer) {
       results.push(
         await algod
-          .query({ program, calls: calls.slice(c, c + query.maxCalls) })
-          .rounds(rounds.slice(r, r + query.maxRounds))
+          .query({ program, calls: calls.slice(c, c + callsPer) })
+          .rounds(some)
           // The chain's own rules: a program newer than an old round's
           // protocol then fails in every call's `error` at that round.
           .protocol('round')
@@ -540,14 +550,14 @@ if (!query) {
 
 `capabilities()` reads `GET /v2/capabilities` once per client and returns a frozen `CapabilitiesResponse`: the fork features the node has on, and the limits it places on simulate and query requests.
 
-| Field              | Meaning                                                                                                                                                                       |
-| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `timeTravel`       | `EnableTimeTravel` is on                                                                                                                                                      |
-| `developerApi`     | `EnableDeveloperAPI` is on (`execTraceConfig`, protocol `future`)                                                                                                             |
-| `timeLimitSeconds` | how long the node works on a simulate, query, versions or delta request before a 504, 0 for no limit                                                                          |
-| `simulate`         | `SimulateLimits` of `POST /v2/transactions/simulate`, below                                                                                                                   |
-| `query`            | `QueryLimits` of `POST /v2/query` (`maxCalls`, `maxCallBudget`, `maxCallLogBytes`, `maxCallStateBytes`, `maxResponseBytes`, `maxRounds`); undefined when queries are disabled |
-| `reported`         | the node reported these; false for the fallback below                                                                                                                         |
+| Field              | Meaning                                                                                                                                                                                        |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `timeTravel`       | `EnableTimeTravel` is on                                                                                                                                                                       |
+| `developerApi`     | `EnableDeveloperAPI` is on (`execTraceConfig`, protocol `future`)                                                                                                                              |
+| `timeLimitSeconds` | how long the node works on a simulate, query, versions or delta request before a 504, 0 for no limit                                                                                           |
+| `simulate`         | `SimulateLimits` of `POST /v2/transactions/simulate`, below                                                                                                                                    |
+| `query`            | `QueryLimits` of `POST /v2/query` (`maxCalls`, `maxCallBudget`, `maxCallLogBytes`, `maxCallStateBytes`, `maxResponseBytes`, `maxRounds`, `maxTotalCalls`); undefined when queries are disabled |
+| `reported`         | the node reported these; false for the fallback below                                                                                                                                          |
 
 `simulate`:
 

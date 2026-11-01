@@ -769,7 +769,7 @@ describe('time travel', () => {
       assert.strictEqual(stub.calls.length, 1);
     });
 
-    // What a node with queries on answers (dtalgorand e30b77b27, defaults).
+    // What a node with queries on answers (dtalgorand defaults).
     const withQuery = {
       ...caps,
       query: {
@@ -779,6 +779,7 @@ describe('time travel', () => {
         'max-calls': 1024,
         'max-response-bytes': 67108864,
         'max-rounds': 16,
+        'max-total-calls': 1024,
       },
     };
 
@@ -795,9 +796,29 @@ describe('time travel', () => {
           maxCallStateBytes: 67108864,
           maxResponseBytes: 67108864,
           maxRounds: 16,
+          maxTotalCalls: 1024,
         }
       );
       assert.ok(Object.isFrozen(got.query));
+    });
+
+    it('takes maxCalls * maxRounds as maxTotalCalls from a node without it', async () => {
+      const older: Record<string, number> = { ...withQuery.query };
+      delete older['max-total-calls'];
+      const stub = new StubClient([ok({ ...withQuery, query: older })]);
+      const got = await new DTAlgodClient(stub, '').capabilities();
+      assert.strictEqual(got.query?.maxTotalCalls, 1024 * 16);
+    });
+
+    it('takes maxCalls * maxRounds as maxTotalCalls for a reported 0', async () => {
+      const stub = new StubClient([
+        ok({
+          ...withQuery,
+          query: { ...withQuery.query, 'max-total-calls': 0 },
+        }),
+      ]);
+      const got = await new DTAlgodClient(stub, '').capabilities();
+      assert.strictEqual(got.query?.maxTotalCalls, 1024 * 16);
     });
 
     it('keeps 0 limits as 0, which means no limit', async () => {

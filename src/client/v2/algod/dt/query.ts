@@ -53,8 +53,9 @@ export default class RunQuery extends JSONRequest<QueryResponse> {
    * round. The results are in the response's `rounds`, one per entry in this
    * order; a round that cannot be queried has an `error` there instead of
    * failing the request. The node's `QueryLimits.maxRounds` limits how many
-   * entries a request may list, duplicates included. An empty list sends no
-   * rounds, clearing any the request had.
+   * entries a request may list, duplicates included, and its `maxTotalCalls`
+   * limits the calls times the entries. An empty list sends no rounds,
+   * clearing any the request had.
    *
    * @param rounds - The rounds to query at.
    * @category body

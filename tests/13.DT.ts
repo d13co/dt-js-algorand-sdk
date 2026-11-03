@@ -857,6 +857,81 @@ describe('time travel', () => {
       assert.ok(!/query/.test(algosdk.encodeJSON(stock)));
     });
 
+    it('decodes a body with every key missing, with safe defaults', async () => {
+      const stub = new StubClient([ok({})]);
+      const got = await new DTAlgodClient(stub, '').capabilities();
+      assert.strictEqual(got.reported, true);
+      assert.strictEqual(got.timeTravel, false);
+      assert.strictEqual(got.developerApi, false);
+      assert.strictEqual(got.timeLimitSeconds, 0);
+      assert.deepStrictEqual(
+        { ...got.simulate },
+        { ...CapabilitiesResponse.stock().simulate }
+      );
+      assert.strictEqual(got.query, undefined);
+    });
+
+    it('fills in the simulate and query keys a node leaves out', () => {
+      const got = algosdk.decodeJSON(
+        JSON.stringify({
+          'time-travel': true,
+          simulate: { 'max-txn-groups': 8, 'some-new-limit': 3 },
+          query: { 'max-calls': 64 },
+          'some-new-flag': true,
+        }),
+        CapabilitiesResponse
+      );
+      assert.strictEqual(got.timeTravel, true);
+      assert.deepStrictEqual(
+        { ...got.simulate },
+        { maxTxnGroups: 8, maxExtraOpcodeBudget: 320000 }
+      );
+      assert.deepStrictEqual(
+        { ...got.query },
+        {
+          maxCalls: 64,
+          maxCallBudget: 700,
+          maxCallLogBytes: 0,
+          maxCallStateBytes: 0,
+          maxResponseBytes: 0,
+          maxRounds: 1,
+          maxTotalCalls: 64,
+        }
+      );
+    });
+
+    it('decodes missing keys from msgpack too', () => {
+      const got = algosdk.decodeMsgpack(
+        msgpackEncode({ 'time-travel': true, query: { 'max-rounds': 4 } }),
+        CapabilitiesResponse
+      );
+      assert.strictEqual(got.timeTravel, true);
+      assert.strictEqual(got.simulate.maxTxnGroups, 1);
+      assert.strictEqual(got.query!.maxCalls, 1);
+      assert.strictEqual(got.query!.maxTotalCalls, 4);
+    });
+
+    it('still refuses a value of the wrong type', () => {
+      assert.throws(() =>
+        algosdk.decodeJSON(
+          JSON.stringify({ simulate: { 'max-txn-groups': 'many' } }),
+          CapabilitiesResponse
+        )
+      );
+    });
+
+    it('saturates maxTotalCalls instead of throwing on huge limits', () => {
+      const limits = new QueryLimits({
+        maxCalls: Number.MAX_SAFE_INTEGER,
+        maxCallBudget: 0,
+        maxCallLogBytes: 0,
+        maxCallStateBytes: 0,
+        maxResponseBytes: 0,
+        maxRounds: 256,
+      });
+      assert.strictEqual(limits.maxTotalCalls, Number.MAX_SAFE_INTEGER);
+    });
+
     it('encodes the capabilities as the node does', () => {
       for (const body of [caps, withQuery]) {
         const decoded = algosdk.decodeJSON(

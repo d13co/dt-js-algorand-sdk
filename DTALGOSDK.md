@@ -510,6 +510,8 @@ dt5 nodes no longer report simulate's `max-rounds` and `resource-limit-multiplie
 
 A 0 limit from the node means no limit. `simulate` and `query` are frozen too.
 
+The client reads capabilities leniently, so a node with a key more or less than this client knows still answers `capabilities()`: unknown keys are ignored, and a missing key takes a safe default. The flags default to false and `timeLimitSeconds` to 0. `simulate` defaults to stock algod's limits (1 group, 320,000 extra budget). In `query`, `maxCalls` and `maxRounds` default to 1, `maxCallBudget` to 700, the byte limits to 0, and `maxTotalCalls` to `maxCalls * maxRounds`. A value of the wrong type still fails. dt-algosdk 3.9.0-dt.4.1.0.0 and earlier required every key, so they cannot read a dt5 node's capabilities, which lack `simulate.max-rounds`.
+
 Every dtalgod node serves its capabilities, so stock algod is the only node without them (a 404): it gets stock algod's instead (`CapabilitiesResponse.stock()`), with `reported` false: no time travel, no queries, and one group per simulate request, so send one request per round with `round` set. `getCapabilities()` is the uncached request, which throws `DTUnsupportedError` on a 404. The endpoint replaces `GET /v2/transactions/simulate/limits` of earlier fork builds, which the client no longer reads.
 
 ## Busy, time limit and history errors

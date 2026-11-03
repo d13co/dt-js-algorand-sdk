@@ -11,7 +11,13 @@ import {
   ensureSafeInteger,
   ensureUint64,
 } from '../../../../utils/utils.js';
-import { Encodable, Schema } from '../../../../encoding/encoding.js';
+import {
+  Encodable,
+  Schema,
+  MsgpackEncodingData,
+  MsgpackRawStringProvider,
+  JSONEncodingData,
+} from '../../../../encoding/encoding.js';
 import {
   NamedMapSchema,
   ArraySchema,
@@ -2403,6 +2409,59 @@ export class DTSimulateResponse extends SimulateResponse {
 }
 
 /**
+ * A {@link NamedMapSchema} that decodes a map with keys missing instead of
+ * throwing: they are left out of the decoded map, and the model gives them a
+ * default. Encoding is unchanged, every key written as its entry says. Used
+ * for the node's capabilities, so that a node that drops a key, or does not
+ * have it yet, can still be read.
+ */
+class LenientNamedMapSchema extends NamedMapSchema {
+  public fromPreparedMsgpack(
+    encoded: MsgpackEncodingData,
+    rawStringProvider: MsgpackRawStringProvider
+  ): Map<string, unknown> {
+    if (!(encoded instanceof Map)) {
+      throw new Error('NamedMapSchema data must be a Map');
+    }
+    const map = new Map<string, unknown>();
+    for (const entry of this.getEntries()) {
+      if (encoded.has(entry.key)) {
+        map.set(
+          entry.key,
+          entry.valueSchema.fromPreparedMsgpack(
+            encoded.get(entry.key),
+            rawStringProvider.withMapValue(entry.key)
+          )
+        );
+      }
+    }
+    return map;
+  }
+
+  public fromPreparedJSON(encoded: JSONEncodingData): Map<string, unknown> {
+    if (
+      encoded == null ||
+      typeof encoded !== 'object' ||
+      Array.isArray(encoded)
+    ) {
+      throw new Error('NamedMapSchema data must be an object');
+    }
+    const map = new Map<string, unknown>();
+    for (const entry of this.getEntries()) {
+      if (Object.prototype.hasOwnProperty.call(encoded, entry.key)) {
+        map.set(
+          entry.key,
+          entry.valueSchema.fromPreparedJSON(
+            (encoded as Record<string, JSONEncodingData>)[entry.key]
+          )
+        );
+      }
+    }
+    return map;
+  }
+}
+
+/**
  * The limits a node places on `POST /v2/query` requests
  * ({@link CapabilitiesResponse.query}). The values are the ones the node
  * applies, after it clamps its configuration.
@@ -2412,7 +2471,7 @@ export class QueryLimits implements Encodable {
 
   static get encodingSchema(): Schema {
     if (!this.encodingSchemaValue) {
-      this.encodingSchemaValue = new NamedMapSchema([]);
+      this.encodingSchemaValue = new LenientNamedMapSchema([]);
       (this.encodingSchemaValue as NamedMapSchema).pushEntries(
         { key: 'max-calls', valueSchema: new Uint64Schema(), omitEmpty: false },
         {
@@ -2441,10 +2500,9 @@ export class QueryLimits implements Encodable {
           omitEmpty: false,
         },
         {
-          // Optional: older nodes don't report it
           key: 'max-total-calls',
-          valueSchema: new OptionalSchema(new Uint64Schema()),
-          omitEmpty: true,
+          valueSchema: new Uint64Schema(),
+          omitEmpty: false,
         }
       );
     }
@@ -2537,10 +2595,11 @@ export class QueryLimits implements Encodable {
     this.maxResponseBytes = ensureSafeInteger(maxResponseBytes);
     this.maxRounds = ensureSafeInteger(maxRounds);
     // Absent (or 0, which a node never reports): calls and rounds are the
-    // only limits, as on nodes from before this one
+    // only limits, as on nodes from before this one. Saturates rather than
+    // throwing on a nonsense answer.
     this.maxTotalCalls = maxTotalCalls
       ? ensureSafeInteger(maxTotalCalls)
-      : ensureSafeInteger(this.maxCalls * this.maxRounds);
+      : Math.min(this.maxCalls * this.maxRounds, Number.MAX_SAFE_INTEGER);
   }
 
   // eslint-disable-next-line class-methods-use-this
@@ -2564,13 +2623,15 @@ export class QueryLimits implements Encodable {
     if (!(data instanceof Map)) {
       throw new Error(`Invalid decoded QueryLimits: ${data}`);
     }
+    // A key the node left out takes the most restrictive value that still
+    // lets a request through, or 0 where 0 is the node's own "no limit".
     return new QueryLimits({
-      maxCalls: data.get('max-calls') ?? 0,
-      maxCallBudget: data.get('max-call-budget') ?? 0,
+      maxCalls: data.get('max-calls') ?? 1,
+      maxCallBudget: data.get('max-call-budget') ?? 700,
       maxCallLogBytes: data.get('max-call-log-bytes') ?? 0,
       maxCallStateBytes: data.get('max-call-state-bytes') ?? 0,
       maxResponseBytes: data.get('max-response-bytes') ?? 0,
-      maxRounds: data.get('max-rounds') ?? 0,
+      maxRounds: data.get('max-rounds') ?? 1,
       maxTotalCalls: data.get('max-total-calls'),
     });
   }
@@ -2586,7 +2647,7 @@ export class SimulateLimits implements Encodable {
 
   static get encodingSchema(): Schema {
     if (!this.encodingSchemaValue) {
-      this.encodingSchemaValue = new NamedMapSchema([]);
+      this.encodingSchemaValue = new LenientNamedMapSchema([]);
       (this.encodingSchemaValue as NamedMapSchema).pushEntries(
         {
           key: 'max-txn-groups',
@@ -2649,8 +2710,9 @@ export class SimulateLimits implements Encodable {
       throw new Error(`Invalid decoded SimulateLimits: ${data}`);
     }
     return new SimulateLimits({
-      maxTxnGroups: data.get('max-txn-groups') ?? 0,
-      maxExtraOpcodeBudget: data.get('max-extra-opcode-budget') ?? 0,
+      // A key the node left out takes stock algod's value.
+      maxTxnGroups: data.get('max-txn-groups') ?? 1,
+      maxExtraOpcodeBudget: data.get('max-extra-opcode-budget') ?? 320000,
     });
   }
 }
@@ -2663,13 +2725,21 @@ export class SimulateLimits implements Encodable {
  *
  * `query` is undefined when the node has queries disabled
  * (`MaxAPIQueryCalls` 0): fall back to simulate then, one round per request.
+ *
+ * Decoding tolerates keys the node leaves out, as an older or newer node may,
+ * and ignores keys this client does not know. A missing key takes a safe
+ * default: false for the flags, 0 for `timeLimitSeconds`, stock algod's
+ * simulate limits (1 group, 320,000 extra budget), and for the query limits
+ * 1 call, 1 round, a budget of 700, 0 (none or the protocol's) for the byte
+ * limits, and `maxCalls * maxRounds` for `maxTotalCalls`. A value of the
+ * wrong type still fails.
  */
 export class CapabilitiesResponse implements Encodable {
   private static encodingSchemaValue: Schema | undefined;
 
   static get encodingSchema(): Schema {
     if (!this.encodingSchemaValue) {
-      this.encodingSchemaValue = new NamedMapSchema([]);
+      this.encodingSchemaValue = new LenientNamedMapSchema([]);
       (this.encodingSchemaValue as NamedMapSchema).pushEntries(
         {
           key: 'time-travel',

@@ -28,7 +28,7 @@ npm (`package.json`):
 ```json
 {
   "dependencies": {
-    "algosdk": "npm:dt-algosdk@3.9.0-dt.4.1.0.0"
+    "algosdk": "npm:dt-algosdk@3.9.0-dt.5.2.0.0"
   },
   "overrides": {
     "algosdk": "$algosdk"
@@ -40,7 +40,7 @@ pnpm 10 and later (`pnpm-workspace.yaml`; pnpm 11 and later read overrides only 
 
 ```yaml
 overrides:
-  algosdk: npm:dt-algosdk@3.9.0-dt.4.1.0.0
+  algosdk: npm:dt-algosdk@3.9.0-dt.5.2.0.0
 ```
 
 pnpm 9 (`package.json`; it warns about an unmet `algosdk` peer dependency, which is harmless):
@@ -49,7 +49,7 @@ pnpm 9 (`package.json`; it warns about an unmet `algosdk` peer dependency, which
 {
   "pnpm": {
     "overrides": {
-      "algosdk": "npm:dt-algosdk@3.9.0-dt.4.1.0.0"
+      "algosdk": "npm:dt-algosdk@3.9.0-dt.5.2.0.0"
     }
   }
 }
@@ -60,17 +60,17 @@ Yarn and Bun (`package.json`):
 ```json
 {
   "dependencies": {
-    "algosdk": "npm:dt-algosdk@3.9.0-dt.4.1.0.0"
+    "algosdk": "npm:dt-algosdk@3.9.0-dt.5.2.0.0"
   },
   "resolutions": {
-    "algosdk": "npm:dt-algosdk@3.9.0-dt.4.1.0.0"
+    "algosdk": "npm:dt-algosdk@3.9.0-dt.5.2.0.0"
   }
 }
 ```
 
 Yarn 4 refuses versions published less than a day ago (`npmMinimalAgeGate`). To install a new dt-algosdk release right away, add `npmPreapprovedPackages: ["dt-algosdk"]` to `.yarnrc.yml`.
 
-`npm ls algosdk` or `pnpm why algosdk` (`yarn why dt-algosdk` on Yarn) should then list only `dt-algosdk@3.9.0-dt.4.1.0.0`. Pin the exact version, with no `^` or `~` (`npm install -E`): dt-algosdk versions are prereleases, so `^3.9.0` matches none of them, while a `^` or `~` range on a dt-algosdk version matches every later dt-algosdk built on the same algosdk version, breaking releases included. A version reads `<algosdk version>-dt.<dt-algorand release>.<SDK release>`: `3.9.0-dt.4.1.0.0` is built on algosdk 3.9.0, covers the API of dt-algorand dt4 (`v5.0.5-dt4`), and is SDK release 1.0.0. The SDK release counts on across new algosdk and dt-algorand versions; it never starts over.
+`npm ls algosdk` or `pnpm why algosdk` (`yarn why dt-algosdk` on Yarn) should then list only `dt-algosdk@3.9.0-dt.5.2.0.0`. Pin the exact version, with no `^` or `~` (`npm install -E`): dt-algosdk versions are prereleases, so `^3.9.0` matches none of them, while a `^` or `~` range on a dt-algosdk version matches every later dt-algosdk built on the same algosdk version, breaking releases included. A version reads `<algosdk version>-dt.<dt-algorand release>.<SDK release>`: `3.9.0-dt.5.2.0.0` is built on algosdk 3.9.0, covers the API of dt-algorand dt5 (`v5.0.5-dt5`), and is SDK release 2.0.0. The SDK release counts on across new algosdk and dt-algorand versions; it never starts over.
 
 ### Quick start
 
@@ -113,7 +113,7 @@ Existing codebases using v2 of this library will be incompatible with v3. The v3
 ### [Node.js](https://nodejs.org/en/download/)
 
 ```
-$ npm install -E algosdk@npm:dt-algosdk@3.9.0-dt.4.1.0.0
+$ npm install -E algosdk@npm:dt-algosdk@3.9.0-dt.5.2.0.0
 ```
 
 This installs dt-algosdk under the name `algosdk`. If other dependencies use algosdk, also add the override from [Installing dt-algosdk in place of algosdk](#installing-dt-algosdk-in-place-of-algosdk), so that there is only one copy.
@@ -126,8 +126,8 @@ Include a minified browser bundle directly in your HTML like so. It defines the 
 
 ```html
 <script
-  src="https://unpkg.com/dt-algosdk@3.9.0-dt.4.1.0.0/dist/browser/algosdk.min.js"
-  integrity="sha384-uYn+/StG2g/CidOhhPUXlMt0XyUgGYriM4nsrQWfwxjoJHIGeDMUZWhY7z84MT/2"
+  src="https://unpkg.com/dt-algosdk@3.9.0-dt.5.2.0.0/dist/browser/algosdk.min.js"
+  integrity="sha384-NXuz/SgVX8VdwZ+8NCPe+CqJvHEOYfiTHmRbiFfJbjmulhCyrcJPNyGlVqHT46V0"
   crossorigin="anonymous"
 ></script>
 ```
@@ -136,8 +136,8 @@ or
 
 ```html
 <script
-  src="https://cdn.jsdelivr.net/npm/dt-algosdk@3.9.0-dt.4.1.0.0/dist/browser/algosdk.min.js"
-  integrity="sha384-uYn+/StG2g/CidOhhPUXlMt0XyUgGYriM4nsrQWfwxjoJHIGeDMUZWhY7z84MT/2"
+  src="https://cdn.jsdelivr.net/npm/dt-algosdk@3.9.0-dt.5.2.0.0/dist/browser/algosdk.min.js"
+  integrity="sha384-NXuz/SgVX8VdwZ+8NCPe+CqJvHEOYfiTHmRbiFfJbjmulhCyrcJPNyGlVqHT46V0"
   crossorigin="anonymous"
 ></script>
 ```

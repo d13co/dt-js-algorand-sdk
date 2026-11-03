@@ -15,14 +15,12 @@ import {
   BoxVersion,
   BoxChange,
   BoxesVersion,
-  SimulateRoundResult,
   DTSimulateRequest,
   DTSimulateResponse,
-  DTSimulationEvalOverrides,
   SimulateGroupError,
-  SimulateProtocolOverride,
-  SimulateProtocolNote,
-  SimulateProtocolNoteHit,
+  QueryProtocolOverride,
+  QueryProtocolNote,
+  QueryProtocolNoteHit,
   CapabilitiesResponse,
   SimulateLimits,
   QueryLimits,
@@ -33,16 +31,13 @@ import {
   QueryRoundResult,
   QueryCallResult,
   isQueryResponseTooLarge,
-  packSimulateRounds,
 } from '../src/client/v2/algod/dt/index';
 import { AlgodClient } from '../src/client/v2/algod/algod';
 import { assignGroupID, computeGroupID } from '../src/group';
 import * as algosdk from '../src/index';
 import {
-  ApplicationInitialStates,
   PendingTransactionResponse,
   SimulateRequest,
-  SimulateInitialStates,
   SimulateRequestTransactionGroup,
   SimulateResponse,
   SimulateTraceConfig,
@@ -149,9 +144,7 @@ const nodeCaps = {
   'time-limit-seconds': 108,
   simulate: {
     'max-txn-groups': 8,
-    'max-rounds': 4,
     'max-extra-opcode-budget': 640000,
-    'resource-limit-multiplier': 2,
   },
 };
 
@@ -540,18 +533,24 @@ describe('time travel', () => {
       'reads-at-round',
       'versions',
       'simulate-groups',
-      'parallel-groups',
-      'simulate-rounds',
       'from',
       'group-results',
       'from-transactions',
+      'capabilities',
+      'query',
+      'query-total-calls',
+    ]) {
+      assert.ok(DTAlgodClient.features.includes(f), f);
+    }
+    // Removed with simulate's read extensions (dt5): POST /v2/query replaced them.
+    for (const f of [
+      'parallel-groups',
+      'simulate-rounds',
       'pack-rounds',
       'validity-window',
       'simulate-protocol',
-      'capabilities',
-      'query',
     ]) {
-      assert.ok(DTAlgodClient.features.includes(f), f);
+      assert.ok(!DTAlgodClient.features.includes(f), f);
     }
     assert.ok(Object.isFrozen(DTAlgodClient.features));
     assert.strictEqual(
@@ -677,9 +676,7 @@ describe('time travel', () => {
           timeLimitSeconds: 108,
           simulate: {
             maxTxnGroups: 8,
-            maxRounds: 4,
             maxExtraOpcodeBudget: 640000,
-            resourceLimitMultiplier: 2,
           },
           query: undefined,
           reported: true,
@@ -692,17 +689,28 @@ describe('time travel', () => {
       assert.strictEqual(stub.calls[0].path, '/v2/capabilities');
     });
 
-    it('decodes 0 rounds and false flags, which a node sends', async () => {
+    it('decodes false flags, which a node sends', async () => {
+      const stub = new StubClient([ok({ ...caps, 'time-travel': false })]);
+      const got = await new DTAlgodClient(stub, '').capabilities();
+      assert.strictEqual(got.timeTravel, false);
+    });
+
+    it('ignores the simulate limits of a dt4 node that dt5 removed', async () => {
       const stub = new StubClient([
         ok({
           ...caps,
-          'time-travel': false,
-          simulate: { ...caps.simulate, 'max-rounds': 0 },
+          simulate: {
+            ...caps.simulate,
+            'max-rounds': 4,
+            'resource-limit-multiplier': 2,
+          },
         }),
       ]);
       const got = await new DTAlgodClient(stub, '').capabilities();
-      assert.strictEqual(got.simulate.maxRounds, 0);
-      assert.strictEqual(got.timeTravel, false);
+      assert.deepStrictEqual(
+        { ...got.simulate },
+        { maxTxnGroups: 8, maxExtraOpcodeBudget: 640000 }
+      );
     });
 
     it('falls back to the stock capabilities on a 404, and caches them', async () => {
@@ -711,9 +719,7 @@ describe('time travel', () => {
       const got = await client.capabilities();
       assert.deepStrictEqual(got, CapabilitiesResponse.stock());
       assert.strictEqual(got.simulate.maxTxnGroups, 1);
-      assert.strictEqual(got.simulate.maxRounds, 0);
       assert.strictEqual(got.simulate.maxExtraOpcodeBudget, 320000);
-      assert.strictEqual(got.simulate.resourceLimitMultiplier, 1);
       assert.strictEqual(got.timeTravel, false);
       assert.strictEqual(got.developerApi, false);
       assert.strictEqual(got.query, undefined);
@@ -1136,7 +1142,7 @@ describe('time travel', () => {
       assert.deepStrictEqual(latest.calls[1].logs, [utf8('x')]);
       assert.deepStrictEqual(past.calls, []);
       assert.match(past.error!, /program version 10/);
-      assert.ok(past.protocolOverride instanceof SimulateProtocolOverride);
+      assert.ok(past.protocolOverride instanceof QueryProtocolOverride);
       assert.strictEqual(past.protocolOverride!.applied, true);
       assert.strictEqual(past.protocolOverride!.to, 'v41');
       assert.strictEqual(
@@ -1307,6 +1313,28 @@ describe('time travel', () => {
         )
         .do();
       assert.deepStrictEqual(sentBody(stub, 0), sentBody(stub, 1));
+    });
+
+    it('encodes applied false and group 0 like the node', () => {
+      const bytes = encodeMsgpack(
+        new QueryProtocolOverride({
+          from: 'v42',
+          to: 'v42',
+          applied: false,
+          notes: [
+            new QueryProtocolNote({
+              code: 'block-hash-fields',
+              message: 'm',
+              hits: [new QueryProtocolNoteHit({ group: 0, path: [0] })],
+            }),
+          ],
+        })
+      );
+      const decoded = algosdk.decodeObj(bytes) as Record<string, unknown>;
+      assert.strictEqual(decoded.applied, false);
+      const hit = (decoded.notes as Record<string, unknown>[])[0]
+        .hits as Record<string, unknown>[];
+      assert.strictEqual(hit[0].group, 0);
     });
 
     it('encodes JSON as the node takes it', () => {
@@ -1832,9 +1860,8 @@ describe('time travel', () => {
         lastRound: 10,
         version: 2,
         txnGroups: [groupResult(stxn(1)), groupResult(stxn(2), 'overspend')],
-        evalOverrides: new DTSimulationEvalOverrides({
+        evalOverrides: new SimulationEvalOverrides({
           allowEmptySignatures: true,
-          parallelGroups: true,
         }),
       });
       const stub = new StubClient([msgpack(response)]);
@@ -1845,7 +1872,6 @@ describe('time travel', () => {
             allowEmptySignatures: true,
           })
         )
-        .parallelGroups()
         .do();
 
       assert.strictEqual(stub.calls[0].path, '/v2/transactions/simulate');
@@ -1855,7 +1881,6 @@ describe('time travel', () => {
         req.txnGroups.map((g) => g.txns.map((t) => t.txn.payment!.amount)),
         [[BigInt(1)], [BigInt(2), BigInt(3)]]
       );
-      assert.strictEqual(req.parallelGroups, true);
       assert.strictEqual(req.allowEmptySignatures, true);
 
       assert.ok(res instanceof DTSimulateResponse);
@@ -1863,30 +1888,8 @@ describe('time travel', () => {
       assert.strictEqual(res.txnGroups[0].failureMessage, undefined);
       assert.strictEqual(res.txnGroups[1].failureMessage, 'overspend');
       assert.deepStrictEqual(res.txnGroups[1].failedAt, [0]);
-      assert.ok(res.evalOverrides instanceof DTSimulationEvalOverrides);
-      assert.strictEqual(res.evalOverrides!.parallelGroups, true);
       assert.strictEqual(res.evalOverrides!.allowEmptySignatures, true);
-    });
-
-    it('needs the fork models to see parallel-groups in the response', () => {
-      const bytes = encodeMsgpack(
-        new DTSimulateResponse({
-          lastRound: 1,
-          version: 2,
-          txnGroups: [],
-          evalOverrides: new DTSimulationEvalOverrides({
-            parallelGroups: true,
-          }),
-        })
-      );
-      // The stock model drops the key it does not know.
-      const stock = decodeMsgpack(bytes, SimulateResponse);
-      assert.ok(stock.evalOverrides);
-      assert.ok(!('parallelGroups' in stock.evalOverrides!));
-      assert.strictEqual(
-        decodeMsgpack(bytes, DTSimulateResponse).evalOverrides!.parallelGroups,
-        true
-      );
+      assert.strictEqual(res.requestGroupCount, 2);
     });
 
     it('decodes a stock response', async () => {
@@ -1904,7 +1907,7 @@ describe('time travel', () => {
       assert.strictEqual(res.evalOverrides, undefined);
     });
 
-    it('sends a plain request unchanged, without parallel-groups', async () => {
+    it('sends a plain request unchanged', async () => {
       const request = new SimulateRequest({
         txnGroups: [group(1)],
         allowEmptySignatures: true,
@@ -1919,10 +1922,7 @@ describe('time travel', () => {
         round: 42,
       });
       const stub = new StubClient([echo(42)]);
-      await new DTAlgodClient(stub, '')
-        .simulateTransactions(request)
-        .parallelGroups(false)
-        .do();
+      await new DTAlgodClient(stub, '').simulateTransactions(request).do();
       // Byte-identical to what AlgodClient sends.
       assert.deepStrictEqual(stub.calls[0].body, encodeMsgpack(request));
     });
@@ -1942,13 +1942,13 @@ describe('time travel', () => {
         'fix-signers',
         'round',
       ]);
-      assert.deepStrictEqual(keys(SimulationEvalOverrides.encodingSchema), [
-        'allow-empty-signatures',
-        'allow-unnamed-resources',
-        'extra-opcode-budget',
-        'fix-signers',
-        'max-log-calls',
-        'max-log-size',
+      assert.deepStrictEqual(keys(SimulateResponse.encodingSchema), [
+        'last-round',
+        'txn-groups',
+        'version',
+        'eval-overrides',
+        'exec-trace-config',
+        'initial-states',
       ]);
     });
 
@@ -1961,19 +1961,6 @@ describe('time travel', () => {
       await call.do();
       assert.strictEqual(sent(stub).txnGroups.length, 1);
       assert.strictEqual(sent(stub).allowEmptySignatures, undefined);
-    });
-
-    it('keeps parallelGroups set on a DTSimulateRequest', async () => {
-      const stub = new StubClient([echo(1)]);
-      await new DTAlgodClient(stub, '')
-        .simulateTransactions(
-          new DTSimulateRequest({
-            txnGroups: [group(1), group(2)],
-            parallelGroups: true,
-          })
-        )
-        .do();
-      assert.strictEqual(sent(stub).parallelGroups, true);
     });
 
     it('takes several groups of raw transactions', async () => {
@@ -2001,7 +1988,7 @@ describe('time travel', () => {
       !(err instanceof DTUnsupportedError) &&
       (err as { status?: number }).status === 400;
 
-    it('passes 400s through when the request uses no fork feature', async () => {
+    it("passes stock algod's 400s through", async () => {
       const stub = new StubClient([
         stockOneGroup,
         stockUnknownField,
@@ -2014,7 +2001,6 @@ describe('time travel', () => {
           .do();
       await assert.rejects(single(), isPlain400);
       await assert.rejects(single(), isPlain400);
-      // Several groups use no fork field, so a decode failure is not about one.
       await assert.rejects(
         client
           .simulateTransactions(
@@ -2036,7 +2022,6 @@ describe('time travel', () => {
           .simulateTransactions(
             new SimulateRequest({ txnGroups: [group(1), group(2)] })
           )
-          .parallelGroups()
           .do(),
         isPlain400
       );
@@ -2048,199 +2033,9 @@ describe('time travel', () => {
               fixSigners: true,
             })
           )
-          .parallelGroups()
           .do(),
         isPlain400
       );
-    });
-
-    describe('rounds', () => {
-      const roundsResponse = (...results: SimulateRoundResult[]) =>
-        new DTSimulateResponse({
-          lastRound: 0,
-          version: 2,
-          txnGroups: [],
-          roundResults: results,
-        });
-      const at = (round: number, ...failures: Array<string | undefined>) =>
-        new SimulateRoundResult({
-          lastRound: round,
-          txnGroups: failures.map((f) => groupResult(stxn(1), f)),
-          initialStates: new SimulateInitialStates({
-            appInitialStates: [new ApplicationInitialStates({ id: 9 })],
-          }),
-        });
-      const failedAt = (round: number, error: string) =>
-        new SimulateRoundResult({ lastRound: round, txnGroups: [], error });
-      const simulateAt = (stub: StubClient, rounds: number[]) =>
-        new DTAlgodClient(stub, '')
-          .simulateTransactions(
-            new SimulateRequest({
-              txnGroups: [group(1), group(2)],
-              allowEmptySignatures: true,
-            })
-          )
-          .rounds(rounds);
-
-      it('sends rounds and decodes one result per entry', async () => {
-        const stub = new StubClient([
-          msgpack(
-            roundsResponse(
-              at(100, undefined, 'overspend'),
-              failedAt(999999999, 'round 999999999 is not available'),
-              at(120, undefined, undefined)
-            )
-          ),
-        ]);
-        const res = await simulateAt(stub, [100, 999999999, 0]).do();
-
-        assert.deepStrictEqual(sent(stub).rounds, [
-          BigInt(100),
-          BigInt(999999999),
-          BigInt(0),
-        ]);
-        assert.strictEqual(sent(stub).round, undefined);
-        assert.strictEqual(res.lastRound, BigInt(0));
-        assert.deepStrictEqual(res.txnGroups, []);
-        const results = res.roundResults!;
-        assert.ok(results.every((r) => r instanceof SimulateRoundResult));
-        assert.deepStrictEqual(
-          results.map((r) => r.lastRound),
-          [BigInt(100), BigInt(999999999), BigInt(120)]
-        );
-        assert.deepStrictEqual(
-          results[0].txnGroups.map((g) => g.failureMessage),
-          [undefined, 'overspend']
-        );
-        assert.strictEqual(
-          results[0].initialStates!.appInitialStates![0].id,
-          BigInt(9)
-        );
-        assert.strictEqual(results[0].error, undefined);
-        assert.strictEqual(
-          results[1].error,
-          'round 999999999 is not available'
-        );
-        assert.deepStrictEqual(results[1].txnGroups, []);
-        assert.strictEqual(results[1].initialStates, undefined);
-        assert.strictEqual(results[2].txnGroups.length, 2);
-      });
-
-      it('keeps duplicate and 0 entries, in request order', async () => {
-        const stub = new StubClient([
-          msgpack(
-            roundsResponse(
-              at(5, undefined, undefined),
-              at(5, undefined, undefined),
-              at(5, undefined, undefined)
-            )
-          ),
-        ]);
-        const res = await simulateAt(stub, [5, 5, 0]).do();
-        assert.deepStrictEqual(sent(stub).rounds, [
-          BigInt(5),
-          BigInt(5),
-          BigInt(0),
-        ]);
-        assert.strictEqual(res.roundResults!.length, 3);
-      });
-
-      it('sends no rounds for an empty list', async () => {
-        const request = new SimulateRequest({ txnGroups: [group(1)] });
-        const stub = new StubClient([echo(9)]);
-        const res = await new DTAlgodClient(stub, '')
-          .simulateTransactions(request)
-          .rounds([])
-          .do();
-        assert.deepStrictEqual(stub.calls[0].body, encodeMsgpack(request));
-        assert.strictEqual(res.roundResults, undefined);
-      });
-
-      it('takes rounds set on a DTSimulateRequest', async () => {
-        const stub = new StubClient([
-          msgpack(roundsResponse(at(7, undefined))),
-        ]);
-        const res = await new DTAlgodClient(stub, '')
-          .simulateTransactions(
-            new DTSimulateRequest({
-              txnGroups: [group(1)],
-              rounds: [7],
-              round: 0,
-            })
-          )
-          .do();
-        assert.deepStrictEqual(sent(stub).rounds, [BigInt(7)]);
-        assert.strictEqual(res.roundResults![0].lastRound, BigInt(7));
-      });
-
-      it('refuses round together with rounds before sending', async () => {
-        const stub = new StubClient([]);
-        await assert.rejects(
-          new DTAlgodClient(stub, '')
-            .simulateTransactions(
-              new SimulateRequest({ txnGroups: [group(1)], round: 3 })
-            )
-            .rounds([4])
-            .do(),
-          /Cannot simulate at round 3 and at rounds/
-        );
-        assert.strictEqual(stub.calls.length, 0);
-      });
-
-      it("passes the fork's rounds 400s through", async () => {
-        const stub = new StubClient([
-          badRequest('too many rounds: got 20, the limit is 16'),
-        ]);
-        await assert.rejects(simulateAt(stub, [1]).do(), isPlain400);
-      });
-
-      it('throws a node with rounds disabled as DTUnsupportedError', async () => {
-        const stub = new StubClient([
-          badRequest(
-            'rounds is disabled on this node (MaxAPISimulateRounds is 0)'
-          ),
-        ]);
-        await assert.rejects(
-          simulateAt(stub, [1]).do(),
-          (err) =>
-            err instanceof DTUnsupportedError &&
-            (err.cause as { status?: number }).status === 400
-        );
-      });
-    });
-
-    it('sends rounds and parallel-groups from a stock request', async () => {
-      const stock = new SimulateRequest({
-        txnGroups: [group(1), group(2)],
-        allowUnnamedResources: true,
-        extraOpcodeBudget: 700,
-      });
-      const stub = new StubClient([
-        msgpack(
-          new DTSimulateResponse({
-            lastRound: 0,
-            version: 2,
-            txnGroups: [],
-            roundResults: [
-              new SimulateRoundResult({
-                lastRound: 5,
-                txnGroups: [groupResult(stxn(1)), groupResult(stxn(2))],
-              }),
-            ],
-          })
-        ),
-      ]);
-      const res = await new DTAlgodClient(stub, '')
-        .simulateTransactions(stock)
-        .parallelGroups()
-        .rounds([5])
-        .do();
-      const req = sent(stub);
-      assert.strictEqual(req.parallelGroups, true);
-      assert.deepStrictEqual(req.rounds, [BigInt(5)]);
-      assert.strictEqual(req.allowUnnamedResources, true);
-      assert.strictEqual(req.extraOpcodeBudget, 700);
-      assert.ok(res.groupResult(1, 0).ok);
     });
 
     describe('DTAlgodClient.from', () => {
@@ -2319,25 +2114,6 @@ describe('time travel', () => {
           groupResult(stxn(3), notSimulated),
         ],
       });
-      const withRounds = new DTSimulateResponse({
-        lastRound: 0,
-        version: 2,
-        txnGroups: [],
-        roundResults: [
-          new SimulateRoundResult({
-            lastRound: 100,
-            txnGroups: [
-              groupResult(stxn(1)),
-              groupResult(stxn(2), 'overspend'),
-            ],
-          }),
-          new SimulateRoundResult({
-            lastRound: 200,
-            txnGroups: [],
-            error: 'round 200 is not available',
-          }),
-        ],
-      });
       const errorOf = (outcome: algosdk.SimulateGroupOutcome) => {
         assert.strictEqual(outcome.ok, false);
         if (outcome.ok) throw new Error('unreachable');
@@ -2351,7 +2127,6 @@ describe('time travel', () => {
         assert.ok(outcome.ok);
         assert.strictEqual(outcome.result, topLevel.txnGroups[0]);
         assert.strictEqual(outcome.round, BigInt(10));
-        assert.strictEqual(outcome.roundIndex, 0);
         assert.strictEqual(outcome.groupIndex, 0);
       });
 
@@ -2362,6 +2137,7 @@ describe('time travel', () => {
         assert.deepStrictEqual(error.failedAt, [0]);
         assert.strictEqual(error.result, topLevel.txnGroups[1]);
         assert.strictEqual(error.round, BigInt(10));
+        assert.strictEqual(error.groupIndex, 1);
         assert.strictEqual(
           error.message,
           'Simulating group 1 at round 10 failed at transaction 0: overspend'
@@ -2384,86 +2160,48 @@ describe('time travel', () => {
         assert.strictEqual(error.result, undefined);
       });
 
-      it('reports every group of a round that could not be simulated', () => {
-        for (const g of [0, 1, 5]) {
-          const error = errorOf(withRounds.groupResult(g, 1));
-          assert.strictEqual(error.kind, 'round');
-          assert.strictEqual(
-            error.failureMessage,
-            'round 200 is not available'
-          );
-          assert.strictEqual(error.round, BigInt(200));
-          assert.strictEqual(error.roundIndex, 1);
-          assert.strictEqual(error.groupIndex, g);
-        }
-        assert.ok(withRounds.groupResult(0, 0).ok);
-        assert.strictEqual(errorOf(withRounds.groupResult(1, 0)).kind, 'group');
-      });
-
-      it('refuses indexes out of range', () => {
-        assert.throws(() => topLevel.groupResult(0, 1), RangeError);
+      it('refuses indexes that are not group indexes', () => {
         assert.throws(() => topLevel.groupResult(-1), RangeError);
         assert.throws(() => topLevel.groupResult(0.5), RangeError);
-        assert.throws(() => withRounds.groupResult(0, 2), RangeError);
-        assert.throws(() => withRounds.groupResult(0, -1), RangeError);
       });
 
-      it('lists every outcome by round and group', () => {
+      it('lists every outcome by group', () => {
         const kind = (o: algosdk.SimulateGroupOutcome) =>
           o.ok ? 'ok' : o.error.kind;
-        assert.deepStrictEqual(
-          topLevel.groupResults().map((r) => r.map(kind)),
-          [['ok', 'group', 'not-simulated']]
-        );
-        assert.deepStrictEqual(
-          withRounds.groupResults().map((r) => r.map(kind)),
-          [
-            ['ok', 'group'],
-            ['round', 'round'],
-          ]
-        );
-        assert.deepStrictEqual(
-          withRounds.groupResults(3).map((r) => r.map(kind)),
-          [
-            ['ok', 'group', 'missing'],
-            ['round', 'round', 'round'],
-          ]
-        );
+        assert.deepStrictEqual(topLevel.groupResults().map(kind), [
+          'ok',
+          'group',
+          'not-simulated',
+        ]);
+        assert.deepStrictEqual(topLevel.groupResults(4).map(kind), [
+          'ok',
+          'group',
+          'not-simulated',
+          'missing',
+        ]);
       });
     });
 
     describe('groupResults from a call', () => {
-      const roundError = (round: number) =>
-        new SimulateRoundResult({
-          lastRound: round,
-          txnGroups: [],
-          error: `round ${round} is not available`,
-        });
-      const call = (stub: StubClient) =>
-        new DTAlgodClient(stub, '')
-          .simulateTransactions(
-            new SimulateRequest({ txnGroups: [group(1), group(2)] })
-          )
-          .rounds([5]);
-
-      it('has a row of errors for each round that failed', async () => {
+      it('has an entry for each group the request had', async () => {
         const stub = new StubClient([
           msgpack(
             new DTSimulateResponse({
-              lastRound: 0,
+              lastRound: 5,
               version: 2,
-              txnGroups: [],
-              roundResults: [roundError(5)],
+              txnGroups: [groupResult(stxn(1))],
             })
           ),
         ]);
-        const res = await call(stub).do();
+        const res = await new DTAlgodClient(stub, '')
+          .simulateTransactions(
+            new SimulateRequest({ txnGroups: [group(1), group(2)] })
+          )
+          .do();
         assert.strictEqual(res.requestGroupCount, 2);
         assert.deepStrictEqual(
-          res
-            .groupResults()
-            .map((row) => row.map((o) => (o.ok ? 'ok' : o.error.kind))),
-          [['round', 'round']]
+          res.groupResults().map((o) => (o.ok ? 'ok' : o.error.kind)),
+          ['ok', 'missing']
         );
       });
     });
@@ -2476,13 +2214,12 @@ describe('time travel', () => {
         const groupedID = grouped[0].group;
         const request = DTSimulateRequest.fromTransactions(
           [[single], pair, grouped],
-          { allowUnnamedResources: true, parallelGroups: true, rounds: [7] }
+          { allowUnnamedResources: true, round: 7 }
         );
 
         assert.strictEqual(request.allowEmptySignatures, true);
         assert.strictEqual(request.allowUnnamedResources, true);
-        assert.strictEqual(request.parallelGroups, true);
-        assert.deepStrictEqual(request.rounds, [BigInt(7)]);
+        assert.strictEqual(request.round, BigInt(7));
         assert.strictEqual(request.txnGroups.length, 3);
         assert.strictEqual(request.txnGroups[0].txns[0].txn, single);
         assert.strictEqual(single.group, undefined);
@@ -2498,7 +2235,8 @@ describe('time travel', () => {
           DTSimulateRequest
         );
         assert.deepStrictEqual(decoded.txnGroups[1].txns[1].txn.group, pairID);
-        assert.deepStrictEqual(decoded.rounds, [BigInt(7)]);
+        assert.ok(decoded instanceof DTSimulateRequest);
+        assert.strictEqual(decoded.round, BigInt(7));
       });
 
       it('leaves a group where any transaction has a group ID', () => {
@@ -2519,393 +2257,6 @@ describe('time travel', () => {
           () => DTSimulateRequest.fromTransactions([[payment(1)], []]),
           /Transaction group 1 is empty/
         );
-      });
-    });
-
-    describe('validity window modes and protocol', () => {
-      const request = (fields: { allowEmptySignatures?: boolean } = {}) =>
-        new SimulateRequest({
-          txnGroups: [group(1), group(2)],
-          allowEmptySignatures: true,
-          ...fields,
-        });
-      const roundResult = (
-        round: number,
-        protocolOverride?: SimulateProtocolOverride
-      ) =>
-        new SimulateRoundResult({
-          lastRound: round,
-          txnGroups: [groupResult(stxn(1)), groupResult(stxn(2))],
-          protocolOverride,
-        });
-      const response = ({
-        evalOverrides,
-        protocolOverride,
-        roundResults,
-      }: {
-        evalOverrides?: DTSimulationEvalOverrides;
-        protocolOverride?: SimulateProtocolOverride;
-        roundResults?: SimulateRoundResult[];
-      }) =>
-        new DTSimulateResponse({
-          lastRound: roundResults ? 0 : 10,
-          version: 2,
-          txnGroups: roundResults
-            ? []
-            : [groupResult(stxn(1)), groupResult(stxn(2))],
-          evalOverrides,
-          protocolOverride,
-          roundResults,
-        });
-      const override = (from: string, to: string) =>
-        new SimulateProtocolOverride({
-          from,
-          to,
-          applied: from !== to,
-          notes:
-            from !== to
-              ? [
-                  new SimulateProtocolNote({
-                    code: 'semantics-changed',
-                    message: 'LogicSigMsig: true → false',
-                  }),
-                  new SimulateProtocolNote({
-                    code: 'block-incentive-fields',
-                    message: 'BlkProposer reads as zero',
-                    hits: [
-                      new SimulateProtocolNoteHit({ group: 0, path: [0] }),
-                      new SimulateProtocolNoteHit({ group: 1, path: [0, 2] }),
-                    ],
-                  }),
-                ]
-              : undefined,
-        });
-
-      it('sends skip-validity-window and reads its echo', async () => {
-        const stub = new StubClient([
-          msgpack(
-            response({
-              evalOverrides: new DTSimulationEvalOverrides({
-                allowEmptySignatures: true,
-                skipValidityWindow: true,
-              }),
-              roundResults: [roundResult(100), roundResult(5000)],
-            })
-          ),
-        ]);
-        const res = await new DTAlgodClient(stub, '')
-          .simulateTransactions(request())
-          .rounds([100, 5000])
-          .skipValidityWindow()
-          .do();
-        const req = sent(stub);
-        assert.strictEqual(req.skipValidityWindow, true);
-        assert.strictEqual(req.rewriteValidityWindow, undefined);
-        assert.strictEqual(res.evalOverrides!.skipValidityWindow, true);
-        assert.strictEqual(res.roundResults!.length, 2);
-      });
-
-      it('sends rewrite-validity-window and reads its echo', async () => {
-        const stub = new StubClient([
-          msgpack(
-            response({
-              evalOverrides: new DTSimulationEvalOverrides({
-                allowEmptySignatures: true,
-                rewriteValidityWindow: true,
-              }),
-              roundResults: [roundResult(100), roundResult(5000)],
-            })
-          ),
-        ]);
-        const res = await new DTAlgodClient(stub, '')
-          .simulateTransactions(request())
-          .rounds([100, 5000])
-          .rewriteValidityWindow()
-          .do();
-        assert.strictEqual(sent(stub).rewriteValidityWindow, true);
-        assert.strictEqual(sent(stub).skipValidityWindow, undefined);
-        assert.strictEqual(res.evalOverrides!.rewriteValidityWindow, true);
-      });
-
-      it('sends neither mode when turned off', async () => {
-        const stub = new StubClient([
-          msgpack(response({ roundResults: [roundResult(100)] })),
-        ]);
-        await new DTAlgodClient(stub, '')
-          .simulateTransactions(request())
-          .rounds([100])
-          .skipValidityWindow()
-          .skipValidityWindow(false)
-          .do();
-        assert.strictEqual(sent(stub).skipValidityWindow, undefined);
-      });
-
-      it('refuses invalid combinations before sending', async () => {
-        const cases: [
-          (call: ReturnType<DTAlgodClient['simulateTransactions']>) => unknown,
-          RegExp,
-          boolean?,
-        ][] = [
-          [
-            (c) => c.rounds([1]).skipValidityWindow().rewriteValidityWindow(),
-            /both skip and rewrite/,
-          ],
-          [(c) => c.skipValidityWindow(), /skipValidityWindow requires rounds/],
-          [
-            (c) => c.rounds([]).rewriteValidityWindow(),
-            /rewriteValidityWindow requires rounds/,
-          ],
-          [
-            (c) => c.rounds([1]).rewriteValidityWindow(),
-            /requires allowEmptySignatures/,
-            false,
-          ],
-        ];
-        for (const [build, message, allowEmptySignatures] of cases) {
-          const stub = new StubClient([]);
-          const call = new DTAlgodClient(stub, '').simulateTransactions(
-            request({ allowEmptySignatures: allowEmptySignatures ?? true })
-          );
-          build(call);
-          // eslint-disable-next-line no-await-in-loop
-          await assert.rejects(call.do(), message);
-          assert.strictEqual(stub.calls.length, 0);
-        }
-      });
-
-      it('sends protocol and decodes the override at the top level', async () => {
-        const stub = new StubClient([
-          msgpack(
-            response({ protocolOverride: override('v35', 'future-ish') })
-          ),
-        ]);
-        const res = await new DTAlgodClient(stub, '')
-          .simulateTransactions(request())
-          .protocol('latest')
-          .do();
-        assert.strictEqual(sent(stub).protocol, 'latest');
-        const po = res.protocolOverride!;
-        assert.ok(po instanceof SimulateProtocolOverride);
-        assert.strictEqual(po.from, 'v35');
-        assert.strictEqual(po.to, 'future-ish');
-        assert.strictEqual(po.applied, true);
-        assert.deepStrictEqual(
-          po.notes!.map((n) => n.code),
-          ['semantics-changed', 'block-incentive-fields']
-        );
-        assert.strictEqual(po.notes![0].hits, undefined);
-        assert.ok(po.notes![1].hits![0] instanceof SimulateProtocolNoteHit);
-        assert.deepStrictEqual(
-          po.notes![1].hits!.map((h) => [h.group, h.path]),
-          [
-            [0, [0]],
-            [1, [0, 2]],
-          ]
-        );
-      });
-
-      it('decodes a protocol that was not applied', async () => {
-        const stub = new StubClient([
-          msgpack(response({ protocolOverride: override('v42', 'v42') })),
-        ]);
-        const res = await new DTAlgodClient(stub, '')
-          .simulateTransactions(request())
-          .protocol('v42')
-          .do();
-        assert.strictEqual(res.protocolOverride!.applied, false);
-        assert.strictEqual(res.protocolOverride!.notes, undefined);
-      });
-
-      it('decodes an override per round, none for a round error', async () => {
-        const stub = new StubClient([
-          msgpack(
-            response({
-              evalOverrides: new DTSimulationEvalOverrides({
-                allowEmptySignatures: true,
-                rewriteValidityWindow: true,
-              }),
-              roundResults: [
-                roundResult(100, override('v24', 'v42')),
-                new SimulateRoundResult({
-                  lastRound: 1,
-                  txnGroups: [],
-                  error: 'v42 is not a later protocol',
-                }),
-                roundResult(5000, override('v42', 'v42')),
-              ],
-            })
-          ),
-        ]);
-        const res = await new DTAlgodClient(stub, '')
-          .simulateTransactions(request())
-          .rounds([100, 1, 5000])
-          .rewriteValidityWindow()
-          .protocol('v42')
-          .do();
-        assert.strictEqual(res.protocolOverride, undefined);
-        const results = res.roundResults!;
-        assert.strictEqual(results[0].protocolOverride!.from, 'v24');
-        assert.strictEqual(results[1].protocolOverride, undefined);
-        assert.strictEqual(results[2].protocolOverride!.applied, false);
-      });
-
-      it('sends no protocol for an empty string', async () => {
-        const stub = new StubClient([msgpack(response({}))]);
-        await new DTAlgodClient(stub, '')
-          .simulateTransactions(request())
-          .protocol('v42')
-          .protocol('')
-          .do();
-        assert.strictEqual(sent(stub).protocol, undefined);
-      });
-
-      it('encodes applied false and group 0 like the node', () => {
-        const bytes = encodeMsgpack(
-          new SimulateProtocolOverride({
-            from: 'v42',
-            to: 'v42',
-            applied: false,
-            notes: [
-              new SimulateProtocolNote({
-                code: 'block-hash-fields',
-                message: 'm',
-                hits: [new SimulateProtocolNoteHit({ group: 0, path: [0] })],
-              }),
-            ],
-          })
-        );
-        const raw = algosdk.decodeObj(bytes) as Record<string, unknown>;
-        assert.strictEqual(raw.applied, false);
-        const hit = (raw.notes as Record<string, unknown>[])[0].hits as Record<
-          string,
-          unknown
-        >[];
-        assert.strictEqual(hit[0].group, 0);
-      });
-
-      it('keeps the new fields when copying and encoding a request', () => {
-        const original = new DTSimulateRequest({
-          txnGroups: [group(1)],
-          allowEmptySignatures: true,
-          rounds: [1, 2],
-          rewriteValidityWindow: true,
-          protocol: 'v42',
-        });
-        const copy = DTSimulateRequest.from(original);
-        assert.strictEqual(copy.rewriteValidityWindow, true);
-        assert.strictEqual(copy.protocol, 'v42');
-        const decoded = decodeMsgpack(
-          encodeMsgpack(
-            new DTSimulateRequest({
-              txnGroups: [group(1)],
-              skipValidityWindow: true,
-              protocol: 'latest',
-            })
-          ),
-          DTSimulateRequest
-        );
-        assert.strictEqual(decoded.skipValidityWindow, true);
-        assert.strictEqual(decoded.rewriteValidityWindow, undefined);
-        assert.strictEqual(decoded.protocol, 'latest');
-      });
-    });
-
-    describe('packSimulateRounds', () => {
-      const b = (...xs: number[]) => xs.map(BigInt);
-
-      it('packs rounds into windows a transaction can be valid for', () => {
-        const { windows, positions } = packSimulateRounds([
-          100,
-          1100,
-          BigInt(1101),
-          50,
-          100,
-        ]);
-        assert.deepStrictEqual(windows, [
-          {
-            rounds: b(50, 100),
-            firstValid: BigInt(51),
-            lastValid: BigInt(101),
-          },
-          {
-            rounds: b(1100, 1101),
-            firstValid: BigInt(1101),
-            lastValid: BigInt(1102),
-          },
-        ]);
-        assert.deepStrictEqual(positions, [
-          { window: 0, roundIndex: 1 },
-          { window: 1, roundIndex: 0 },
-          { window: 1, roundIndex: 1 },
-          { window: 0, roundIndex: 0 },
-          { window: 0, roundIndex: 1 },
-        ]);
-      });
-
-      it('spans at most MaxTxnLife rounds', () => {
-        const fits = packSimulateRounds([1, 1001]).windows;
-        assert.strictEqual(fits.length, 1);
-        assert.strictEqual(
-          fits[0].lastValid - fits[0].firstValid,
-          BigInt(1000)
-        );
-        assert.deepStrictEqual(
-          packSimulateRounds([1, 1002]).windows.map((w) => w.rounds),
-          [b(1), b(1002)]
-        );
-        assert.deepStrictEqual(
-          packSimulateRounds([1, 3, 6], { maxSpan: 2 }).windows.map(
-            (w) => w.rounds
-          ),
-          [b(1, 3), b(6)]
-        );
-      });
-
-      it('lists at most maxRounds rounds per window', () => {
-        const rounds = Array.from({ length: 20 }, (_, i) => i + 1);
-        assert.deepStrictEqual(
-          packSimulateRounds(rounds).windows.map((w) => w.rounds.length),
-          [16, 4]
-        );
-        assert.deepStrictEqual(
-          packSimulateRounds([1, 2, 3], { maxRounds: 2 }).windows.map(
-            (w) => w.rounds
-          ),
-          [b(1, 2), b(3)]
-        );
-      });
-
-      it('packs by maxRounds only with maxSpan null', () => {
-        const { windows } = packSimulateRounds([1, 5000, 3000000, 2], {
-          maxSpan: null,
-          maxRounds: 3,
-        });
-        assert.deepStrictEqual(
-          windows.map((w) => w.rounds),
-          [b(1, 2, 5000), b(3000000)]
-        );
-        assert.strictEqual(windows[0].firstValid, BigInt(2));
-        assert.strictEqual(windows[0].lastValid, BigInt(1002));
-        assert.strictEqual(windows[1].lastValid, BigInt(3000001));
-      });
-
-      it('refuses round 0 and bad options', () => {
-        assert.throws(() => packSimulateRounds([5, 0]), RangeError);
-        assert.throws(
-          () => packSimulateRounds([5], { maxRounds: 0 }),
-          (err: Error) =>
-            err instanceof RangeError &&
-            /does not simulate at several rounds/.test(err.message)
-        );
-        assert.throws(
-          () => packSimulateRounds([5], { maxRounds: 1.5 }),
-          RangeError
-        );
-        assert.throws(() => packSimulateRounds([-1]));
-        assert.deepStrictEqual(packSimulateRounds([]), {
-          windows: [],
-          positions: [],
-        });
       });
     });
 

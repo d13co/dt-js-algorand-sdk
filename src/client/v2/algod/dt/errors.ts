@@ -12,7 +12,6 @@ import { SimulateTransactionGroupResult } from '../models/types.js';
  * - the asset holders index is off (`TimeTravelHoldersIndex`):
  *   `getAssetHolders`;
  * - queries are disabled (`MaxAPIQueryCalls` 0): `query`;
- * - simulate `rounds` is disabled (`MaxAPISimulateRounds` 0);
  * - the node has no capabilities endpoint, which every dtalgod node has:
  *   it is stock algod (`getCapabilities`).
  */
@@ -176,63 +175,30 @@ export async function readAtRound(
 }
 
 /**
- * Runs a simulate request, turning a node with `rounds` disabled
- * (`MaxAPISimulateRounds` 0) into a {@link DTUnsupportedError}. Other errors
- * pass through unchanged.
- * @param request - The request.
- */
-export async function simulateWithRounds(request: Promise<HTTPClientResponse>) {
-  try {
-    return await request;
-  } catch (err) {
-    const { status, text } = describe(err);
-    if (status === 400 && /rounds is disabled on this node/.test(text)) {
-      throw new DTUnsupportedError(
-        'The node has simulate rounds disabled (MaxAPISimulateRounds is 0)',
-        { cause: err }
-      );
-    }
-    throw err;
-  }
-}
-
-/**
  * Why a transaction group has no usable simulation result:
- * - `round`: the request could not be simulated at that round at all (the
- *   round result's `error`);
  * - `group`: the group failed (`failureMessage`, with `failedAt` when the node
  *   blamed one transaction);
  * - `not-simulated`: the group was skipped after an earlier group failed a
  *   post-evaluation check;
  * - `missing`: the response has no result for the group.
  */
-export type SimulateGroupErrorKind =
-  | 'round'
-  | 'group'
-  | 'not-simulated'
-  | 'missing';
+export type SimulateGroupErrorKind = 'group' | 'not-simulated' | 'missing';
 
 /**
- * The failure of one transaction group at one round of a simulate response,
- * from `DTSimulateResponse.groupResult`.
+ * The failure of one transaction group of a simulate response, from
+ * `DTSimulateResponse.groupResult`.
  */
 export class SimulateGroupError extends Error {
   /** Why the group has no usable result. */
   public kind: SimulateGroupErrorKind;
 
-  /** The index into the response's `roundResults`, or 0 without rounds. */
-  public roundIndex: number;
-
   /** The index of the group in the request. */
   public groupIndex: number;
 
-  /** The round the simulation ran after (the result's `lastRound`). */
+  /** The round the simulation ran after (the response's `lastRound`). */
   public round: bigint;
 
-  /**
-   * The node's message: the round's `error`, or the group's
-   * `failureMessage`. Undefined for `missing`.
-   */
+  /** The group's `failureMessage`. Undefined for `missing`. */
   public failureMessage?: string;
 
   /** For `group`: the path of the transaction that failed, if the node gave one. */
@@ -247,7 +213,6 @@ export class SimulateGroupError extends Error {
 
   constructor({
     kind,
-    roundIndex,
     groupIndex,
     round,
     failureMessage,
@@ -255,7 +220,6 @@ export class SimulateGroupError extends Error {
     result,
   }: {
     kind: SimulateGroupErrorKind;
-    roundIndex: number;
     groupIndex: number;
     round: bigint;
     failureMessage?: string;
@@ -265,9 +229,6 @@ export class SimulateGroupError extends Error {
     const where = `group ${groupIndex} at round ${round}`;
     let message: string;
     switch (kind) {
-      case 'round':
-        message = `Could not simulate ${where}: ${failureMessage}`;
-        break;
       case 'not-simulated':
         message = `Did not simulate ${where}: ${failureMessage}`;
         break;
@@ -280,7 +241,6 @@ export class SimulateGroupError extends Error {
     super(message);
     this.name = 'SimulateGroupError';
     this.kind = kind;
-    this.roundIndex = roundIndex;
     this.groupIndex = groupIndex;
     this.round = round;
     this.failureMessage = failureMessage;
@@ -288,6 +248,13 @@ export class SimulateGroupError extends Error {
     this.result = result;
   }
 }
+
+/**
+ * The default of the node's `MaxAPISimulateGroups`: the most transaction
+ * groups a simulate request may hold. `capabilities()` reports the node's
+ * own value as `simulate.maxTxnGroups`.
+ */
+export const DEFAULT_MAX_SIMULATE_GROUPS = 16;
 
 /**
  * The most bytes a `POST /v2/query` request body may have: a fixed limit of

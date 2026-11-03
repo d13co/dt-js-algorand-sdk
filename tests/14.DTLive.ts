@@ -72,7 +72,6 @@ describe('time travel against a live node', function liveSuite() {
     assert.strictEqual(caps.timeTravel, true);
     assert.ok(caps.simulate.maxTxnGroups >= 1);
     assert.ok(caps.simulate.maxExtraOpcodeBudget >= 320000);
-    assert.ok(caps.simulate.resourceLimitMultiplier >= 1);
   });
 
   describe('reads at a round', () => {
@@ -324,6 +323,7 @@ describe('time travel against a live node', function liveSuite() {
     it('reports its query limits', () => {
       assert.ok(limits.maxCalls >= 1);
       assert.ok(limits.maxRounds >= 1);
+      assert.ok(limits.maxTotalCalls >= 1);
       assert.ok(limits.maxCallBudget >= 700);
     });
 
@@ -457,33 +457,14 @@ describe('time travel against a live node', function liveSuite() {
       );
     });
 
-    it('runs parallel groups alone against the start state', async () => {
-      const r = await c.simulateTransactions(request()).parallelGroups().do();
-      assert.strictEqual(r.txnGroups[0].failureMessage, undefined);
-      assert.match(r.txnGroups[1].failureMessage ?? '', /overspend/);
-    });
-
-    it('simulates at several rounds, one result per round', async () => {
-      const rounds = [latest - 10n, latest - 500n, 0n];
-      const r = await c.simulateTransactions(request()).rounds(rounds).do();
-      assert.strictEqual(r.roundResults!.length, 3);
-      for (const rr of r.roundResults!) {
-        assert.strictEqual(rr.error, undefined);
-        assert.ok(rr.txnGroups.every((g) => !g.failureMessage));
-      }
-      assert.strictEqual(r.roundResults![0].lastRound, latest - 10n);
-      assert.strictEqual(r.roundResults![1].lastRound, latest - 500n);
-    });
-
-    it('reports a round outside the validity window in that round only', async () => {
-      const r = await c.simulateTransactions(request()).rounds([PAST, 0n]).do();
-      const [past, now] = r.roundResults!;
-      assert.strictEqual(past.lastRound, PAST);
-      assert.match(
-        past.error ?? past.txnGroups[0].failureMessage ?? '',
-        /txn dead/
-      );
-      assert.ok(now.txnGroups.every((g) => !g.failureMessage));
+    it('simulates at a past round', async () => {
+      const r = await c
+        .simulateTransactions(
+          new DTSimulateRequest({ ...request(), round: latest - 10n })
+        )
+        .do();
+      assert.strictEqual(r.lastRound, latest - 10n);
+      assert.ok(r.txnGroups.every((g) => !g.failureMessage));
     });
 
     it('simulates in the distant past with transactions valid then', async () => {
@@ -507,14 +488,13 @@ describe('time travel against a live node', function liveSuite() {
             txnGroups: [group(pay(XGOV_CREATOR)), group(pay(USDC_RESERVE))],
             allowEmptySignatures: true,
             fixSigners: true,
+            round: PAST,
           })
         )
-        .rounds([PAST])
         .do();
-      const [rr] = r.roundResults!;
-      assert.strictEqual(rr.lastRound, PAST);
-      assert.match(rr.txnGroups[0].failureMessage ?? '', /overspend/);
-      assert.strictEqual(rr.txnGroups[1].failureMessage, undefined);
+      assert.strictEqual(r.lastRound, PAST);
+      assert.match(r.txnGroups[0].failureMessage ?? '', /overspend/);
+      assert.strictEqual(r.txnGroups[1].failureMessage, undefined);
     });
 
     it('takes several groups of raw transactions', async () => {

@@ -67,10 +67,10 @@ export default class RunQuery extends JSONRequest<QueryResponse> {
   }
 
   /**
-   * The protocol the block after each queried round runs, as in simulate:
-   * `latest` (the default, unlike simulate, which defaults to the round's
-   * own), a consensus version or `vNN` name of a later protocol, or `round`
-   * for the protocol the chain really ran. `future` needs the node's
+   * The protocol the block after each queried round runs: `latest` (the
+   * default, unlike simulate, which runs the round's own), a consensus
+   * version or `vNN` name of a later protocol, or `round` for the protocol
+   * the chain really ran. `future` needs the node's
    * developer API. Each round result's `protocolOverride` says how it
    * applied.
    *

@@ -4,3 +4,4 @@ export { default as ServiceClient } from './v2/serviceClient.js';
 export * from './baseHTTPClient.js';
 export * from './urlTokenBaseHTTPClient.js';
 export * from './client.js';
+export * from './retry.js';

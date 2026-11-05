@@ -33,14 +33,34 @@ export class DTUnsupportedError extends Error {
   }
 }
 
-/** The status and the text of an error thrown by HTTPClient. */
+/** The `message` of a JSON error body, or undefined. */
+function bodyMessage(body: unknown): string | undefined {
+  if (!(body instanceof Uint8Array) || body.length === 0) return undefined;
+  try {
+    const message = JSON.parse(new TextDecoder().decode(body))?.message;
+    return typeof message === 'string' ? message : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The status and the text of an error thrown by HTTPClient, or by a
+ * BaseHTTPClient (status on `response`, the body not yet decoded to `text`).
+ */
 export function describe(err: unknown) {
   const e = err as
-    | { status?: number; message?: string; response?: { text?: string } }
+    | {
+        status?: number;
+        message?: string;
+        response?: { status?: number; text?: string; body?: unknown };
+      }
     | undefined;
+  const responseText =
+    e?.response?.text ?? bodyMessage(e?.response?.body) ?? '';
   return {
-    status: e?.status,
-    text: `${e?.message ?? ''} ${e?.response?.text ?? ''}`,
+    status: e?.status ?? e?.response?.status,
+    text: `${e?.message ?? ''} ${responseText}`,
   };
 }
 
@@ -407,5 +427,83 @@ export function isHistoryUnavailable(err: unknown): boolean {
     /box index is incomplete|asset holders index is not complete|history is not served/.test(
       text
     )
+  );
+}
+
+/**
+ * Whether an error is a 429 Too Many Requests: dtalgod's limit on requests in
+ * flight (`RestConnectionsSoftLimit`), or a proxy's rate limit. dtalgod's 429
+ * has an empty body and `Retry-After: 1`; stock algod's has no `Retry-After`.
+ * Retry after `retryAfterSeconds(err) ?? 1` seconds, or on another node.
+ *
+ * @param err - The error thrown by a request.
+ */
+export function isTooManyRequests(err: unknown): boolean {
+  return describe(err).status === 429;
+}
+
+/**
+ * The network error codes {@link isNetworkError} retries by default: Node's
+ * socket and DNS errors, and undici's (Node's fetch) connection errors.
+ */
+export const DEFAULT_NETWORK_ERROR_CODES: readonly string[] = Object.freeze([
+  'ETIMEDOUT',
+  'ECONNRESET',
+  'EADDRINUSE',
+  'ECONNREFUSED',
+  'EPIPE',
+  'ENOTFOUND',
+  'ENETUNREACH',
+  'EHOSTUNREACH',
+  'EAI_AGAIN',
+  'EPROTO',
+  'UND_ERR_SOCKET',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_HEADERS_TIMEOUT',
+]);
+
+/**
+ * The messages of the `TypeError` fetch throws when no response arrived:
+ * Chrome, Firefox, Safari and Node. Browsers give no reason: the node may be
+ * down, have refused the connection, or answered without CORS headers (such
+ * as a 429 from dtalgod before v5.0.5-dt5).
+ */
+const FETCH_FAILED =
+  /^(Failed to fetch|NetworkError when attempting to fetch resource\.?|Load failed|fetch failed)$/;
+
+/**
+ * The code of a network error: on the error (Node's http) or on its `cause`
+ * (Node's fetch: `TypeError('fetch failed')` with `cause.code`).
+ */
+export function networkErrorCode(err: unknown): string | undefined {
+  const e = err as { code?: unknown; cause?: { code?: unknown } } | undefined;
+  const code = e?.code ?? e?.cause?.code;
+  return typeof code === 'string' ? code : undefined;
+}
+
+/**
+ * Whether an error is a request that got no HTTP response: a network error
+ * with one of `codes` (on the error or on its `cause`), or, without a code, a
+ * fetch `TypeError` that failed to reach the node ("Failed to fetch" and the
+ * like). An abort, `AbortSignal.timeout()` included (`AbortError`,
+ * `TimeoutError`), is not one, and neither is any other `TypeError`.
+ *
+ * @param err - The error thrown by a request.
+ * @param codes - The network error codes that count.
+ */
+export function isNetworkError(
+  err: unknown,
+  codes: readonly string[] = DEFAULT_NETWORK_ERROR_CODES
+): boolean {
+  const e = err as { name?: unknown; message?: unknown } | undefined;
+  if (!e || typeof e !== 'object') return false;
+  if (e.name === 'AbortError' || e.name === 'TimeoutError') return false;
+  if (describe(err).status !== undefined) return false;
+  const code = networkErrorCode(err);
+  if (code !== undefined) return codes.includes(code);
+  return (
+    e.name === 'TypeError' &&
+    typeof e.message === 'string' &&
+    FETCH_FAILED.test(e.message)
   );
 }

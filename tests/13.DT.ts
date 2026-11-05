@@ -530,6 +530,7 @@ describe('time travel', () => {
     // algokit-utils' REQUIRED_DT_FEATURES and optional ones, and ghostkit's.
     for (const f of [
       'round-header',
+      'retry-policy',
       'reads-at-round',
       'versions',
       'simulate-groups',

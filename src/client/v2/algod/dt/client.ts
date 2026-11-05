@@ -83,6 +83,9 @@ export class DTAlgodClient extends AlgodClient {
    *   `effortOf` / `parseEffortHeader` for the `X-Algod-Effort` header;
    * - `error-helpers`: `isNodeBusy`, `retryAfterSeconds`,
    *   `isTimeLimitExceeded`, `isRoundTooLarge`, `isHistoryUnavailable`;
+   * - `retry-policy`: the retry policy (`retryDecision`, `callWithRetry`,
+   *   `withRetry`, `RetryingHTTPClient`, `formatRetryWait`, ...), and
+   *   `isTooManyRequests` / `isNetworkError`;
    * - `round-header`: reads at a round, holders pages included, check the
    *   `X-Algod-TT-Round` header (`TT_ROUND_HEADER`; the boxes list checks its
    *   `round`), so an answer as of another round, such as stock algod's as of
@@ -113,6 +116,7 @@ export class DTAlgodClient extends AlgodClient {
     'response-headers',
     'error-helpers',
     'round-header',
+    'retry-policy',
   ]);
 
   /** The clients made by {@link DTAlgodClient.from}, by source client. */

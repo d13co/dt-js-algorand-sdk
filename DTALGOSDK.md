@@ -25,25 +25,26 @@
 
 ## Summary
 
-| Area                                              | algosdk                                              | dt-algosdk                                                                                                                          |
-| ------------------------------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| Client                                            | `Algodv2` / `AlgodClient`                            | also `DTAlgodClient`, a subclass, with `DTAlgodClient.from(existingAlgod)`                                                          |
-| Account, asset, application, box and supply reads | latest round only                                    | `.round(R)` on each read                                                                                                            |
-| History                                           | none (use an indexer)                                | `...Versions` methods: the rounds at which an account, asset, application, box or any of an app's boxes changed, with paging        |
-| History as of rounds                              | none                                                 | `rounds([...])` on the `...Versions` methods: each object as of each listed round, with the round it last changed (`changedRound`)  |
-| Changed state keys                                | none                                                 | `include('keys')` on the application state versions: the global or local state keys each version changed (`changedKeys`)            |
-| History of one key or box map                     | none                                                 | `key()` on the application and local state versions (with `keyValue`), `prefix()` on the boxes versions                             |
-| Asset holders                                     | none (use an indexer)                                | `getAssetHolders(assetId)`: every holder of an asset at a round, paged with the round pinned                                        |
-| Simulate: groups per request                      | one                                                  | several (node's `MaxAPISimulateGroups`, default 16), in sequence                                                                    |
-| Simulate: round                                   | the node's last few rounds                           | any round since genesis with `round`                                                                                                |
-| Simulate results                                  | `txnGroups`                                          | also `groupResult()` / `groupResults()`, which return each group's outcome or a typed error                                         |
-| Request building                                  | `SimulateRequest`                                    | `DTSimulateRequest`, with `fromTransactions()` for unsigned transactions                                                            |
-| Read-only TEAL calls                              | simulate with signed or empty-signature transactions | `query()`: one program or app, many calls, at many rounds, logs and cost per call                                                   |
-| Node features and limits                          | none                                                 | `capabilities()`: time travel, developer API, time limit, and the `simulate` and `query` limits                                     |
-| Errors                                            | HTTP errors                                          | `DTUnsupportedError` when the node lacks a feature, `SimulateGroupError` per failed group                                           |
-| Busy, time limit and history errors               | HTTP errors                                          | `isNodeBusy`, `retryAfterSeconds`, `isTimeLimitExceeded`, `isRoundTooLarge`, `isHistoryUnavailable`                                 |
-| Response headers                                  | dropped by `do()`                                    | `doWithHeaders()` on every request, `effortOf(headers)` for the node's `X-Algod-Effort`                                             |
-| ABI                                               |                                                      | `ABIArrayDynamicType` and `ABITupleType` decode subarray views correctly (see [Bug fixes](#bug-fixes-and-changes-to-upstream-code)) |
+| Area                                              | algosdk                                              | dt-algosdk                                                                                                                                 |
+| ------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Client                                            | `Algodv2` / `AlgodClient`                            | also `DTAlgodClient`, a subclass, with `DTAlgodClient.from(existingAlgod)`                                                                 |
+| Account, asset, application, box and supply reads | latest round only                                    | `.round(R)` on each read                                                                                                                   |
+| History                                           | none (use an indexer)                                | `...Versions` methods: the rounds at which an account, asset, application, box or any of an app's boxes changed, with paging               |
+| History as of rounds                              | none                                                 | `rounds([...])` on the `...Versions` methods: each object as of each listed round, with the round it last changed (`changedRound`)         |
+| Changed state keys                                | none                                                 | `include('keys')` on the application state versions: the global or local state keys each version changed (`changedKeys`)                   |
+| History of one key or box map                     | none                                                 | `key()` on the application and local state versions (with `keyValue`), `prefix()` on the boxes versions                                    |
+| Asset holders                                     | none (use an indexer)                                | `getAssetHolders(assetId)`: every holder of an asset at a round, paged with the round pinned                                               |
+| Simulate: groups per request                      | one                                                  | several (node's `MaxAPISimulateGroups`, default 16), in sequence                                                                           |
+| Simulate: round                                   | the node's last few rounds                           | any round since genesis with `round`                                                                                                       |
+| Simulate results                                  | `txnGroups`                                          | also `groupResult()` / `groupResults()`, which return each group's outcome or a typed error                                                |
+| Request building                                  | `SimulateRequest`                                    | `DTSimulateRequest`, with `fromTransactions()` for unsigned transactions                                                                   |
+| Read-only TEAL calls                              | simulate with signed or empty-signature transactions | `query()`: one program or app, many calls, at many rounds, logs and cost per call                                                          |
+| Node features and limits                          | none                                                 | `capabilities()`: time travel, developer API, time limit, and the `simulate` and `query` limits                                            |
+| Errors                                            | HTTP errors                                          | `DTUnsupportedError` when the node lacks a feature, `SimulateGroupError` per failed group                                                  |
+| Busy, time limit and history errors               | HTTP errors                                          | `isNodeBusy`, `isTooManyRequests`, `retryAfterSeconds`, `isTimeLimitExceeded`, `isRoundTooLarge`, `isHistoryUnavailable`, `isNetworkError` |
+| Retries                                           | none                                                 | `withRetry(baseClient, policy)`: one retry policy for busy nodes, rate limits and network errors, with `onWait` to tell users              |
+| Response headers                                  | dropped by `do()`                                    | `doWithHeaders()` on every request, `effortOf(headers)` for the node's `X-Algod-Effort`                                                    |
+| ABI                                               |                                                      | `ABIArrayDynamicType` and `ABITupleType` decode subarray views correctly (see [Bug fixes](#bug-fixes-and-changes-to-upstream-code))        |
 
 ## Installing in place of algosdk
 
@@ -109,7 +110,8 @@ From the package root (`import algosdk from 'algosdk'`):
 - `DTAlgodClient`
 - `DTUnsupportedError`, `SimulateGroupError`, and the types `SimulateGroupErrorKind`, `SimulateGroupOutcome`
 - `DEFAULT_MAX_SIMULATE_GROUPS` (16)
-- `isNodeBusy`, `retryAfterSeconds`, `isTimeLimitExceeded`, `isRoundTooLarge`, `isHistoryUnavailable`
+- `isNodeBusy`, `isTooManyRequests`, `retryAfterSeconds`, `isTimeLimitExceeded`, `isRoundTooLarge`, `isHistoryUnavailable`, `isNetworkError`, `networkErrorCode`, `DEFAULT_NETWORK_ERROR_CODES`
+- the retry policy ([Retries](#retries)): `withRetry`, `RetryingHTTPClient`, `callWithRetry`, `retryDecision`, `retryPolicy`, `DEFAULT_RETRY_POLICY`, `formatRetryWait`, `isTimeLimitedRequest`, `isNonIdempotentRequest`, `sleepUnlessAborted`, `RETRYING_CLIENT`, `isRetryingClient`, and the types `RetryPolicy`, `RetryOptions`, `RetryDecision`, `RetryReason`, `RetryWait`, `RetryWaitReason`, `RetryRequest`, `RetryContext`. `algosdk/client` exports them too.
 - `EFFORT_HEADER` (`x-algod-effort`), `parseEffortHeader`, `effortOf`, and the type `Effort`
 - `TT_ROUND_HEADER` (`x-algod-tt-round`)
 - `isQueryResponseTooLarge`, `MAX_QUERY_REQUEST_BYTES` (1,000,000), `QUERY_LOG_OVERHEAD_BYTES` (48), and the type `RunQuery` (the builder `query()` returns)
@@ -137,7 +139,7 @@ const algod = algosdk.DTAlgodClient.from(algorand.client.algod);
 
 `supportsDT()` and `supportsAssetHolders()` say whether the node has the optional features they name; see [Optional node features](#optional-node-features).
 
-`DTAlgodClient.features` lists what this build of the SDK has, for code that finds the class at runtime on an algosdk that may be stock algosdk rather than dt-algosdk, as algokit-utils and generated clients do: `reads-at-round`, `versions`, `simulate-groups`, `from`, `group-results`, `from-transactions`, `capabilities` (`capabilities()`, `getCapabilities()`), `query`, `query-total-calls` (`maxTotalCalls`), `versions-rounds` (`rounds()` and `changedRound`), `versions-keys` (`include('keys')` and `changedKeys`), `versions-pages` (`pages()`), `holders` (`getAssetHolders`, `supportsAssetHolders`), `response-headers` (`doWithHeaders()`, `effortOf`, `parseEffortHeader`), `error-helpers` (`isNodeBusy`, `retryAfterSeconds`, `isTimeLimitExceeded`, `isRoundTooLarge`, `isHistoryUnavailable`), `round-header` (reads at a round check `X-Algod-TT-Round`, `TT_ROUND_HEADER`). It says nothing about the node: ask the node with `capabilities()`, `supportsDT()` and `supportsAssetHolders()`.
+`DTAlgodClient.features` lists what this build of the SDK has, for code that finds the class at runtime on an algosdk that may be stock algosdk rather than dt-algosdk, as algokit-utils and generated clients do: `reads-at-round`, `versions`, `simulate-groups`, `from`, `group-results`, `from-transactions`, `capabilities` (`capabilities()`, `getCapabilities()`), `query`, `query-total-calls` (`maxTotalCalls`), `versions-rounds` (`rounds()` and `changedRound`), `versions-keys` (`include('keys')` and `changedKeys`), `versions-pages` (`pages()`), `holders` (`getAssetHolders`, `supportsAssetHolders`), `response-headers` (`doWithHeaders()`, `effortOf`, `parseEffortHeader`), `error-helpers` (`isNodeBusy`, `retryAfterSeconds`, `isTimeLimitExceeded`, `isRoundTooLarge`, `isHistoryUnavailable`), `round-header` (reads at a round check `X-Algod-TT-Round`, `TT_ROUND_HEADER`), `retry-policy` (the [retry policy](#retries), `isTooManyRequests` and `isNetworkError`). It says nothing about the node: ask the node with `capabilities()`, `supportsDT()` and `supportsAssetHolders()`.
 
 ```typescript
 const DT = (algosdk as any).DTAlgodClient;
@@ -516,26 +518,104 @@ Every dtalgod node serves its capabilities, so stock algod is the only node with
 
 ## Busy, time limit and history errors
 
-Helpers that take the error a request threw (an HTTP error from `HTTPClient`, with `status` and `response`) and say what kind of failure it is. They match the status and the node's message, not headers.
+Helpers that take the error a request threw and say what kind of failure it is: an HTTP error from `HTTPClient` (with `status` and `response`), or one straight from a `BaseHTTPClient` such as `URLTokenBaseHTTPClient` (status on `response`, the node's message in the JSON body). They match the status and the node's message, not headers.
 
-| Helper                      | Matches                                                                                                                                                                                          | What to do                                                                      |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------- |
-| `isNodeBusy(err)`           | 503 "the node is busy" (simulate, query, versions and deltas share a concurrency limit), or "every slot for re-evaluating old rounds is in use" (deltas of rounds older than the in-memory ones) | retry after `retryAfterSeconds(err) ?? 1` seconds, or on another node           |
-| `retryAfterSeconds(err)`    | the `Retry-After` header, in seconds or as an HTTP date; undefined without one                                                                                                                   | a delay for the retry                                                           |
-| `isTimeLimitExceeded(err)`  | 504, the node's time limit (`RestWriteTimeoutSeconds`; `timeLimitSeconds` in `capabilities()`)                                                                                                   | split the request (fewer groups, calls, rounds, a smaller page); don't retry it |
-| `isRoundTooLarge(err)`      | 400 "one round of boxes is too large" (boxes versions with `rounds`) or "too many objects to merge" (account versions, or boxes versions with `rounds`)                                          | narrow it: a box `prefix()`, fewer objects, or reads at that round              |
-| `isHistoryUnavailable(err)` | 503 "the box index is incomplete", "the asset holders index is not complete" or "the time travel history is not served"                                                                          | fall back to reads at a round, another node or an indexer; retrying soon fails  |
+| Helper                      | Matches                                                                                                                                                                                                                                       | What to do                                                                                                               |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `isNodeBusy(err)`           | 503 "the node is busy" (simulate, query, versions and deltas share a concurrency limit), or "every slot for re-evaluating old rounds is in use" (deltas of rounds older than the in-memory ones)                                              | retry after `retryAfterSeconds(err) ?? 1` seconds, or on another node                                                    |
+| `isTooManyRequests(err)`    | 429: the node's limit on requests in flight (`RestConnectionsSoftLimit`, default 1024), or a proxy's rate limit. dtalgod's has an empty body and `Retry-After: 1`; stock algod's has no `Retry-After`                                         | retry after `retryAfterSeconds(err) ?? 1` seconds, or on another node                                                    |
+| `retryAfterSeconds(err)`    | the `Retry-After` header, in seconds or as an HTTP date; undefined without one                                                                                                                                                                | a delay for the retry                                                                                                    |
+| `isNetworkError(err)`       | no HTTP response: a network error code (`ECONNREFUSED`, `ECONNRESET`, ..., on the error or on Node fetch's `cause`), or a browser's failed fetch (`TypeError` "Failed to fetch" and the like). Not an abort, `AbortSignal.timeout()` included | retry, after a while if the connection was refused: above `RestConnectionsHardLimit` (2048) the node refuses connections |
+| `isTimeLimitExceeded(err)`  | 504, the node's time limit (`RestWriteTimeoutSeconds`; `timeLimitSeconds` in `capabilities()`)                                                                                                                                                | split the request (fewer groups, calls, rounds, a smaller page); don't retry it                                          |
+| `isRoundTooLarge(err)`      | 400 "one round of boxes is too large" (boxes versions with `rounds`) or "too many objects to merge" (account versions, or boxes versions with `rounds`)                                                                                       | narrow it: a box `prefix()`, fewer objects, or reads at that round                                                       |
+| `isHistoryUnavailable(err)` | 503 "the box index is incomplete", "the asset holders index is not complete" or "the time travel history is not served"                                                                                                                       | fall back to reads at a round, another node or an indexer; retrying soon fails                                           |
+
+A browser can read a 429 and its `Retry-After` only from a node that sends CORS headers with it, dtalgod v5.0.5-dt5 and later. From older nodes the browser gets a failed fetch, which `isNetworkError` matches.
+
+## Retries
+
+`Algodv2`, `Indexer` and `DTAlgodClient` don't retry, as in algosdk. `withRetry` wraps their `BaseHTTPClient` in one that retries by the policy below, which dt-algokit-utils uses too:
 
 ```typescript
-for (let attempt = 0; ; attempt++) {
-  try {
-    return await algod.query(request).do();
-  } catch (err) {
-    if (!algosdk.isNodeBusy(err) || attempt >= 3) throw err;
-    await sleep(1000 * (algosdk.retryAfterSeconds(err) ?? 1));
+import {
+  URLTokenBaseHTTPClient,
+  withRetry,
+  formatRetryWait,
+} from 'algosdk/client';
+
+const http = withRetry(
+  new URLTokenBaseHTTPClient({ 'X-Algo-API-Token': token }, server, port),
+  {
+    // tell users while a request waits
+    onWait: (wait) => setStatus(formatRetryWait(wait)),
   }
-}
+);
+// the server comes from the HTTP client: Algodv2's types still ask for one
+const algod = new algosdk.Algodv2(http, '');
+const dt = new algosdk.DTAlgodClient(http, '');
 ```
+
+### The policy
+
+A failed request is decided in this order:
+
+| #   | Error                                                                                                | Decision                                                                       |
+| --- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| 1   | the request was aborted (`signal` in the request's fetch options)                                    | give up (`aborted`)                                                            |
+| 2   | 503 history unavailable (`isHistoryUnavailable`)                                                     | give up (`history-unavailable`)                                                |
+| 3   | 504 from a request under the node's time limit (`isTimeLimitedRequest`)                              | give up (`time-limit`): split or narrow it                                     |
+| 4   | a status not in `retryStatuses` (408, 429, 500, 502, 503, 504), or an error that is no network error | give up (`not-retryable`)                                                      |
+| 5   | a transaction submit (`isNonIdempotentRequest`) that the node may have taken                         | give up (`not-idempotent`)                                                     |
+| 6   | `maxTries` tries made (5)                                                                            | give up (`max-tries`)                                                          |
+| 7   | `Retry-After` above `maxRetryAfterMs` (30 s)                                                         | give up (`retry-after-too-long`)                                               |
+| 8   | otherwise                                                                                            | retry: `rate-limited` (429), `node-busy` (busy 503), `server-error`, `network` |
+
+The requests under the node's time limit are `POST /v2/query`, `POST /v2/transactions/simulate`, `GET /v2/deltas/{round}`, and `GET` of a `/versions` or `/holders` listing: a retry would repeat all the work and run into the limit again.
+
+A transaction submit (`POST /v2/transactions` and `/v2/transactions/async`) is retried only when the node surely did not take it: a 429, a busy 503, or a connection refused or never made (`ECONNREFUSED`, `ENOTFOUND`, `EAI_AGAIN`, `ENETUNREACH`, `EHOSTUNREACH`, `UND_ERR_CONNECT_TIMEOUT`). After a lost answer (a reset connection, a 502, a browser's failed fetch), a retry would get "transaction already in ledger" instead of the transaction ID: check for the transaction instead.
+
+The wait before a retry is the longest of:
+
+- the backoff: 0 before the first retry, then 2, 4, 8 s, at most `maxBackoffMs` (10 s);
+- the node's `Retry-After`, read on 429s and 503s only, up to `maxRetryAfterMs` (30 s);
+- `busyMinDelayMs` (1 s) for a 429 or a busy 503 without `Retry-After` (or with `Retry-After: 0`), a refused connection (`ECONNREFUSED`), or a browser's failed fetch (which may be a 429 the browser couldn't read).
+
+An abort ends a wait at once, rejecting with the signal's reason. When it gives up, the request throws the error of the last try itself, so `instanceof`, `status` and `response` work as without retries.
+
+### Changing it
+
+The second argument of `withRetry` is a `RetryOptions`: the `RetryPolicy` fields to change, or `false` for no retries. Fields left out, or undefined, keep their defaults (`DEFAULT_RETRY_POLICY`); lists replace the default lists.
+
+| Field                               | Default                       | Meaning                                                                                                                     |
+| ----------------------------------- | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `maxTries`                          | 5                             | tries in all, the first included; 1 turns retries off. Not even `decide` retries past it                                    |
+| `maxBackoffMs`                      | 10,000                        | the longest backoff                                                                                                         |
+| `maxRetryAfterMs`                   | 30,000                        | the longest `Retry-After` honoured; a longer one gives up at once                                                           |
+| `busyMinDelayMs`                    | 1,000                         | the least wait for a 429 or a busy 503 without `Retry-After` (or with 0), a refused connection, or a browser's failed fetch |
+| `backoffMs(retry)`                  | 0, 2, 4, 8 s, ...             | the backoff before retry `retry` (from 1), before `maxBackoffMs` caps it                                                    |
+| `retryStatuses`                     | 408, 429, 500, 502, 503, 504  | the statuses that may be retried                                                                                            |
+| `networkCodes`                      | `DEFAULT_NETWORK_ERROR_CODES` | the network error codes that may be retried                                                                                 |
+| `decide(err, ctx, defaultDecision)` |                               | returns the decision to follow instead of the policy's own, within `maxTries`; an exception it throws is thrown             |
+| `onWait(wait)`                      |                               | called before every retry; see below                                                                                        |
+| `sleep(ms, signal)`                 | `sleepUnlessAborted`          | how to wait                                                                                                                 |
+
+`retryDecision(err, { method, path, tries }, options)` gives the decision for one error, and `callWithRetry(send, { method, path, signal }, options)` runs any request under the policy.
+
+### Telling users
+
+`onWait(wait)` is called before every retry, those with no wait included, with a `RetryWait`:
+
+- `reason`: `rate-limited`, `node-busy`, `server-error` or `network`;
+- `delayMs`, and `until` (epoch milliseconds);
+- `retryAfterMs`, when the node sent `Retry-After`;
+- `retry` (from 1) and `maxRetries`;
+- `method`, `path`, `status` (unless there was no response) and `error`.
+
+`formatRetryWait(wait)` makes a message of it, such as "The node is rate limiting requests: retrying in 1 s (retry 1 of 4)". The wait is frozen, and already in the client's `waits` (below) when `onWait` runs. An exception `onWait` throws, or a promise it rejects, is ignored.
+
+To poll instead, `RetryingHTTPClient` (what `withRetry` returns) has `waits`, the requests waiting now, one each, and `waiting`, the one that waits longest.
+
+`withRetry` returns a client that already retries as it is, so requests are not retried twice over: such clients carry `RETRYING_CLIENT` (`Symbol.for('dt-algosdk.retrying-client')`), as dt-algokit-utils' does.
 
 ## Response headers
 

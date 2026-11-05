@@ -37,8 +37,9 @@ export const PQ_SALT_MAX = 0xff;
 /**
  * The public keys of addresses `Address.fromString` has already checked, so a
  * string seen again skips the base32 decode and the SHA-512/256 checksum.
- * Simulate responses list the same accounts in every group and round, which
- * made this check most of their decoding time. Cleared when it reaches
+ * Simulate responses list the same accounts in every group, and responses at
+ * several rounds list them again, which made this check most of their
+ * decoding time. Cleared when it reaches
  * `VERIFIED_ADDRESSES_MAX` entries.
  */
 const verifiedAddresses = new Map<string, Uint8Array>();

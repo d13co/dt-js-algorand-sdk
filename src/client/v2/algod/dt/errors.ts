@@ -12,7 +12,6 @@ import { SimulateTransactionGroupResult } from '../models/types.js';
  * - the asset holders index is off (`TimeTravelHoldersIndex`):
  *   `getAssetHolders`;
  * - queries are disabled (`MaxAPIQueryCalls` 0): `query`;
- * - simulate `rounds` is disabled (`MaxAPISimulateRounds` 0);
  * - the node has no capabilities endpoint, which every dtalgod node has:
  *   it is stock algod (`getCapabilities`).
  */
@@ -34,14 +33,34 @@ export class DTUnsupportedError extends Error {
   }
 }
 
-/** The status and the text of an error thrown by HTTPClient. */
+/** The `message` of a JSON error body, or undefined. */
+function bodyMessage(body: unknown): string | undefined {
+  if (!(body instanceof Uint8Array) || body.length === 0) return undefined;
+  try {
+    const message = JSON.parse(new TextDecoder().decode(body))?.message;
+    return typeof message === 'string' ? message : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The status and the text of an error thrown by HTTPClient, or by a
+ * BaseHTTPClient (status on `response`, the body not yet decoded to `text`).
+ */
 export function describe(err: unknown) {
   const e = err as
-    | { status?: number; message?: string; response?: { text?: string } }
+    | {
+        status?: number;
+        message?: string;
+        response?: { status?: number; text?: string; body?: unknown };
+      }
     | undefined;
+  const responseText =
+    e?.response?.text ?? bodyMessage(e?.response?.body) ?? '';
   return {
-    status: e?.status,
-    text: `${e?.message ?? ''} ${e?.response?.text ?? ''}`,
+    status: e?.status ?? e?.response?.status,
+    text: `${e?.message ?? ''} ${responseText}`,
   };
 }
 
@@ -176,63 +195,30 @@ export async function readAtRound(
 }
 
 /**
- * Runs a simulate request, turning a node with `rounds` disabled
- * (`MaxAPISimulateRounds` 0) into a {@link DTUnsupportedError}. Other errors
- * pass through unchanged.
- * @param request - The request.
- */
-export async function simulateWithRounds(request: Promise<HTTPClientResponse>) {
-  try {
-    return await request;
-  } catch (err) {
-    const { status, text } = describe(err);
-    if (status === 400 && /rounds is disabled on this node/.test(text)) {
-      throw new DTUnsupportedError(
-        'The node has simulate rounds disabled (MaxAPISimulateRounds is 0)',
-        { cause: err }
-      );
-    }
-    throw err;
-  }
-}
-
-/**
  * Why a transaction group has no usable simulation result:
- * - `round`: the request could not be simulated at that round at all (the
- *   round result's `error`);
  * - `group`: the group failed (`failureMessage`, with `failedAt` when the node
  *   blamed one transaction);
  * - `not-simulated`: the group was skipped after an earlier group failed a
  *   post-evaluation check;
  * - `missing`: the response has no result for the group.
  */
-export type SimulateGroupErrorKind =
-  | 'round'
-  | 'group'
-  | 'not-simulated'
-  | 'missing';
+export type SimulateGroupErrorKind = 'group' | 'not-simulated' | 'missing';
 
 /**
- * The failure of one transaction group at one round of a simulate response,
- * from `DTSimulateResponse.groupResult`.
+ * The failure of one transaction group of a simulate response, from
+ * `DTSimulateResponse.groupResult`.
  */
 export class SimulateGroupError extends Error {
   /** Why the group has no usable result. */
   public kind: SimulateGroupErrorKind;
 
-  /** The index into the response's `roundResults`, or 0 without rounds. */
-  public roundIndex: number;
-
   /** The index of the group in the request. */
   public groupIndex: number;
 
-  /** The round the simulation ran after (the result's `lastRound`). */
+  /** The round the simulation ran after (the response's `lastRound`). */
   public round: bigint;
 
-  /**
-   * The node's message: the round's `error`, or the group's
-   * `failureMessage`. Undefined for `missing`.
-   */
+  /** The group's `failureMessage`. Undefined for `missing`. */
   public failureMessage?: string;
 
   /** For `group`: the path of the transaction that failed, if the node gave one. */
@@ -247,7 +233,6 @@ export class SimulateGroupError extends Error {
 
   constructor({
     kind,
-    roundIndex,
     groupIndex,
     round,
     failureMessage,
@@ -255,7 +240,6 @@ export class SimulateGroupError extends Error {
     result,
   }: {
     kind: SimulateGroupErrorKind;
-    roundIndex: number;
     groupIndex: number;
     round: bigint;
     failureMessage?: string;
@@ -265,9 +249,6 @@ export class SimulateGroupError extends Error {
     const where = `group ${groupIndex} at round ${round}`;
     let message: string;
     switch (kind) {
-      case 'round':
-        message = `Could not simulate ${where}: ${failureMessage}`;
-        break;
       case 'not-simulated':
         message = `Did not simulate ${where}: ${failureMessage}`;
         break;
@@ -280,7 +261,6 @@ export class SimulateGroupError extends Error {
     super(message);
     this.name = 'SimulateGroupError';
     this.kind = kind;
-    this.roundIndex = roundIndex;
     this.groupIndex = groupIndex;
     this.round = round;
     this.failureMessage = failureMessage;
@@ -288,6 +268,13 @@ export class SimulateGroupError extends Error {
     this.result = result;
   }
 }
+
+/**
+ * The default of the node's `MaxAPISimulateGroups`: the most transaction
+ * groups a simulate request may hold. `capabilities()` reports the node's
+ * own value as `simulate.maxTxnGroups`.
+ */
+export const DEFAULT_MAX_SIMULATE_GROUPS = 16;
 
 /**
  * The most bytes a `POST /v2/query` request body may have: a fixed limit of
@@ -440,5 +427,83 @@ export function isHistoryUnavailable(err: unknown): boolean {
     /box index is incomplete|asset holders index is not complete|history is not served/.test(
       text
     )
+  );
+}
+
+/**
+ * Whether an error is a 429 Too Many Requests: dtalgod's limit on requests in
+ * flight (`RestConnectionsSoftLimit`), or a proxy's rate limit. dtalgod's 429
+ * has an empty body and `Retry-After: 1`; stock algod's has no `Retry-After`.
+ * Retry after `retryAfterSeconds(err) ?? 1` seconds, or on another node.
+ *
+ * @param err - The error thrown by a request.
+ */
+export function isTooManyRequests(err: unknown): boolean {
+  return describe(err).status === 429;
+}
+
+/**
+ * The network error codes {@link isNetworkError} retries by default: Node's
+ * socket and DNS errors, and undici's (Node's fetch) connection errors.
+ */
+export const DEFAULT_NETWORK_ERROR_CODES: readonly string[] = Object.freeze([
+  'ETIMEDOUT',
+  'ECONNRESET',
+  'EADDRINUSE',
+  'ECONNREFUSED',
+  'EPIPE',
+  'ENOTFOUND',
+  'ENETUNREACH',
+  'EHOSTUNREACH',
+  'EAI_AGAIN',
+  'EPROTO',
+  'UND_ERR_SOCKET',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_HEADERS_TIMEOUT',
+]);
+
+/**
+ * The messages of the `TypeError` fetch throws when no response arrived:
+ * Chrome, Firefox, Safari, Node and React Native. Browsers give no reason: the node may be
+ * down, have refused the connection, or answered without CORS headers (such
+ * as a 429 from dtalgod before v5.0.5-dt5).
+ */
+const FETCH_FAILED =
+  /^(Failed to fetch|NetworkError when attempting to fetch resource\.?|Load failed|fetch failed|Network request failed)$/;
+
+/**
+ * The code of a network error: on the error (Node's http) or on its `cause`
+ * (Node's fetch: `TypeError('fetch failed')` with `cause.code`).
+ */
+export function networkErrorCode(err: unknown): string | undefined {
+  const e = err as { code?: unknown; cause?: { code?: unknown } } | undefined;
+  const code = e?.code ?? e?.cause?.code;
+  return typeof code === 'string' ? code : undefined;
+}
+
+/**
+ * Whether an error is a request that got no HTTP response: a network error
+ * with one of `codes` (on the error or on its `cause`), or, without a code, a
+ * fetch `TypeError` that failed to reach the node ("Failed to fetch" and the
+ * like). An abort, `AbortSignal.timeout()` included (`AbortError`,
+ * `TimeoutError`), is not one, and neither is any other `TypeError`.
+ *
+ * @param err - The error thrown by a request.
+ * @param codes - The network error codes that count.
+ */
+export function isNetworkError(
+  err: unknown,
+  codes: readonly string[] = DEFAULT_NETWORK_ERROR_CODES
+): boolean {
+  const e = err as { name?: unknown; message?: unknown } | undefined;
+  if (!e || typeof e !== 'object') return false;
+  if (e.name === 'AbortError' || e.name === 'TimeoutError') return false;
+  if (describe(err).status !== undefined) return false;
+  const code = networkErrorCode(err);
+  if (code !== undefined) return codes.includes(code);
+  return (
+    e.name === 'TypeError' &&
+    typeof e.message === 'string' &&
+    FETCH_FAILED.test(e.message)
   );
 }

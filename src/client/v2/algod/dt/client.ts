@@ -63,21 +63,16 @@ export class DTAlgodClient extends AlgodClient {
    * - `reads-at-round`: `.round()` on the account, asset, application, box and
    *   supply reads;
    * - `versions`: the `...Versions` methods;
-   * - `simulate-groups`, `parallel-groups`, `simulate-rounds`: several groups,
-   *   `parallelGroups()` and `rounds()` in `simulateTransactions`;
+   * - `simulate-groups`: several groups in `simulateTransactions`;
    * - `from`: {@link DTAlgodClient.from};
    * - `group-results`: `groupResult()` / `groupResults()` on the simulate
    *   response;
    * - `from-transactions`: `DTSimulateRequest.fromTransactions`;
-   * - `pack-rounds`: `packSimulateRounds`;
-   * - `validity-window`: `skipValidityWindow()` and `rewriteValidityWindow()`
-   *   in `simulateTransactions`, and `maxSpan: null` in `packSimulateRounds`;
-   * - `simulate-protocol`: `protocol()` in `simulateTransactions`, and
-   *   `protocolOverride` on the response and its round results;
    * - `capabilities`: `capabilities()` and `getCapabilities()`
    *   (`GET /v2/capabilities`: `timeTravel`, `developerApi`,
    *   `timeLimitSeconds`, the `simulate` limits and the `query` limits);
    * - `query`: `query()`, and `query` on `capabilities()`;
+   * - `query-total-calls`: `maxTotalCalls` on the `query` limits;
    * - `versions-rounds`: `rounds()` on the `...Versions` methods, and
    *   `changedRound` on their entries;
    * - `versions-keys`: `include('keys')` on `getApplicationVersions`,
@@ -88,6 +83,9 @@ export class DTAlgodClient extends AlgodClient {
    *   `effortOf` / `parseEffortHeader` for the `X-Algod-Effort` header;
    * - `error-helpers`: `isNodeBusy`, `retryAfterSeconds`,
    *   `isTimeLimitExceeded`, `isRoundTooLarge`, `isHistoryUnavailable`;
+   * - `retry-policy`: the retry policy (`retryDecision`, `callWithRetry`,
+   *   `withRetry`, `RetryingHTTPClient`, `formatRetryWait`, ...), and
+   *   `isTooManyRequests` / `isNetworkError`;
    * - `round-header`: reads at a round, holders pages included, check the
    *   `X-Algod-TT-Round` header (`TT_ROUND_HEADER`; the boxes list checks its
    *   `round`), so an answer as of another round, such as stock algod's as of
@@ -105,16 +103,12 @@ export class DTAlgodClient extends AlgodClient {
     'reads-at-round',
     'versions',
     'simulate-groups',
-    'parallel-groups',
-    'simulate-rounds',
     'from',
     'group-results',
     'from-transactions',
-    'pack-rounds',
-    'validity-window',
-    'simulate-protocol',
     'capabilities',
     'query',
+    'query-total-calls',
     'versions-rounds',
     'versions-keys',
     'versions-pages',
@@ -122,6 +116,7 @@ export class DTAlgodClient extends AlgodClient {
     'response-headers',
     'error-helpers',
     'round-header',
+    'retry-policy',
   ]);
 
   /** The clients made by {@link DTAlgodClient.from}, by source client. */
@@ -472,52 +467,30 @@ export class DTAlgodClient extends AlgodClient {
   }
 
   /**
-   * Simulate transactions, with the fork's simulate features on top of
-   * {@link AlgodClient.simulateTransactions}:
+   * Simulate transactions, as {@link AlgodClient.simulateTransactions} does,
+   * with several groups per request:
    *
    * - `txnGroups` may hold several groups, up to the node's
    *   `MaxAPISimulateGroups` (default 16; `simulate.maxTxnGroups` of
-   *   {@link DTAlgodClient.capabilities} has the node's value). By default they run in order as
-   *   consecutive groups of one simulated block: each group sees the effects
-   *   of the groups before it, a transaction or lease used by an earlier group
-   *   is a duplicate, and the groups share the block's byte limit, so a group
-   *   that does not fit fails while a smaller later group may still fit. A
-   *   group that fails is rolled back and the later groups still run, except
-   *   after a failed post-evaluation check (placeholder PQ signatures with
-   *   `fixSigners`) or a corrupted evaluator: every later group is then
-   *   reported as not simulated. Each group's failure is in its own
-   *   `failureMessage` / `failedAt` (0-based). `extraOpcodeBudget` applies to
-   *   each group, up to the node's `simulate.maxExtraOpcodeBudget`.
-   * - With `.parallelGroups()` (or `parallelGroups` on a
-   *   {@link DTSimulateRequest}), every group is simulated alone
-   *   against the state at the start round, concurrently.
-   * - With `.rounds([...])` (or `rounds` on a
-   *   {@link DTSimulateRequest}), the request is simulated once per
-   *   listed round (0 is the latest), and the results are in `roundResults`,
-   *   one per entry in request order. A round that cannot be simulated has an
-   *   `error` in its entry instead of failing the request. The top-level
-   *   `lastRound` is then 0 and `txnGroups` is empty. With a time-travel node
-   *   (`EnableTimeTravel`) any round since genesis can be listed; otherwise
-   *   only the node's last few rounds. `AtomicTransactionComposer.simulate`
-   *   reads the top-level `txnGroups`, so use the client directly for this.
-   * - With `.skipValidityWindow()` or `.rewriteValidityWindow()` (only with
-   *   `rounds`), the transactions are evaluated outside their validity window,
-   *   or have it moved to each simulated block, so the rounds can be more than
-   *   `MaxTxnLife` (1000) apart.
-   * - With `.protocol('v42')` (or `latest`, ...), the round is simulated
-   *   under a later consensus protocol, as if an upgrade to it took effect
-   *   right after the start round. `protocolOverride` on the response (on
-   *   each round result, with `rounds`) says how it applied.
+   *   {@link DTAlgodClient.capabilities} has the node's value). They run in
+   *   order as consecutive groups of one simulated block: each group sees the
+   *   effects of the groups before it, a transaction or lease used by an
+   *   earlier group is a duplicate, and the groups share the block's byte
+   *   limit, so a group that does not fit fails while a smaller later group
+   *   may still fit. A group that fails is rolled back and the later groups
+   *   still run, except after a failed post-evaluation check (placeholder PQ
+   *   signatures with `fixSigners`) or a corrupted evaluator: every later
+   *   group is then reported as not simulated. Each group's failure is in its
+   *   own `failureMessage` / `failedAt` (0-based). `extraOpcodeBudget` applies
+   *   to each group, up to the node's `simulate.maxExtraOpcodeBudget`.
+   * - `round` may be any round since genesis on a time-travel node
+   *   (`EnableTimeTravel`); otherwise only the node's last few rounds.
+   * - The response's `groupResult()` / `groupResults()` give each group's
+   *   result or a typed `SimulateGroupError`.
    *
-   * The node may also raise the limits on unnamed resources
-   * (`allowUnnamedResources`) with its `SimulateResourceLimitMultiplier`
-   * setting. The resources it then reports may not fit in a group that can be
-   * submitted.
-   *
-   * A node with `rounds` disabled (`simulate.maxRounds` 0 in
-   * {@link DTAlgodClient.capabilities}) is thrown as a
-   * {@link DTUnsupportedError}. Several groups, `rounds` and the fork's
-   * fields need a dtalgod node: stock algod rejects them with a 400.
+   * Several groups need a dtalgod node: stock algod rejects them with a 400.
+   * For read-only calls at several rounds, each alone, or under a later
+   * protocol, use {@link DTAlgodClient.query}.
    *
    * #### Example
    * ```typescript
@@ -526,34 +499,16 @@ export class DTAlgodClient extends AlgodClient {
    *     (txns) => new algosdk.modelsv2.SimulateRequestTransactionGroup({ txns })
    *   ),
    *   allowEmptySignatures: true,
+   *   round: 45000000,
    * });
    * const res = await algodClient.simulateTransactions(request).do();
-   * res.txnGroups.forEach((g, i) => console.log(i, g.failureMessage ?? 'ok'));
-   *
-   * // The same groups at three rounds.
-   * const atRounds = await algodClient
-   *   .simulateTransactions(request)
-   *   .rounds([45000000, 46000000, 0])
-   *   .do();
-   * for (const r of atRounds.roundResults!) {
-   *   console.log(r.lastRound, r.error ?? r.txnGroups[1].failureMessage ?? 'ok');
-   * }
-   *
-   * // Years apart, with each window moved to the round, under today's rules.
-   * const underLatest = await algodClient
-   *   .simulateTransactions(request)
-   *   .rounds([20000000, 45000000])
-   *   .rewriteValidityWindow()
-   *   .protocol('latest')
-   *   .do();
-   * for (const r of underLatest.roundResults!) {
-   *   const po = r.protocolOverride;
-   *   console.log(r.lastRound, po?.from, '->', po?.to, po?.notes?.map((n) => n.code));
+   * for (const g of res.groupResults()) {
+   *   console.log(g.groupIndex, g.ok ? 'ok' : g.error.message);
    * }
    * ```
    *
-   * @param request - The simulate request. A {@link DTSimulateRequest}
-   * can set the fork's fields.
+   * @param request - The simulate request: a `SimulateRequest` or
+   * `dtModels.DTSimulateRequest`.
    * @category POST
    */
   simulateTransactions(request: SimulateRequest) {
@@ -570,7 +525,6 @@ export class DTAlgodClient extends AlgodClient {
    * const res = await algodClient
    *   // Each group is a Uint8Array[] of encoded signed transactions.
    *   .simulateRawTransactions([group1Txns, group2Txns])
-   *   .parallelGroups()
    *   .do();
    * ```
    *
@@ -612,14 +566,15 @@ export class DTAlgodClient extends AlgodClient {
    * others. The response has, per round, the logs, cost and error of each
    * call; inner transactions and state changes are not echoed.
    *
-   * Unlike simulate, the default protocol is `latest`, not the protocol the
-   * round really ran: past rounds then report a `protocolOverride` with
-   * notes. Pass `protocol('round')` for the chain's own rules.
+   * Unlike simulate, which runs the protocol each round really ran, the
+   * default protocol is `latest`: past rounds then report a
+   * `protocolOverride` with notes. Pass `protocol('round')` for the chain's
+   * own rules.
    *
    * Queries can be disabled on a node (`MaxAPIQueryCalls` 0): the `query` of
    * {@link DTAlgodClient.capabilities} is undefined then, and otherwise has
    * the limits to split requests by (`maxCalls`, `maxRounds`,
-   * `maxCallBudget`, `maxCallLogBytes`, `maxCallStateBytes`,
+   * `maxTotalCalls`, `maxCallBudget`, `maxCallLogBytes`, `maxCallStateBytes`,
    * `maxResponseBytes`). A node with queries disabled is thrown as a
    * {@link DTUnsupportedError}. Results
    * over `maxResponseBytes` fail with a 400 that `isQueryResponseTooLarge`
@@ -670,22 +625,20 @@ export class DTAlgodClient extends AlgodClient {
 
   /**
    * The fork features the node has on, and the limits to build simulate and
-   * query requests within. `simulate` has how many groups and `rounds`
-   * entries a simulate request may hold and the most `extraOpcodeBudget`:
-   * pass `simulate.maxRounds` to {@link packSimulateRounds}, and split groups
-   * into requests of at most `simulate.maxTxnGroups`. `query` has the query
-   * limits, and is undefined when queries are disabled.
+   * query requests within. `simulate` has how many groups a simulate request
+   * may hold and the most `extraOpcodeBudget`: split groups into requests of
+   * at most `simulate.maxTxnGroups`. `query` has the query limits, and is
+   * undefined when queries are disabled.
    *
    * This is how the client tells what the node has: every dtalgod node
    * serves its capabilities, and its optional features show in them
-   * (`timeTravel`, `developerApi`, `query`, `simulate.maxRounds` above 0,
-   * `simulate.maxTxnGroups` above 1). Only the asset holders index does not:
+   * (`timeTravel`, `developerApi`, `query`, `simulate.maxTxnGroups` above
+   * 1). Only the asset holders index does not:
    * see {@link DTAlgodClient.supportsAssetHolders}.
    *
    * Stock algod has no capabilities endpoint and answers 404; the answer is
    * then stock algod's ({@link CapabilitiesResponse.stock}), with `reported`
-   * false: no time travel, no queries, one group per simulate request and no
-   * `rounds`.
+   * false: no time travel, no queries, and one group per simulate request.
    *
    * The answer is cached on the client and shared, so it is frozen (its
    * `simulate` and `query` too). Other errors, such as network failures, are
@@ -693,13 +646,12 @@ export class DTAlgodClient extends AlgodClient {
    *
    * #### Example
    * ```typescript
-   * const { simulate } = await algodClient.capabilities();
-   * if (simulate.maxRounds === 0) {
-   *   // No `rounds`: send one request per round, with `round` set.
+   * const { query, simulate } = await algodClient.capabilities();
+   * if (query) {
+   *   // Split calls and rounds by query.maxCalls, maxRounds and maxTotalCalls.
    * } else {
-   *   const { windows } = algosdk.packSimulateRounds(rounds, {
-   *     maxRounds: simulate.maxRounds,
-   *   });
+   *   // One simulate request per round, with `round` set and at most
+   *   // simulate.maxTxnGroups groups.
    * }
    * ```
    */

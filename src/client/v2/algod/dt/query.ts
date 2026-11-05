@@ -53,8 +53,9 @@ export default class RunQuery extends JSONRequest<QueryResponse> {
    * round. The results are in the response's `rounds`, one per entry in this
    * order; a round that cannot be queried has an `error` there instead of
    * failing the request. The node's `QueryLimits.maxRounds` limits how many
-   * entries a request may list, duplicates included. An empty list sends no
-   * rounds, clearing any the request had.
+   * entries a request may list, duplicates included, and its `maxTotalCalls`
+   * limits the calls times the entries. An empty list sends no rounds,
+   * clearing any the request had.
    *
    * @param rounds - The rounds to query at.
    * @category body
@@ -66,10 +67,10 @@ export default class RunQuery extends JSONRequest<QueryResponse> {
   }
 
   /**
-   * The protocol the block after each queried round runs, as in simulate:
-   * `latest` (the default, unlike simulate, which defaults to the round's
-   * own), a consensus version or `vNN` name of a later protocol, or `round`
-   * for the protocol the chain really ran. `future` needs the node's
+   * The protocol the block after each queried round runs: `latest` (the
+   * default, unlike simulate, which runs the round's own), a consensus
+   * version or `vNN` name of a later protocol, or `round` for the protocol
+   * the chain really ran. `future` needs the node's
    * developer API. Each round result's `protocolOverride` says how it
    * applied.
    *

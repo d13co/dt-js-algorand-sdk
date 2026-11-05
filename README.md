@@ -10,10 +10,10 @@ This is `dt-algosdk`, a fork of [algosdk](https://www.npmjs.com/package/algosdk)
 - **Reads at past rounds**: `.round(R)` on account, asset, application, box and supply reads.
 - **History**: `...Versions` methods list the rounds at which an account, asset, application, box, or any of an app's boxes changed, with paging and values; `rounds([...])` gives each object as of a set of rounds, `include('keys')` the state keys each version changed, and `key()` / `prefix()` the history of one state key or box map.
 - **Asset holders**: `getAssetHolders()` lists every holder of an asset at a round.
-- **Simulate** with several groups per request (in sequence or with `parallelGroups()`), at several rounds per request (`rounds()`), with the validity window skipped or moved to each round (`skipValidityWindow()`, `rewriteValidityWindow()`), and under a later consensus protocol (`protocol()`).
-- **Query**: `query()` runs read-only TEAL calls (one program or deployed app, many calls) at several rounds per request through the fork's `POST /v2/query`, returning each call's logs, cost and error per round, without transactions, signatures or fees.
-- **Helpers**: `DTSimulateRequest.fromTransactions()` for unsigned transactions, `packSimulateRounds()` to split rounds into requests, `groupResults()` for each group's outcome or a typed `SimulateGroupError`, `capabilities()` for the node's features and its simulate and query limits, `isQueryResponseTooLarge()` to split a query whose results are over the node's limit, `isNodeBusy()` / `retryAfterSeconds()` / `isTimeLimitExceeded()` / `isHistoryUnavailable()` for the node's busy, time limit and history errors, and `doWithHeaders()` / `effortOf()` for response headers.
-- **Feature detection**: `capabilities()`, `supportsDT()` and `supportsAssetHolders()` say which optional features the node has on (time travel, the holders index, query, simulate rounds), and a `DTUnsupportedError` is thrown when a request needs one that is off, so code can fall back.
+- **Simulate** with several groups per request, run in sequence, at any past round.
+- **Query**: `query()` runs read-only TEAL calls (one program or deployed app, many calls) at several rounds per request through the fork's `POST /v2/query`, optionally under a later consensus protocol, returning each call's logs, cost and error per round, without transactions, signatures or fees.
+- **Helpers**: `DTSimulateRequest.fromTransactions()` for unsigned transactions, `groupResults()` for each group's outcome or a typed `SimulateGroupError`, `capabilities()` for the node's features and its simulate and query limits, `isQueryResponseTooLarge()` to split a query whose results are over the node's limit, `isNodeBusy()` / `isTooManyRequests()` / `retryAfterSeconds()` / `isTimeLimitExceeded()` / `isHistoryUnavailable()` for the node's busy, rate limit, time limit and history errors, `withRetry()` for one retry policy for those and network errors, with `onWait` to tell users while a request waits, and `doWithHeaders()` / `effortOf()` for response headers.
+- **Feature detection**: `capabilities()`, `supportsDT()` and `supportsAssetHolders()` say which optional features the node has on (time travel, the holders index, query), and a `DTUnsupportedError` is thrown when a request needs one that is off, so code can fall back.
 - **Fix**: ABI dynamic arrays and tuples decode `Uint8Array` subarrays correctly.
 - **Faster decoding**: time-travel pages are parsed with `JSON.parse` when no integer needs a bigint, addresses already checked skip their checksum, and base64 is faster in browsers.
 
@@ -28,7 +28,7 @@ npm (`package.json`):
 ```json
 {
   "dependencies": {
-    "algosdk": "npm:dt-algosdk@3.9.0-dt.4.1.0.0"
+    "algosdk": "npm:dt-algosdk@3.9.0-dt.5.2.0.0"
   },
   "overrides": {
     "algosdk": "$algosdk"
@@ -40,7 +40,7 @@ pnpm 10 and later (`pnpm-workspace.yaml`; pnpm 11 and later read overrides only 
 
 ```yaml
 overrides:
-  algosdk: npm:dt-algosdk@3.9.0-dt.4.1.0.0
+  algosdk: npm:dt-algosdk@3.9.0-dt.5.2.0.0
 ```
 
 pnpm 9 (`package.json`; it warns about an unmet `algosdk` peer dependency, which is harmless):
@@ -49,7 +49,7 @@ pnpm 9 (`package.json`; it warns about an unmet `algosdk` peer dependency, which
 {
   "pnpm": {
     "overrides": {
-      "algosdk": "npm:dt-algosdk@3.9.0-dt.4.1.0.0"
+      "algosdk": "npm:dt-algosdk@3.9.0-dt.5.2.0.0"
     }
   }
 }
@@ -60,17 +60,17 @@ Yarn and Bun (`package.json`):
 ```json
 {
   "dependencies": {
-    "algosdk": "npm:dt-algosdk@3.9.0-dt.4.1.0.0"
+    "algosdk": "npm:dt-algosdk@3.9.0-dt.5.2.0.0"
   },
   "resolutions": {
-    "algosdk": "npm:dt-algosdk@3.9.0-dt.4.1.0.0"
+    "algosdk": "npm:dt-algosdk@3.9.0-dt.5.2.0.0"
   }
 }
 ```
 
 Yarn 4 refuses versions published less than a day ago (`npmMinimalAgeGate`). To install a new dt-algosdk release right away, add `npmPreapprovedPackages: ["dt-algosdk"]` to `.yarnrc.yml`.
 
-`npm ls algosdk` or `pnpm why algosdk` (`yarn why dt-algosdk` on Yarn) should then list only `dt-algosdk@3.9.0-dt.4.1.0.0`. Pin the exact version, with no `^` or `~` (`npm install -E`): dt-algosdk versions are prereleases, so `^3.9.0` matches none of them, while a `^` or `~` range on a dt-algosdk version matches every later dt-algosdk built on the same algosdk version, breaking releases included. A version reads `<algosdk version>-dt.<dt-algorand release>.<SDK release>`: `3.9.0-dt.4.1.0.0` is built on algosdk 3.9.0, covers the API of dt-algorand dt4 (`v5.0.5-dt4`), and is SDK release 1.0.0. The SDK release counts on across new algosdk and dt-algorand versions; it never starts over.
+`npm ls algosdk` or `pnpm why algosdk` (`yarn why dt-algosdk` on Yarn) should then list only `dt-algosdk@3.9.0-dt.5.2.0.0`. Pin the exact version, with no `^` or `~` (`npm install -E`): dt-algosdk versions are prereleases, so `^3.9.0` matches none of them, while a `^` or `~` range on a dt-algosdk version matches every later dt-algosdk built on the same algosdk version, breaking releases included. A version reads `<algosdk version>-dt.<dt-algorand release>.<SDK release>`: `3.9.0-dt.5.2.0.0` is built on algosdk 3.9.0, covers the API of dt-algorand dt5 (`v5.0.5-dt5`), and is SDK release 2.0.0. The SDK release counts on across new algosdk and dt-algorand versions; it never starts over.
 
 ### Quick start
 
@@ -113,7 +113,7 @@ Existing codebases using v2 of this library will be incompatible with v3. The v3
 ### [Node.js](https://nodejs.org/en/download/)
 
 ```
-$ npm install -E algosdk@npm:dt-algosdk@3.9.0-dt.4.1.0.0
+$ npm install -E algosdk@npm:dt-algosdk@3.9.0-dt.5.2.0.0
 ```
 
 This installs dt-algosdk under the name `algosdk`. If other dependencies use algosdk, also add the override from [Installing dt-algosdk in place of algosdk](#installing-dt-algosdk-in-place-of-algosdk), so that there is only one copy.
@@ -126,8 +126,8 @@ Include a minified browser bundle directly in your HTML like so. It defines the 
 
 ```html
 <script
-  src="https://unpkg.com/dt-algosdk@3.9.0-dt.4.1.0.0/dist/browser/algosdk.min.js"
-  integrity="sha384-uYn+/StG2g/CidOhhPUXlMt0XyUgGYriM4nsrQWfwxjoJHIGeDMUZWhY7z84MT/2"
+  src="https://unpkg.com/dt-algosdk@3.9.0-dt.5.2.0.0/dist/browser/algosdk.min.js"
+  integrity="sha384-lahJteCZGOzhUytnVY2Al7dwCspegC0/BRKJr++Z0+IGgkLhT34S7nzPbFmMEMwk"
   crossorigin="anonymous"
 ></script>
 ```
@@ -136,8 +136,8 @@ or
 
 ```html
 <script
-  src="https://cdn.jsdelivr.net/npm/dt-algosdk@3.9.0-dt.4.1.0.0/dist/browser/algosdk.min.js"
-  integrity="sha384-uYn+/StG2g/CidOhhPUXlMt0XyUgGYriM4nsrQWfwxjoJHIGeDMUZWhY7z84MT/2"
+  src="https://cdn.jsdelivr.net/npm/dt-algosdk@3.9.0-dt.5.2.0.0/dist/browser/algosdk.min.js"
+  integrity="sha384-lahJteCZGOzhUytnVY2Al7dwCspegC0/BRKJr++Z0+IGgkLhT34S7nzPbFmMEMwk"
   crossorigin="anonymous"
 ></script>
 ```

@@ -10,6 +10,11 @@ export {
   isTimeLimitExceeded,
   isRoundTooLarge,
   isHistoryUnavailable,
+  isTooManyRequests,
+  isNetworkError,
+  networkErrorCode,
+  DEFAULT_NETWORK_ERROR_CODES,
+  DEFAULT_MAX_SIMULATE_GROUPS,
   MAX_QUERY_REQUEST_BYTES,
   QUERY_LOG_OVERHEAD_BYTES,
   TT_ROUND_HEADER,
@@ -31,4 +36,3 @@ export {
 export type { default as RunQuery } from './query.js';
 export type { default as GetAssetHolders } from './getAssetHolders.js';
 export * from './models.js';
-export * from './packRounds.js';

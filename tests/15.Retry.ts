@@ -263,6 +263,12 @@ describe('Retry policy', () => {
         retryDecision(httpError(504), ctx(1, 'get', '/v2/status')).reason,
         'server-error'
       );
+      // algod's own version endpoint is no listing
+      assert.ok(!isTimeLimitedRequest('get', '/versions'));
+      assert.strictEqual(
+        retryDecision(httpError(504), ctx(1, 'get', '/versions')).reason,
+        'server-error'
+      );
       assert.strictEqual(
         retryDecision(httpError(503), ctx(1, 'post', '/v2/query')).reason,
         'server-error'
@@ -372,6 +378,24 @@ describe('Retry policy', () => {
       assert.strictEqual(negative.delayMs, 0);
       assert.strictEqual(retryPolicy({ maxTries: NaN }).maxTries, 5);
       assert.strictEqual(retryPolicy({ maxTries: 0 }).maxTries, 1);
+      const nans = retryPolicy({
+        maxBackoffMs: NaN,
+        maxRetryAfterMs: NaN,
+        busyMinDelayMs: NaN,
+      });
+      assert.strictEqual(nans.maxBackoffMs, 10_000);
+      assert.strictEqual(nans.maxRetryAfterMs, 30_000);
+      assert.strictEqual(nans.busyMinDelayMs, 1000);
+      assert.strictEqual(retryPolicy({ busyMinDelayMs: -5 }).busyMinDelayMs, 0);
+      assert.strictEqual(
+        retryPolicy({ maxRetryAfterMs: Infinity }).maxRetryAfterMs,
+        Infinity
+      );
+      const busyNaN = retryDecision(httpError(429), ctx(1), {
+        busyMinDelayMs: NaN,
+      });
+      assert.ok(busyNaN.retry);
+      assert.strictEqual(busyNaN.delayMs, 1000);
     });
 
     it('retries a submit whose connection was never made', () => {
@@ -454,6 +478,10 @@ describe('Retry policy', () => {
       );
       assert.strictEqual(
         algosdk.isNetworkError(new TypeError('Load failed')),
+        true
+      );
+      assert.strictEqual(
+        algosdk.isNetworkError(new TypeError('Network request failed')),
         true
       );
       assert.strictEqual(
@@ -688,6 +716,11 @@ describe('Retry policy', () => {
       assert.strictEqual(
         formatRetryWait({ ...base, reason: 'network' }),
         'Could not reach the node: retrying in 3 s (retry 1 of 4)'
+      );
+      // a reason from a decide written in plain JS
+      assert.strictEqual(
+        formatRetryWait({ ...base, reason: 'teapot' as never }),
+        'The request failed: retrying in 3 s (retry 1 of 4)'
       );
     });
 

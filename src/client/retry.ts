@@ -123,8 +123,9 @@ export interface RetryPolicy {
   /**
    * Called before every retry, those with no wait included, to tell the app
    * that a request is rate limited, waiting for a busy node, or retrying. The
-   * wait is frozen, and already in the client's `waits`. An exception it
-   * throws, or a promise it rejects, is ignored.
+   * wait is frozen and, when it waits (`delayMs > 0`), already in the
+   * client's `waits`. An exception it throws, or a promise it rejects, is
+   * ignored.
    */
   onWait?: (wait: RetryWait) => void;
   /** How to wait. Default: a timer that an abort of `signal` ends early. */
@@ -145,6 +146,16 @@ export const DEFAULT_RETRY_POLICY: Readonly<RetryPolicy> = Object.freeze({
   networkCodes: DEFAULT_NETWORK_ERROR_CODES,
 });
 
+/** A numeric policy field, or its default when it is not a number or NaN. */
+function numberOr(
+  value: unknown,
+  key: 'maxTries' | 'maxBackoffMs' | 'maxRetryAfterMs' | 'busyMinDelayMs'
+): number {
+  return typeof value === 'number' && !Number.isNaN(value)
+    ? value
+    : DEFAULT_RETRY_POLICY[key];
+}
+
 /**
  * A full retry policy: the defaults, with the fields of `options` that are not
  * undefined. `false` gives a policy with no retries.
@@ -158,9 +169,14 @@ export function retryPolicy(options?: RetryOptions): RetryPolicy {
     }
   }
   // A NaN or a 0 would retry forever or never send: keep at least one try
-  policy.maxTries = Number.isNaN(policy.maxTries)
-    ? DEFAULT_RETRY_POLICY.maxTries
-    : Math.max(1, policy.maxTries);
+  policy.maxTries = Math.max(1, numberOr(policy.maxTries, 'maxTries'));
+  for (const key of [
+    'maxBackoffMs',
+    'maxRetryAfterMs',
+    'busyMinDelayMs',
+  ] as const) {
+    policy[key] = Math.max(0, numberOr(policy[key], key));
+  }
   return policy;
 }
 
@@ -177,7 +193,8 @@ function trimPath(path: string) {
  * Whether a request runs under the node's time limit, so a 504 means it ran
  * too long and a retry would do the same: `POST /v2/query`,
  * `POST /v2/transactions/simulate`, `GET /v2/deltas/{round}`, and `GET` of a
- * `/versions` or `/holders` listing. Split or narrow it instead.
+ * `/v2/.../versions` or `/v2/.../holders` listing (not algod's own
+ * `GET /versions`). Split or narrow it instead.
  */
 export function isTimeLimitedRequest(
   method: RetryRequest['method'],
@@ -188,7 +205,7 @@ export function isTimeLimitedRequest(
     return p === '/v2/query' || p === '/v2/transactions/simulate';
   }
   if (method === 'get') {
-    return /\/(versions|holders)$|^\/v2\/deltas\/\d+$/.test(p);
+    return /^\/v2\/.+\/(versions|holders)$|^\/v2\/deltas\/\d+$/.test(p);
   }
   return false;
 }
@@ -451,7 +468,8 @@ const WAIT_REASONS: Record<RetryWaitReason, (wait: RetryWait) => string> = {
 export function formatRetryWait(wait: RetryWait): string {
   const seconds = Math.ceil(wait.delayMs / 1000);
   const when = seconds > 0 ? `retrying in ${seconds} s` : 'retrying now';
-  return `${WAIT_REASONS[wait.reason](wait)}: ${when} (retry ${wait.retry} of ${wait.maxRetries})`;
+  const what = WAIT_REASONS[wait.reason]?.(wait) ?? 'The request failed';
+  return `${what}: ${when} (retry ${wait.retry} of ${wait.maxRetries})`;
 }
 
 /**

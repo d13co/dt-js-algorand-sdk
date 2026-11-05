@@ -464,12 +464,12 @@ export const DEFAULT_NETWORK_ERROR_CODES: readonly string[] = Object.freeze([
 
 /**
  * The messages of the `TypeError` fetch throws when no response arrived:
- * Chrome, Firefox, Safari and Node. Browsers give no reason: the node may be
+ * Chrome, Firefox, Safari, Node and React Native. Browsers give no reason: the node may be
  * down, have refused the connection, or answered without CORS headers (such
  * as a 429 from dtalgod before v5.0.5-dt5).
  */
 const FETCH_FAILED =
-  /^(Failed to fetch|NetworkError when attempting to fetch resource\.?|Load failed|fetch failed)$/;
+  /^(Failed to fetch|NetworkError when attempting to fetch resource\.?|Load failed|fetch failed|Network request failed)$/;
 
 /**
  * The code of a network error: on the error (Node's http) or on its `cause`

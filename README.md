@@ -127,7 +127,7 @@ Include a minified browser bundle directly in your HTML like so. It defines the 
 ```html
 <script
   src="https://unpkg.com/dt-algosdk@3.9.0-dt.5.2.0.0/dist/browser/algosdk.min.js"
-  integrity="sha384-2n765L1xRWTOpDvCXvDn+Q7B/nAi8wA4Z7JZ66DLJGGviWhlIeh9Ii3lNL2kMCFd"
+  integrity="sha384-lahJteCZGOzhUytnVY2Al7dwCspegC0/BRKJr++Z0+IGgkLhT34S7nzPbFmMEMwk"
   crossorigin="anonymous"
 ></script>
 ```
@@ -137,7 +137,7 @@ or
 ```html
 <script
   src="https://cdn.jsdelivr.net/npm/dt-algosdk@3.9.0-dt.5.2.0.0/dist/browser/algosdk.min.js"
-  integrity="sha384-2n765L1xRWTOpDvCXvDn+Q7B/nAi8wA4Z7JZ66DLJGGviWhlIeh9Ii3lNL2kMCFd"
+  integrity="sha384-lahJteCZGOzhUytnVY2Al7dwCspegC0/BRKJr++Z0+IGgkLhT34S7nzPbFmMEMwk"
   crossorigin="anonymous"
 ></script>
 ```

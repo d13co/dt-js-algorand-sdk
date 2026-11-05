@@ -119,7 +119,7 @@ From the package root (`import algosdk from 'algosdk'`):
 - the types `VersionsOrder`, `VersionsInclude`, `StateVersionsInclude`, `AccountVersionsExclude`, `MAX_VERSIONS_ROUNDS` (10,000) and `MAX_VERSIONS_KEY_BYTES` (64)
 - `dtModels`: the request and response models: `DTSimulateRequest`, `DTSimulateResponse`, `QueryProtocolOverride`, `QueryProtocolNote`, `QueryProtocolNoteHit`, the type `QueryProtocolNoteCode`, `CapabilitiesResponse`, `SimulateLimits`, `QueryLimits`, `QueryRequest`, `QueryCall`, `QueryResponse`, `QueryRoundResult`, `QueryCallResult`, the types `QueryRequestParams`, `QueryCallParams`, `AssetHolder`, `AssetHoldersResponse`, `BoxChange`, and the `...Version` / `...VersionsResponse` models
 
-`algosdk/client/algod` exports the same, with the models at its top level.
+`algosdk/client/algod` exports the same, with the models at its top level, except the retry policy, which `algosdk/client` exports.
 
 ## DTAlgodClient
 
@@ -570,7 +570,7 @@ A failed request is decided in this order:
 | 7   | `Retry-After` above `maxRetryAfterMs` (30 s)                                                         | give up (`retry-after-too-long`)                                               |
 | 8   | otherwise                                                                                            | retry: `rate-limited` (429), `node-busy` (busy 503), `server-error`, `network` |
 
-The requests under the node's time limit are `POST /v2/query`, `POST /v2/transactions/simulate`, `GET /v2/deltas/{round}`, and `GET` of a `/versions` or `/holders` listing: a retry would repeat all the work and run into the limit again.
+The requests under the node's time limit are `POST /v2/query`, `POST /v2/transactions/simulate`, `GET /v2/deltas/{round}`, and `GET` of a `/v2/…/versions` or `/v2/…/holders` listing (not algod's own `GET /versions`): a retry would repeat all the work and run into the limit again.
 
 A transaction submit (`POST /v2/transactions` and `/v2/transactions/async`) is retried only when the node surely did not take it: a 429, a busy 503, or a connection refused or never made (`ECONNREFUSED`, `ENOTFOUND`, `EAI_AGAIN`, `ENETUNREACH`, `EHOSTUNREACH`, `UND_ERR_CONNECT_TIMEOUT`). After a lost answer (a reset connection, a 502, a browser's failed fetch), a retry would get "transaction already in ledger" instead of the transaction ID: check for the transaction instead.
 
@@ -611,9 +611,9 @@ The second argument of `withRetry` is a `RetryOptions`: the `RetryPolicy` fields
 - `retry` (from 1) and `maxRetries`;
 - `method`, `path`, `status` (unless there was no response) and `error`.
 
-`formatRetryWait(wait)` makes a message of it, such as "The node is rate limiting requests: retrying in 1 s (retry 1 of 4)". The wait is frozen, and already in the client's `waits` (below) when `onWait` runs. An exception `onWait` throws, or a promise it rejects, is ignored.
+`formatRetryWait(wait)` makes a message of it, such as "The node is rate limiting requests: retrying in 1 s (retry 1 of 4)". The wait is frozen and, when it waits (`delayMs > 0`), already in the client's `waits` (below) when `onWait` runs. An exception `onWait` throws, or a promise it rejects, is ignored.
 
-To poll instead, `RetryingHTTPClient` (what `withRetry` returns) has `waits`, the requests waiting now, one each, and `waiting`, the one that waits longest.
+To poll instead, make the client with `new RetryingHTTPClient(inner, options)`: it has `waits`, the requests waiting now, one each, and `waiting`, the one that waits longest. `withRetry` is typed as a plain `BaseHTTPClient`, since it returns a client that already retries as it is.
 
 `withRetry` returns a client that already retries as it is, so requests are not retried twice over: such clients carry `RETRYING_CLIENT` (`Symbol.for('dt-algosdk.retrying-client')`), as dt-algokit-utils' does.
 

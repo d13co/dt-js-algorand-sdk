@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "module": "commonjs",
+    "skipLibCheck": true
+  },
+  "include": ["./src", "./tests/15.Retry.ts", "./tests/16.QueryStream.ts"]
+}

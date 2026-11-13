@@ -2,6 +2,7 @@ import {
   BaseHTTPClient,
   BaseHTTPClientResponse,
   BaseHTTPClientError,
+  BaseHTTPClientStreamResponse,
   Query,
 } from './baseHTTPClient.js';
 
@@ -197,6 +198,52 @@ export class URLTokenBaseHTTPClient implements BaseHTTPClient {
     });
 
     return URLTokenBaseHTTPClient.formatFetchResponse(res);
+  }
+
+  /**
+   * A POST whose answer is read as it arrives: it resolves once the headers
+   * are in, with the body as a stream. A non-2xx status throws, as `post`
+   * does. Abort the request with a `signal` in `customOptions`, or by
+   * cancelling the body.
+   */
+  async postStream(
+    relativePath: string,
+    data: Uint8Array,
+    query?: Query<string>,
+    requestHeaders?: Record<string, string>,
+    customOptions?: Record<string, unknown>
+  ): Promise<BaseHTTPClientStreamResponse> {
+    const headers = {
+      ...this.tokenHeader,
+      ...this.defaultHeaders,
+      ...(requestHeaders ?? {}),
+    };
+
+    const res = await fetch(this.getURL(relativePath, query), {
+      method: 'POST',
+      body: data,
+      headers,
+      ...(customOptions ?? {}),
+    });
+
+    await URLTokenBaseHTTPClient.checkHttpError(res);
+    // A fetch without streaming bodies (React Native, polyfills) has no
+    // res.body: the answer is read in full and handed over as one chunk
+    let body = res.body as ReadableStream<Uint8Array> | null | undefined;
+    if (!body) {
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          if (bytes.length > 0) controller.enqueue(bytes);
+          controller.close();
+        },
+      });
+    }
+    return {
+      body,
+      status: res.status,
+      headers: URLTokenBaseHTTPClient.formatFetchResponseHeaders(res.headers),
+    };
   }
 
   async delete(

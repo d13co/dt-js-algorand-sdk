@@ -804,9 +804,45 @@ describe('time travel', () => {
           maxResponseBytes: 67108864,
           maxRounds: 16,
           maxTotalCalls: 1024,
+          stream: [],
+          maxSeekRounds: 0,
+          maxCallScanBytes: 0,
+          maxScanStepBytes: 0,
+          opcodes: [],
         }
       );
       assert.ok(Object.isFrozen(got.query));
+    });
+
+    it('decodes the streams a node offers, frozen', async () => {
+      const stub = new StubClient([
+        ok({ ...withQuery, query: { ...withQuery.query, stream: ['sse'] } }),
+      ]);
+      const got = await new DTAlgodClient(stub, '').capabilities();
+      assert.deepStrictEqual(got.query?.stream, ['sse']);
+      assert.ok(Object.isFrozen(got.query?.stream));
+    });
+
+    it('decodes the time-travel opcode limits, frozen', async () => {
+      const stub = new StubClient([
+        ok({
+          ...withQuery,
+          query: {
+            ...withQuery.query,
+            'max-seek-rounds': 64,
+            'max-call-scan-bytes': 67108864,
+            'max-scan-step-bytes': 4194304,
+            opcodes: ['tt_seek', 'tt_acct_change'],
+          },
+        }),
+      ]);
+      const got = await new DTAlgodClient(stub, '').capabilities();
+      assert.strictEqual(got.query?.maxSeekRounds, 64);
+      assert.strictEqual(got.query?.maxCallScanBytes, 67108864);
+      assert.strictEqual(got.query?.maxScanStepBytes, 4194304);
+      assert.deepStrictEqual(got.query?.opcodes, ['tt_seek', 'tt_acct_change']);
+      assert.ok(Object.isFrozen(got.query?.opcodes));
+      assert.ok(DTAlgodClient.features.includes('query-opcodes'));
     });
 
     it('takes maxCalls * maxRounds as maxTotalCalls from a node without it', async () => {
@@ -897,6 +933,11 @@ describe('time travel', () => {
           maxResponseBytes: 0,
           maxRounds: 1,
           maxTotalCalls: 64,
+          stream: [],
+          maxSeekRounds: 0,
+          maxCallScanBytes: 0,
+          maxScanStepBytes: 0,
+          opcodes: [],
         }
       );
     });

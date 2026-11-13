@@ -34,5 +34,14 @@ export {
   effortOf,
 } from './effort.js';
 export type { default as RunQuery } from './query.js';
+export { QUERY_STREAM_TYPE, QueryStreamError } from './queryStream.js';
+export type {
+  QueryStreamEvent,
+  QueryStreamStartEvent,
+  QueryStreamLogsEvent,
+  QueryStreamCallEvent,
+  QueryStreamRoundEvent,
+  QueryStreamEndEvent,
+} from './queryStream.js';
 export type { default as GetAssetHolders } from './getAssetHolders.js';
 export * from './models.js';

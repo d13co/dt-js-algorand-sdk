@@ -55,7 +55,7 @@ npm (`package.json`):
 ```json
 {
   "dependencies": {
-    "algosdk": "npm:dt-algosdk@3.9.0-dt.5.2.0.0"
+    "algosdk": "npm:dt-algosdk@3.9.0-dt.6.2.1.0"
   },
   "overrides": {
     "algosdk": "$algosdk"
@@ -67,7 +67,7 @@ pnpm 10 and later (`pnpm-workspace.yaml`; pnpm 11 and later read overrides only 
 
 ```yaml
 overrides:
-  algosdk: npm:dt-algosdk@3.9.0-dt.5.2.0.0
+  algosdk: npm:dt-algosdk@3.9.0-dt.6.2.1.0
 ```
 
 pnpm 9 (`package.json`; it warns about an unmet `algosdk` peer dependency, which is harmless):
@@ -76,7 +76,7 @@ pnpm 9 (`package.json`; it warns about an unmet `algosdk` peer dependency, which
 {
   "pnpm": {
     "overrides": {
-      "algosdk": "npm:dt-algosdk@3.9.0-dt.5.2.0.0"
+      "algosdk": "npm:dt-algosdk@3.9.0-dt.6.2.1.0"
     }
   }
 }
@@ -87,21 +87,21 @@ Yarn and Bun (`package.json`):
 ```json
 {
   "dependencies": {
-    "algosdk": "npm:dt-algosdk@3.9.0-dt.5.2.0.0"
+    "algosdk": "npm:dt-algosdk@3.9.0-dt.6.2.1.0"
   },
   "resolutions": {
-    "algosdk": "npm:dt-algosdk@3.9.0-dt.5.2.0.0"
+    "algosdk": "npm:dt-algosdk@3.9.0-dt.6.2.1.0"
   }
 }
 ```
 
 Yarn 4 refuses versions published less than a day ago (`npmMinimalAgeGate`). To install a new dt-algosdk release right away, add `npmPreapprovedPackages: ["dt-algosdk"]` to `.yarnrc.yml`.
 
-Then check that only one copy is installed: `npm ls algosdk` or `pnpm why algosdk` (`yarn why dt-algosdk` on Yarn) should list `dt-algosdk@3.9.0-dt.5.2.0.0` and nothing else.
+Then check that only one copy is installed: `npm ls algosdk` or `pnpm why algosdk` (`yarn why dt-algosdk` on Yarn) should list `dt-algosdk@3.9.0-dt.6.2.1.0` and nothing else.
 
 Pin the exact version, with no `^` or `~` (`npm install -E`): dt-algosdk versions are prereleases, so `^3.9.0` matches none of them, while a `^` or `~` range on a dt-algosdk version matches every later dt-algosdk built on the same algosdk version, breaking releases included. A version reads `<algosdk version>-dt.<dt-algorand release>.<SDK release>`: `3.9.0-dt.5.2.0.0` is built on algosdk 3.9.0, covers the API of dt-algorand dt5 (`v5.0.5-dt5`), and is SDK release 2.0.0. The SDK release counts on across new algosdk and dt-algorand versions; it never starts over.
 
-To use a local checkout instead, run `npm run build` in it (and again after each change), then use it in place of the registry version. With pnpm, set the override to `link:/path/to/js-algorand-sdk`. With npm, put a tarball from `npm pack` in `dependencies` (`"algosdk": "file:./vendor/dt-algosdk-3.9.0-dt.5.2.0.0.tgz"`) and keep the override as `"$algosdk"`: npm rejects an override that differs from the direct dependency.
+To use a local checkout instead, run `npm run build` in it (and again after each change), then use it in place of the registry version. With pnpm, set the override to `link:/path/to/js-algorand-sdk`. With npm, put a tarball from `npm pack` in `dependencies` (`"algosdk": "file:./vendor/dt-algosdk-3.9.0-dt.6.2.1.0.tgz"`) and keep the override as `"$algosdk"`: npm rejects an override that differs from the direct dependency.
 
 ## New exports
 

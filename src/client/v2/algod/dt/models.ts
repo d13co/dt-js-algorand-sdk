@@ -2503,6 +2503,31 @@ export class QueryLimits implements Encodable {
           key: 'max-total-calls',
           valueSchema: new Uint64Schema(),
           omitEmpty: false,
+        },
+        {
+          key: 'stream',
+          valueSchema: new ArraySchema(new StringSchema()),
+          omitEmpty: true,
+        },
+        {
+          key: 'max-seek-rounds',
+          valueSchema: new Uint64Schema(),
+          omitEmpty: true,
+        },
+        {
+          key: 'max-call-scan-bytes',
+          valueSchema: new Uint64Schema(),
+          omitEmpty: true,
+        },
+        {
+          key: 'max-scan-step-bytes',
+          valueSchema: new Uint64Schema(),
+          omitEmpty: true,
+        },
+        {
+          key: 'opcodes',
+          valueSchema: new ArraySchema(new StringSchema()),
+          omitEmpty: true,
         }
       );
     }
@@ -2558,6 +2583,52 @@ export class QueryLimits implements Encodable {
   public maxTotalCalls: number;
 
   /**
+   * The streamed answers the node offers: `sse` when it streams a query's
+   * logs as Server-Sent Events as the calls make them (`RunQuery.stream`).
+   * Empty on nodes that only answer in full; `RunQuery.stream` works on them
+   * too, with the whole answer at the end.
+   */
+  public stream: string[];
+
+  /**
+   * The most rounds one call may move its reads to with the query-only
+   * `tt_seek` opcode; a call that seeks to more fails. Each round counts 4096
+   * bytes toward `maxCallStateBytes`, besides what the call reads there. 0
+   * when the node runs no `tt_seek` (node config `MaxAPIQuerySeekRounds`), as
+   * on nodes from before it.
+   */
+  public maxSeekRounds: number;
+
+  /**
+   * The most bytes of history the searches of one call for a change of a
+   * state key or of a box under a name prefix (`tt_global_key_change`,
+   * `tt_local_key_change`, `tt_box_prefix_change`) may read in all; a search
+   * once they are spent fails the call. 0 when the searches are off (node
+   * config `MaxAPIQueryCallScanBytes`), as on nodes from before them.
+   */
+  public maxCallScanBytes: number;
+
+  /**
+   * The most bytes of history one such search may read: one that reads that
+   * much without finding a change returns status 4 and the round to resume
+   * from. At most `maxCallScanBytes` (node config `MaxAPIQueryScanStepBytes`);
+   * 0 on nodes without the searches.
+   */
+  public maxScanStepBytes: number;
+
+  /**
+   * The time-travel opcodes the node runs in query programs (non-standard,
+   * first byte 0xff; simulate and blocks refuse them): `tt_seek`, and on a
+   * node that keeps history the change lookups (`tt_acct_change`,
+   * `tt_holding_change`, `tt_local_change`, `tt_asset_change`,
+   * `tt_app_change`, `tt_box_change`) and, with `maxCallScanBytes` above 0,
+   * the searches (`tt_global_key_change`, `tt_local_key_change`,
+   * `tt_box_prefix_change`). Empty when it runs none, as on nodes from before
+   * them.
+   */
+  public opcodes: string[];
+
+  /**
    * Creates a new `QueryLimits` object.
    * @param maxCalls - The most calls a request may hold.
    * @param maxCallBudget - The most opcode budget of a call, and its default.
@@ -2570,6 +2641,14 @@ export class QueryLimits implements Encodable {
    * @param maxRounds - The most entries a request may list in `rounds`.
    * @param maxTotalCalls - The most calls times listed rounds a request may
    * ask for; `maxCalls * maxRounds` when absent or 0, as on older nodes.
+   * @param stream - The streamed answers the node offers; none when absent.
+   * @param maxSeekRounds - The most rounds a call may `tt_seek` to; 0 when
+   * absent.
+   * @param maxCallScanBytes - The most history bytes a call's searches may
+   * read; 0 (no searches) when absent.
+   * @param maxScanStepBytes - The most history bytes one search may read; 0
+   * when absent.
+   * @param opcodes - The time-travel opcodes the node runs; none when absent.
    */
   constructor({
     maxCalls,
@@ -2579,6 +2658,11 @@ export class QueryLimits implements Encodable {
     maxResponseBytes,
     maxRounds,
     maxTotalCalls,
+    stream,
+    maxSeekRounds,
+    maxCallScanBytes,
+    maxScanStepBytes,
+    opcodes,
   }: {
     maxCalls: number | bigint;
     maxCallBudget: number | bigint;
@@ -2587,6 +2671,11 @@ export class QueryLimits implements Encodable {
     maxResponseBytes: number | bigint;
     maxRounds: number | bigint;
     maxTotalCalls?: number | bigint;
+    stream?: string[];
+    maxSeekRounds?: number | bigint;
+    maxCallScanBytes?: number | bigint;
+    maxScanStepBytes?: number | bigint;
+    opcodes?: string[];
   }) {
     this.maxCalls = ensureSafeInteger(maxCalls);
     this.maxCallBudget = ensureSafeInteger(maxCallBudget);
@@ -2600,6 +2689,11 @@ export class QueryLimits implements Encodable {
     this.maxTotalCalls = maxTotalCalls
       ? ensureSafeInteger(maxTotalCalls)
       : Math.min(this.maxCalls * this.maxRounds, Number.MAX_SAFE_INTEGER);
+    this.stream = stream ?? [];
+    this.maxSeekRounds = ensureSafeInteger(maxSeekRounds ?? 0);
+    this.maxCallScanBytes = ensureSafeInteger(maxCallScanBytes ?? 0);
+    this.maxScanStepBytes = ensureSafeInteger(maxScanStepBytes ?? 0);
+    this.opcodes = opcodes ?? [];
   }
 
   // eslint-disable-next-line class-methods-use-this
@@ -2616,6 +2710,11 @@ export class QueryLimits implements Encodable {
       ['max-response-bytes', this.maxResponseBytes],
       ['max-rounds', this.maxRounds],
       ['max-total-calls', this.maxTotalCalls],
+      ['stream', this.stream],
+      ['max-seek-rounds', this.maxSeekRounds],
+      ['max-call-scan-bytes', this.maxCallScanBytes],
+      ['max-scan-step-bytes', this.maxScanStepBytes],
+      ['opcodes', this.opcodes],
     ]);
   }
 
@@ -2633,6 +2732,11 @@ export class QueryLimits implements Encodable {
       maxResponseBytes: data.get('max-response-bytes') ?? 0,
       maxRounds: data.get('max-rounds') ?? 1,
       maxTotalCalls: data.get('max-total-calls'),
+      stream: data.get('stream'),
+      maxSeekRounds: data.get('max-seek-rounds'),
+      maxCallScanBytes: data.get('max-call-scan-bytes'),
+      maxScanStepBytes: data.get('max-scan-step-bytes'),
+      opcodes: data.get('opcodes'),
     });
   }
 }

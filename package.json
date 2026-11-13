@@ -127,7 +127,7 @@
     "lint:fix": "eslint --fix .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "check-types": "tsc --noEmit",
+    "check-types": "tsc --noEmit && tsc -p tsconfig.tests.json",
     "audit": "better-npm-audit audit",
     "commit-lint": "commitlint --edit -o"
   },

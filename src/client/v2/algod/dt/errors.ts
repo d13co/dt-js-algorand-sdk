@@ -296,7 +296,9 @@ export const QUERY_LOG_OVERHEAD_BYTES = 48;
  * through unchanged.
  * @param request - The request.
  */
-export async function queryEnabled(request: Promise<HTTPClientResponse>) {
+export async function queryEnabled<T = HTTPClientResponse>(
+  request: Promise<T>
+): Promise<T> {
   try {
     return await request;
   } catch (err) {

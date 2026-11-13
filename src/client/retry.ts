@@ -516,12 +516,36 @@ export class RetryingHTTPClient implements BaseHTTPClient {
   public readonly options?: RetryOptions;
 
   /**
+   * Present when `inner` has it: a streamed POST, retried by the policy until
+   * the answer's headers are in, never once its body has started.
+   */
+  readonly postStream?: BaseHTTPClient['postStream'];
+
+  /**
    * @param inner - The client that sends the requests.
    * @param options - The policy, merged with the defaults.
    */
   constructor(inner: BaseHTTPClient, options?: RetryOptions) {
     this.inner = inner;
     this.options = options;
+    if (typeof inner.postStream === 'function') {
+      this.postStream = (
+        relativePath,
+        data,
+        query,
+        requestHeaders,
+        customOptions
+      ) =>
+        this.send('post', relativePath, customOptions, () =>
+          inner.postStream!(
+            relativePath,
+            data,
+            query,
+            requestHeaders,
+            customOptions
+          )
+        );
+    }
   }
 
   /** The requests waiting to be retried now, one entry each. */

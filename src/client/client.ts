@@ -2,6 +2,7 @@ import * as utils from '../utils/utils.js';
 import {
   BaseHTTPClient,
   BaseHTTPClientResponse,
+  BaseHTTPClientStreamResponse,
   Query,
 } from './baseHTTPClient.js';
 import {
@@ -333,6 +334,61 @@ export class HTTPClient {
       );
 
       return HTTPClient.prepareResponse(res, 'application/json');
+    } catch (err) {
+      throw HTTPClient.prepareResponseError(err);
+    }
+  }
+
+  /**
+   * Whether this client's BaseHTTPClient reads answers as they arrive
+   * ({@link BaseHTTPClient.postStream}): {@link URLTokenBaseHTTPClient} and
+   * the retrying clients over it do; a wallet's client may not. False where
+   * the runtime has no `ReadableStream`.
+   */
+  canStream(): boolean {
+    // Streamed bodies are ReadableStreams, which some runtimes lack
+    return (
+      typeof this.bc.postStream === 'function' &&
+      typeof ReadableStream !== 'undefined'
+    );
+  }
+
+  /**
+   * Send a POST request whose answer is read as it arrives
+   * ({@link BaseHTTPClient.postStream}), as `post` sends it. Resolves once the
+   * headers are in; the caller reads or cancels the body. Throws when the
+   * BaseHTTPClient can't stream ({@link canStream}).
+   * @param options - The options to use for the request.
+   */
+  async postStream({
+    relativePath,
+    data,
+    query,
+    requestHeaders,
+    customOptions,
+  }: {
+    relativePath: string;
+    data: any;
+    query?: Query<any>;
+    requestHeaders?: Record<string, string>;
+    customOptions?: Record<string, unknown>;
+  }): Promise<BaseHTTPClientStreamResponse> {
+    if (!this.bc.postStream) {
+      throw new Error('This HTTP client cannot stream answers (no postStream)');
+    }
+    const fullHeaders = {
+      'content-type': 'application/json',
+      ...tolowerCaseKeys(requestHeaders ?? {}),
+    };
+
+    try {
+      return await this.bc.postStream(
+        relativePath,
+        HTTPClient.serializeData(data, fullHeaders),
+        query,
+        fullHeaders,
+        customOptions
+      );
     } catch (err) {
       throw HTTPClient.prepareResponseError(err);
     }

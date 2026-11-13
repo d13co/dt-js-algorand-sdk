@@ -10,6 +10,16 @@ export interface BaseHTTPClientResponse {
 }
 
 /**
+ * A response whose body is read as it arrives
+ * ({@link BaseHTTPClient.postStream}).
+ */
+export interface BaseHTTPClientStreamResponse {
+  body: ReadableStream<Uint8Array>;
+  status: number;
+  headers: Record<string, string>;
+}
+
+/**
  * BaseHTTPClientError is the interface that errors thrown
  * by methods of BaseHTTPClient should be using
  */
@@ -61,4 +71,17 @@ export interface BaseHTTPClient {
     requestHeaders?: Record<string, string>,
     customOptions?: Record<string, unknown>
   ): Promise<BaseHTTPClientResponse>;
+  /**
+   * Optional, dt-algosdk: a POST whose answer is read as it arrives, for
+   * streamed answers (`RunQuery.stream`). It resolves once the headers are in,
+   * with the body still to read; it throws as `post` does for a non-2xx
+   * status. Clients without it get full answers instead.
+   */
+  postStream?(
+    relativePath: string,
+    data: Uint8Array,
+    query?: Query<string>,
+    requestHeaders?: Record<string, string>,
+    customOptions?: Record<string, unknown>
+  ): Promise<BaseHTTPClientStreamResponse>;
 }

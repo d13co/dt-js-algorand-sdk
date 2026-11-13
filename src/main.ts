@@ -20,6 +20,7 @@ export {
   BaseHTTPClient,
   BaseHTTPClientResponse,
   BaseHTTPClientError,
+  BaseHTTPClientStreamResponse,
 } from './client/baseHTTPClient.js';
 export {
   AlgodTokenHeader,
@@ -126,8 +127,19 @@ export {
   MAX_QUERY_REQUEST_BYTES,
   QUERY_LOG_OVERHEAD_BYTES,
   TT_ROUND_HEADER,
+  QUERY_STREAM_TYPE,
+  QueryStreamError,
 } from './client/v2/algod/dt/index.js';
-export type { RunQuery, GetAssetHolders } from './client/v2/algod/dt/index.js';
+export type {
+  RunQuery,
+  GetAssetHolders,
+  QueryStreamEvent,
+  QueryStreamStartEvent,
+  QueryStreamLogsEvent,
+  QueryStreamCallEvent,
+  QueryStreamRoundEvent,
+  QueryStreamEndEvent,
+} from './client/v2/algod/dt/index.js';
 export * as dtModels from './client/v2/algod/dt/models.js';
 export * as indexerModels from './client/v2/indexer/models/types.js';
 export {

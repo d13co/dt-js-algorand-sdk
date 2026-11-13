@@ -73,6 +73,12 @@ export class DTAlgodClient extends AlgodClient {
    *   `timeLimitSeconds`, the `simulate` limits and the `query` limits);
    * - `query`: `query()`, and `query` on `capabilities()`;
    * - `query-total-calls`: `maxTotalCalls` on the `query` limits;
+   * - `query-stream`: `stream()` on `query()`, streamed answers read as they
+   *   arrive (`postStream` on the HTTP clients), and `stream` on the `query`
+   *   limits;
+   * - `query-opcodes`: `maxSeekRounds`, `maxCallScanBytes`, `maxScanStepBytes`
+   *   and `opcodes` on the `query` limits (the time-travel opcodes of query
+   *   programs);
    * - `versions-rounds`: `rounds()` on the `...Versions` methods, and
    *   `changedRound` on their entries;
    * - `versions-keys`: `include('keys')` on `getApplicationVersions`,
@@ -109,6 +115,8 @@ export class DTAlgodClient extends AlgodClient {
     'capabilities',
     'query',
     'query-total-calls',
+    'query-stream',
+    'query-opcodes',
     'versions-rounds',
     'versions-keys',
     'versions-pages',
@@ -668,7 +676,11 @@ export class DTAlgodClient extends AlgodClient {
         })
         .then((caps) => {
           Object.freeze(caps.simulate);
-          if (caps.query) Object.freeze(caps.query);
+          if (caps.query) {
+            Object.freeze(caps.query.stream);
+            Object.freeze(caps.query.opcodes);
+            Object.freeze(caps.query);
+          }
           return Object.freeze(caps);
         });
     }

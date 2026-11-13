@@ -115,6 +115,7 @@ From the package root (`import algosdk from 'algosdk'`):
 - `EFFORT_HEADER` (`x-algod-effort`), `parseEffortHeader`, `effortOf`, and the type `Effort`
 - `TT_ROUND_HEADER` (`x-algod-tt-round`)
 - `isQueryResponseTooLarge`, `MAX_QUERY_REQUEST_BYTES` (1,000,000), `QUERY_LOG_OVERHEAD_BYTES` (48), and the type `RunQuery` (the builder `query()` returns)
+- `QueryStreamError`, `QUERY_STREAM_TYPE` (`text/event-stream`), and the types `QueryStreamEvent`, `QueryStreamStartEvent`, `QueryStreamLogsEvent`, `QueryStreamCallEvent`, `QueryStreamRoundEvent`, `QueryStreamEndEvent` ([Streamed answers](#streamed-answers))
 - the type `GetAssetHolders` (the builder `getAssetHolders()` returns)
 - the types `VersionsOrder`, `VersionsInclude`, `StateVersionsInclude`, `AccountVersionsExclude`, `MAX_VERSIONS_ROUNDS` (10,000) and `MAX_VERSIONS_KEY_BYTES` (64)
 - `dtModels`: the request and response models: `DTSimulateRequest`, `DTSimulateResponse`, `QueryProtocolOverride`, `QueryProtocolNote`, `QueryProtocolNoteHit`, the type `QueryProtocolNoteCode`, `CapabilitiesResponse`, `SimulateLimits`, `QueryLimits`, `QueryRequest`, `QueryCall`, `QueryResponse`, `QueryRoundResult`, `QueryCallResult`, the types `QueryRequestParams`, `QueryCallParams`, `AssetHolder`, `AssetHoldersResponse`, `BoxChange`, and the `...Version` / `...VersionsResponse` models
@@ -139,7 +140,7 @@ const algod = algosdk.DTAlgodClient.from(algorand.client.algod);
 
 `supportsDT()` and `supportsAssetHolders()` say whether the node has the optional features they name; see [Optional node features](#optional-node-features).
 
-`DTAlgodClient.features` lists what this build of the SDK has, for code that finds the class at runtime on an algosdk that may be stock algosdk rather than dt-algosdk, as algokit-utils and generated clients do: `reads-at-round`, `versions`, `simulate-groups`, `from`, `group-results`, `from-transactions`, `capabilities` (`capabilities()`, `getCapabilities()`), `query`, `query-total-calls` (`maxTotalCalls`), `versions-rounds` (`rounds()` and `changedRound`), `versions-keys` (`include('keys')` and `changedKeys`), `versions-pages` (`pages()`), `holders` (`getAssetHolders`, `supportsAssetHolders`), `response-headers` (`doWithHeaders()`, `effortOf`, `parseEffortHeader`), `error-helpers` (`isNodeBusy`, `retryAfterSeconds`, `isTimeLimitExceeded`, `isRoundTooLarge`, `isHistoryUnavailable`), `round-header` (reads at a round check `X-Algod-TT-Round`, `TT_ROUND_HEADER`), `retry-policy` (the [retry policy](#retries), `isTooManyRequests` and `isNetworkError`). It says nothing about the node: ask the node with `capabilities()`, `supportsDT()` and `supportsAssetHolders()`.
+`DTAlgodClient.features` lists what this build of the SDK has, for code that finds the class at runtime on an algosdk that may be stock algosdk rather than dt-algosdk, as algokit-utils and generated clients do: `reads-at-round`, `versions`, `simulate-groups`, `from`, `group-results`, `from-transactions`, `capabilities` (`capabilities()`, `getCapabilities()`), `query`, `query-total-calls` (`maxTotalCalls`), `query-stream` (`stream()` on `query()`, `postStream` on the HTTP clients, `stream` on the query limits), `query-opcodes` (`maxSeekRounds`, `maxCallScanBytes`, `maxScanStepBytes` and `opcodes` on the query limits), `versions-rounds` (`rounds()` and `changedRound`), `versions-keys` (`include('keys')` and `changedKeys`), `versions-pages` (`pages()`), `holders` (`getAssetHolders`, `supportsAssetHolders`), `response-headers` (`doWithHeaders()`, `effortOf`, `parseEffortHeader`), `error-helpers` (`isNodeBusy`, `retryAfterSeconds`, `isTimeLimitExceeded`, `isRoundTooLarge`, `isHistoryUnavailable`), `round-header` (reads at a round check `X-Algod-TT-Round`, `TT_ROUND_HEADER`), `retry-policy` (the [retry policy](#retries), `isTooManyRequests` and `isNetworkError`). It says nothing about the node: ask the node with `capabilities()`, `supportsDT()` and `supportsAssetHolders()`.
 
 ```typescript
 const DT = (algosdk as any).DTAlgodClient;
@@ -429,6 +430,37 @@ for (const r of res.rounds) {
 
 The client checks that the response has one entry per round, for the round asked for, and one result per call, and throws an `Error` otherwise. `doRaw()` returns the msgpack body unchecked.
 
+### Streamed answers
+
+`.stream(onEvent)` runs the query with the answer streamed: the node sends each call's logs as the called app makes them, as Server-Sent Events, and `onEvent` gets each one as it arrives. The promise resolves to the same `QueryResponse` as `do()`, with the same checks, once the stream ends. So a page can show a call's results while the other calls still run, and still use the full response at the end.
+
+```typescript
+const response = await algod
+  .query({ program, calls })
+  .rounds([r1, r2])
+  .stream((event) => {
+    if (event.type === 'logs')
+      render(event.round, event.call, event.index, event.logs);
+    if (event.type === 'round' && event.error) discard(event.round);
+  });
+```
+
+| Event   | Fields                                             | When                                                                                                             |
+| ------- | -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `start` | `lastRound`, `rounds`                              | first: the round of each entry of `rounds`, 0 resolved                                                           |
+| `logs`  | `round`, `call`, `index`, `logs`                   | as the called app logs; `index` is the first log's index in the call, and a call's logs come in order, each once |
+| `call`  | `round`, `call`, `logs` (a count), `cost`, `error` | when a call ends, after its logs                                                                                 |
+| `round` | `round`, `protocolOverride`, `error`               | when every call of a round ended; with an `error` the round has no results, so drop what came for its calls      |
+| `end`   | `effort`, `error`, `status`                        | last; `effort` is the `X-Algod-Effort` value                                                                     |
+
+Each distinct round comes once, however many entries of `rounds` it has. Events of different calls interleave, across rounds too, and `round` events come in the order the rounds end, not the order of `rounds`; a call's events come in order.
+
+- **Nodes and clients that can't stream.** The node streams when its `capabilities().query.stream` lists `"sse"`. A node that doesn't answers in full (the request asks for `text/event-stream`, then msgpack), and so does an HTTP client without `postStream` (a wallet's `BaseHTTPClient`). `onEvent` then gets the events the stream would have had, all at once, before the promise resolves: code written for the stream works on every node. `HTTPClient.canStream()` tells whether a client streams.
+- **Errors.** Errors before the stream starts are thrown as by `do()`: an invalid request, a busy node (503), queries disabled (`DTUnsupportedError`). The HTTP client's retries apply only to them, never once the body has started. A stream that ends early rejects with a `QueryStreamError`: `status` is what a full answer would have had (400 over `maxResponseBytes`, which `isQueryResponseTooLarge` recognizes, 504 at the time limit, 500), or `truncated` is true when the connection dropped before the `end` event. The events before it are what the calls did up to then: split the request and send it again as for `do()`, skipping the logs already shown, since a call makes the same logs at the same round.
+- **Limits.** A stream counts each log once toward `maxResponseBytes`, as it is sent: a round listed twice counts once.
+- **Stopping.** An exception `onEvent` throws closes the connection and rejects the promise with it; so does aborting a `signal` in `customOptions` (`.stream(onEvent, undefined, { signal })`). The node stops the calls when the connection closes.
+- **HTTP clients.** `postStream(relativePath, data, query, headers, customOptions)` is an optional `BaseHTTPClient` method that resolves once the headers are in, with the body as a `ReadableStream`. `URLTokenBaseHTTPClient` has it, and `RetryingHTTPClient` has it when the client it wraps does.
+
 ### Differences from simulate
 
 Code that falls back from query to simulate (or back) must handle these:
@@ -447,6 +479,10 @@ Code that falls back from query to simulate (or back) must handle these:
 - `maxCallBudget`, the most (and default) budget per call;
 - `maxCallLogBytes`, the most bytes each program of a call may log, in up to 2048 logs (0 for the protocol's limits);
 - `maxResponseBytes`, the most bytes of logs and errors a request may return (0 for no limit). Each log counts `QUERY_LOG_OVERHEAD_BYTES` (48) more than its length, and a round listed twice counts twice.
+- `stream`, the streamed answers the node offers: `["sse"]` when it streams logs as the calls make them ([Streamed answers](#streamed-answers)), empty on nodes that only answer in full.
+- `maxSeekRounds`, the most rounds one call may move its reads to with the query-only `tt_seek` opcode (each counts 4096 bytes toward `maxCallStateBytes`); 0 when the node runs no `tt_seek`.
+- `maxCallScanBytes`, the most bytes of history the searches of one call (`tt_global_key_change`, `tt_local_key_change`, `tt_box_prefix_change`) may read in all, and `maxScanStepBytes`, the most one search may read before it returns status 4 and the round to resume from; 0 when the searches are off.
+- `opcodes`, the time-travel opcodes the node runs in query programs (first byte 0xff): `tt_seek`, the `tt_*_change` lookups on a node that keeps history, and the searches when `maxCallScanBytes` is above 0; empty when it runs none. A program with one the node lacks fails with `illegal opcode 0xff`.
 
 The request body may be at most `MAX_QUERY_REQUEST_BYTES` (1,000,000) bytes of msgpack (`encodeMsgpack(request).length`), a fixed limit of the node that `capabilities()` does not report. The client checks none of these.
 
@@ -638,14 +674,16 @@ dt-algorand lists `Retry-After`, `X-Algod-Effort` and `X-Algod-TT-Round` in `Acc
 
 dt-algosdk covers the API of the current dt-algorand release. Every dt-algorand node has the capabilities endpoint, several groups per simulate request and the query endpoint; the rest depends on its config. `capabilities()` reads it once per client, and only the asset holders index needs a probe of its own:
 
-| Feature                                                                 | Node config                                | How to tell                                                    | When off                                                                         |
-| ----------------------------------------------------------------------- | ------------------------------------------ | -------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| Time travel: reads at past rounds, `...Versions`, simulate at any round | `EnableTimeTravel`                         | `supportsDT()` (`timeTravel` of the capabilities)              | `DTUnsupportedError` (the `/versions` and holders routes 404, `round` is a 400)  |
-| Asset holders                                                           | `TimeTravelHoldersIndex` (and time travel) | `supportsAssetHolders()`, one probe that reads nothing, cached | `DTUnsupportedError`; an index not built yet is a 503 for `isHistoryUnavailable` |
-| Query                                                                   | `MaxAPIQueryCalls` above 0                 | `query` of the capabilities                                    | `DTUnsupportedError`                                                             |
-| Several groups per simulate request                                     | `MaxAPISimulateGroups` above 1             | `simulate.maxTxnGroups` of the capabilities                    | the node's 400 `too many transaction groups`                                     |
-| Execution traces, protocol `future`                                     | `EnableDeveloperAPI`                       | `developerApi` of the capabilities                             | the node's 400                                                                   |
-| `X-Algod-Effort`                                                        | `EnableEffortHeader`                       | the header is present                                          | `effortOf(headers)` is undefined                                                 |
+| Feature                                                                 | Node config                                                                                                                                                   | How to tell                                                                                 | When off                                                                         |
+| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| Time travel: reads at past rounds, `...Versions`, simulate at any round | `EnableTimeTravel`                                                                                                                                            | `supportsDT()` (`timeTravel` of the capabilities)                                           | `DTUnsupportedError` (the `/versions` and holders routes 404, `round` is a 400)  |
+| Asset holders                                                           | `TimeTravelHoldersIndex` (and time travel)                                                                                                                    | `supportsAssetHolders()`, one probe that reads nothing, cached                              | `DTUnsupportedError`; an index not built yet is a 503 for `isHistoryUnavailable` |
+| Query                                                                   | `MaxAPIQueryCalls` above 0                                                                                                                                    | `query` of the capabilities                                                                 | `DTUnsupportedError`                                                             |
+| Query streaming                                                         | none: every node with query on, from the release with streams                                                                                                 | `stream` of the query limits lists `"sse"`                                                  | `stream()` gets the full answer and replays its events                           |
+| Time-travel opcodes in query programs                                   | `MaxAPIQuerySeekRounds` above 0 for `tt_seek`; also `EnableTimeTravel` for the `tt_*_change` lookups, and `MaxAPIQueryCallScanBytes` above 0 for the searches | `opcodes` of the query limits (and `maxSeekRounds`, `maxCallScanBytes`, `maxScanStepBytes`) | `opcodes` lacks it; a program using it fails with `illegal opcode 0xff`          |
+| Several groups per simulate request                                     | `MaxAPISimulateGroups` above 1                                                                                                                                | `simulate.maxTxnGroups` of the capabilities                                                 | the node's 400 `too many transaction groups`                                     |
+| Execution traces, protocol `future`                                     | `EnableDeveloperAPI`                                                                                                                                          | `developerApi` of the capabilities                                                          | the node's 400                                                                   |
+| `X-Algod-Effort`                                                        | `EnableEffortHeader`                                                                                                                                          | the header is present                                                                       | `effortOf(headers)` is undefined                                                 |
 
 Against stock algod, `DTAlgodClient` works for everything inherited from `AlgodClient`. `capabilities()` falls back to stock algod's (`reported` false), so `supportsDT()` and `supportsAssetHolders()` are false and `query` is undefined. Gate the additions on these: stock algod ignores `round` and answers with the latest state (a read at a round throws `DTUnsupportedError`, as the answer has no `X-Algod-TT-Round`), rejects several simulate groups with its own 400, and answers the fork's routes unevenly: `getAssetVersions`, `accountAssetVersions`, `accountApplicationVersions` and `getAssetHolders` get its router's 400 (`Invalid format for parameter asset-id` or `application-id`), thrown as the plain HTTP error, while the other `...Versions` methods get a 404, thrown as a `DTUnsupportedError` that says time travel is off.
 

@@ -12,6 +12,8 @@ import { SimulateTransactionGroupResult } from '../models/types.js';
  * - the asset holders index is off (`TimeTravelHoldersIndex`):
  *   `getAssetHolders`;
  * - queries are disabled (`MaxAPIQueryCalls` 0): `query`;
+ * - the node does not serve the state changes endpoint (time travel off, or
+ *   a node from before it): `getTxnStateChangesForRound`;
  * - the node has no capabilities endpoint, which every dtalgod node has:
  *   it is stock algod (`getCapabilities`).
  */
@@ -330,6 +332,23 @@ export async function queryEnabled(request: Promise<HTTPClientResponse>) {
 export function isQueryResponseTooLarge(err: unknown): boolean {
   const { status, text } = describe(err);
   return status === 400 && /query response too large/.test(text);
+}
+
+/**
+ * Whether an error thrown by `getTxnStateChangesForRound` means its answer is
+ * over the node's `StateChangesLimits.maxResponseBytes` (or its evaluation
+ * logged more than four times that): a 400 saying the state changes
+ * `take more than MaxAPIStateChangesResponseBytes`. Narrow the request with
+ * `app()`, or split its transactions with `txids()`, and retry.
+ *
+ * @param err - The error thrown by a request.
+ */
+export function isStateChangesTooLarge(err: unknown): boolean {
+  const { status, text } = describe(err);
+  return (
+    status === 400 &&
+    /take more than MaxAPIStateChangesResponseBytes/.test(text)
+  );
 }
 
 /**

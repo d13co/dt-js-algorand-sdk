@@ -2341,6 +2341,12 @@ export class ApplicationStateOperation implements Encodable {
           key: 'new-value',
           valueSchema: new OptionalSchema(AvmValue.encodingSchema),
           omitEmpty: true,
+        },
+        // dt-algosdk: not in upstream's spec, keep when regenerating.
+        {
+          key: 'app-id',
+          valueSchema: new OptionalSchema(new Uint64Schema()),
+          omitEmpty: true,
         }
       );
     }
@@ -2375,6 +2381,14 @@ export class ApplicationStateOperation implements Encodable {
   public newValue?: AvmValue;
 
   /**
+   * The application whose state the operation changed. It differs from the
+   * running application for the foreign box opcodes (`app_box_*`). Set by
+   * dtalgod nodes only (non-standard fork feature; dt-algosdk: not in
+   * upstream's spec, keep when regenerating).
+   */
+  public appId?: bigint;
+
+  /**
    * Creates a new `ApplicationStateOperation` object.
    * @param appStateType - Type of application state. Value `g` is **global state**, `l` is **local
    * state**, `b` is **boxes**.
@@ -2383,6 +2397,8 @@ export class ApplicationStateOperation implements Encodable {
    * @param account - For local state changes, the address of the account associated with the local
    * state.
    * @param newValue - Represents an AVM value.
+   * @param appId - The application whose state the operation changed (dtalgod
+   * nodes only).
    */
   constructor({
     appStateType,
@@ -2390,12 +2406,14 @@ export class ApplicationStateOperation implements Encodable {
     operation,
     account,
     newValue,
+    appId,
   }: {
     appStateType: string;
     key: string | Uint8Array;
     operation: string;
     account?: Address | string;
     newValue?: AvmValue;
+    appId?: number | bigint;
   }) {
     this.appStateType = appStateType;
     this.key = typeof key === 'string' ? base64ToBytes(key) : key;
@@ -2403,6 +2421,7 @@ export class ApplicationStateOperation implements Encodable {
     this.account =
       typeof account === 'string' ? Address.fromString(account) : account;
     this.newValue = newValue;
+    this.appId = typeof appId === 'undefined' ? undefined : ensureBigInt(appId);
   }
 
   // eslint-disable-next-line class-methods-use-this
@@ -2427,6 +2446,7 @@ export class ApplicationStateOperation implements Encodable {
           ? this.newValue.toEncodingData()
           : undefined,
       ],
+      ['app-id', this.appId],
     ]);
   }
 
@@ -2443,6 +2463,7 @@ export class ApplicationStateOperation implements Encodable {
         typeof data.get('new-value') !== 'undefined'
           ? AvmValue.fromEncodingData(data.get('new-value'))
           : undefined,
+      appId: data.get('app-id'),
     });
   }
 }

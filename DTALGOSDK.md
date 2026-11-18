@@ -14,6 +14,7 @@
   - [Changed keys](#changed-keys)
   - [Key and prefix filters](#key-and-prefix-filters)
 - [Asset holders](#asset-holders)
+- [State changes of a round](#state-changes-of-a-round)
 - [Simulate](#simulate)
 - [Query](#query)
 - [Capabilities](#capabilities)
@@ -34,12 +35,13 @@
 | Changed state keys                                | none                                                 | `include('keys')` on the application state versions: the global or local state keys each version changed (`changedKeys`)                   |
 | History of one key or box map                     | none                                                 | `key()` on the application and local state versions (with `keyValue`), `prefix()` on the boxes versions                                    |
 | Asset holders                                     | none (use an indexer)                                | `getAssetHolders(assetId)`: every holder of an asset at a round, paged with the round pinned                                               |
+| App state changes                                 | none (diff the deltas yourself)                      | `getTxnStateChangesForRound(round)`: each transaction's global, local and box changes, before and after, filtered by app or txids          |
 | Simulate: groups per request                      | one                                                  | several (node's `MaxAPISimulateGroups`, default 16), in sequence                                                                           |
 | Simulate: round                                   | the node's last few rounds                           | any round since genesis with `round`                                                                                                       |
 | Simulate results                                  | `txnGroups`                                          | also `groupResult()` / `groupResults()`, which return each group's outcome or a typed error                                                |
 | Request building                                  | `SimulateRequest`                                    | `DTSimulateRequest`, with `fromTransactions()` for unsigned transactions                                                                   |
 | Read-only TEAL calls                              | simulate with signed or empty-signature transactions | `query()`: one program or app, many calls, at many rounds, logs and cost per call                                                          |
-| Node features and limits                          | none                                                 | `capabilities()`: time travel, developer API, time limit, and the `simulate` and `query` limits                                            |
+| Node features and limits                          | none                                                 | `capabilities()`: time travel, developer API, time limit, and the `simulate`, `query` and `stateChanges` limits                            |
 | Errors                                            | HTTP errors                                          | `DTUnsupportedError` when the node lacks a feature, `SimulateGroupError` per failed group                                                  |
 | Busy, time limit and history errors               | HTTP errors                                          | `isNodeBusy`, `isTooManyRequests`, `retryAfterSeconds`, `isTimeLimitExceeded`, `isRoundTooLarge`, `isHistoryUnavailable`, `isNetworkError` |
 | Retries                                           | none                                                 | `withRetry(baseClient, policy)`: one retry policy for busy nodes, rate limits and network errors, with `onWait` to tell users              |
@@ -116,8 +118,9 @@ From the package root (`import algosdk from 'algosdk'`):
 - `TT_ROUND_HEADER` (`x-algod-tt-round`)
 - `isQueryResponseTooLarge`, `MAX_QUERY_REQUEST_BYTES` (1,000,000), `QUERY_LOG_OVERHEAD_BYTES` (48), and the type `RunQuery` (the builder `query()` returns)
 - the type `GetAssetHolders` (the builder `getAssetHolders()` returns)
+- `isStateChangesTooLarge`, and the type `GetTxnStateChangesForRound` (the builder `getTxnStateChangesForRound()` returns)
 - the types `VersionsOrder`, `VersionsInclude`, `StateVersionsInclude`, `AccountVersionsExclude`, `MAX_VERSIONS_ROUNDS` (10,000) and `MAX_VERSIONS_KEY_BYTES` (64)
-- `dtModels`: the request and response models: `DTSimulateRequest`, `DTSimulateResponse`, `QueryProtocolOverride`, `QueryProtocolNote`, `QueryProtocolNoteHit`, the type `QueryProtocolNoteCode`, `CapabilitiesResponse`, `SimulateLimits`, `QueryLimits`, `QueryRequest`, `QueryCall`, `QueryResponse`, `QueryRoundResult`, `QueryCallResult`, the types `QueryRequestParams`, `QueryCallParams`, `AssetHolder`, `AssetHoldersResponse`, `BoxChange`, and the `...Version` / `...VersionsResponse` models
+- `dtModels`: the request and response models: `DTSimulateRequest`, `DTSimulateResponse`, `QueryProtocolOverride`, `QueryProtocolNote`, `QueryProtocolNoteHit`, the type `QueryProtocolNoteCode`, `CapabilitiesResponse`, `SimulateLimits`, `QueryLimits`, `QueryRequest`, `QueryCall`, `QueryResponse`, `QueryRoundResult`, `QueryCallResult`, the types `QueryRequestParams`, `QueryCallParams`, `AssetHolder`, `AssetHoldersResponse`, `StateChangesLimits`, `TxnStateChangesResponse`, `TxnStateChanges`, `AppStateChange`, `BoxChange`, and the `...Version` / `...VersionsResponse` models
 
 `algosdk/client/algod` exports the same, with the models at its top level, except the retry policy, which `algosdk/client` exports.
 
@@ -137,9 +140,9 @@ const algod = algosdk.DTAlgodClient.from(algorand.client.algod);
 
 `from` sends requests through the existing client's HTTP client (same server, token, headers and custom `BaseHTTPClient`), returns its argument if it already is a `DTAlgodClient`, and returns the same `DTAlgodClient` each time it is called with the same client, so cached answers (`supportsDT()`, `capabilities()`) are shared. The source client may come from another copy of algosdk, since it is read by shape, but transactions and models passed to the new client must come from this copy. The HTTP client of algosdk 3.9.0 and earlier keys response headers by value (see [Bug fixes and changes to upstream code](#bug-fixes-and-changes-to-upstream-code)); the round, effort and `Retry-After` checks read both shapes, but `doWithHeaders()` returns the headers as that client gives them.
 
-`supportsDT()` and `supportsAssetHolders()` say whether the node has the optional features they name; see [Optional node features](#optional-node-features).
+`supportsDT()`, `supportsAssetHolders()` and `supportsStateChanges()` say whether the node has the optional features they name; see [Optional node features](#optional-node-features).
 
-`DTAlgodClient.features` lists what this build of the SDK has, for code that finds the class at runtime on an algosdk that may be stock algosdk rather than dt-algosdk, as algokit-utils and generated clients do: `reads-at-round`, `versions`, `simulate-groups`, `from`, `group-results`, `from-transactions`, `capabilities` (`capabilities()`, `getCapabilities()`), `query`, `query-total-calls` (`maxTotalCalls`), `versions-rounds` (`rounds()` and `changedRound`), `versions-keys` (`include('keys')` and `changedKeys`), `versions-pages` (`pages()`), `holders` (`getAssetHolders`, `supportsAssetHolders`), `response-headers` (`doWithHeaders()`, `effortOf`, `parseEffortHeader`), `error-helpers` (`isNodeBusy`, `retryAfterSeconds`, `isTimeLimitExceeded`, `isRoundTooLarge`, `isHistoryUnavailable`), `round-header` (reads at a round check `X-Algod-TT-Round`, `TT_ROUND_HEADER`), `retry-policy` (the [retry policy](#retries), `isTooManyRequests` and `isNetworkError`). It says nothing about the node: ask the node with `capabilities()`, `supportsDT()` and `supportsAssetHolders()`.
+`DTAlgodClient.features` lists what this build of the SDK has, for code that finds the class at runtime on an algosdk that may be stock algosdk rather than dt-algosdk, as algokit-utils and generated clients do: `reads-at-round`, `versions`, `simulate-groups`, `from`, `group-results`, `from-transactions`, `capabilities` (`capabilities()`, `getCapabilities()`), `query`, `query-total-calls` (`maxTotalCalls`), `versions-rounds` (`rounds()` and `changedRound`), `versions-keys` (`include('keys')` and `changedKeys`), `versions-pages` (`pages()`), `holders` (`getAssetHolders`, `supportsAssetHolders`), `state-changes` (`getTxnStateChangesForRound`, `supportsStateChanges`, `stateChanges` of the capabilities, `isStateChangesTooLarge`), `simulate-app-id` (`appId` on simulate trace state changes), `response-headers` (`doWithHeaders()`, `effortOf`, `parseEffortHeader`), `error-helpers` (`isNodeBusy`, `retryAfterSeconds`, `isTimeLimitExceeded`, `isRoundTooLarge`, `isHistoryUnavailable`), `round-header` (reads at a round check `X-Algod-TT-Round`, `TT_ROUND_HEADER`), `retry-policy` (the [retry policy](#retries), `isTooManyRequests` and `isNetworkError`). It says nothing about the node: ask the node with `capabilities()`, `supportsDT()`, `supportsAssetHolders()` and `supportsStateChanges()`.
 
 ```typescript
 const DT = (algosdk as any).DTAlgodClient;
@@ -325,6 +328,42 @@ Errors:
 - an asset that does not exist at the round, also a round before its creation: the node's 404 `asset does not exist`, passed through;
 - an index still being built: 503 `the asset holders index is not complete`, passed through; `isHistoryUnavailable(err)` recognizes it.
 
+## State changes of a round
+
+`getTxnStateChangesForRound(round)` (`GET /v2/deltas/{round}/txn/state-changes`) lists the app state changes of each transaction of a round that changed any, top-level and inner, in execution order: globals, local states and boxes, each with its app and its value before and after the transaction. It needs a node with time travel (`EnableTimeTravel`); `supportsStateChanges()` (the `stateChanges` of the capabilities) finds out first.
+
+- `.app(id)`: only that app's changes (0 sends no filter).
+- `.txid(id)`, `.txids([...])`: only these top-level transactions and their inner transactions. Pass all of a group's txids in one call: `txids` is sent as one comma-separated parameter, as the node requires, and replaces any list set before. The two combine. An empty list or a malformed txid is rejected before sending.
+- The request is msgpack. `round` of the response is checked against the round asked for. The answer has no `X-Algod-TT-Round`: the round is in the path.
+
+The response is a `TxnStateChangesResponse`: `round` (bigint) and `txns`, each a `TxnStateChanges`:
+
+| Field     | Meaning                                                                                                                                  |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `path`    | `number[]`: the index in the block's payset, then the index among the parent's inner transactions at each level (across all its submits) |
+| `txid`    | the transaction ID, for a top-level transaction only                                                                                     |
+| `changes` | `AppStateChange[]`, in the order the transaction first changed each key                                                                  |
+
+An `AppStateChange` has `appId` (bigint), `appStateType` (a string: `'g'` global, `'l'` local or `'b'` box, or a value a newer node sends kept as is), `account` (an `Address`, for local state), `key` (`Uint8Array`, the state key or box name), and `before` and `after`, algosdk `TealValue`s (`type` 1 bytes or 2 uint, `bytes` a `Uint8Array`, `uint` a bigint). A missing `before` means the key did not exist; a missing `after` that it was deleted, its local state cleared, or its app deleted (its boxes stay). A transaction's changes are the net over it and its inner transactions, and a key that ends as it began is left out.
+
+```typescript
+const { txns } = await algod
+  .getTxnStateChangesForRound(50_000_000)
+  .txids(group.map((t) => t.txID()))
+  .do();
+for (const { path, changes } of txns) {
+  for (const c of changes)
+    console.log(path, c.appId, c.appStateType, c.key, c.before, c.after);
+}
+```
+
+The node re-evaluates the round's block for each request, so the filters shrink the answer, not the work. Errors:
+
+- a node without the endpoint (time travel off, stock algod, a dtalgod node from before it: the router's 404 `Not Found`): `DTUnsupportedError`;
+- an answer over `stateChanges.maxResponseBytes` of the capabilities (default 16 MiB): a 400 that `isStateChangesTooLarge(err)` recognizes; narrow it with `app()` or fewer `txids()`;
+- a round whose block is not stored, round 0, a round not reached yet, a txid not in the round: the node's 404, passed through;
+- every re-evaluation slot busy: a 503 for `isNodeBusy`; the time limit: a 504 for `isTimeLimitExceeded`; a re-evaluation that does not reproduce the round: a 500.
+
 ## Simulate
 
 `DTAlgodClient.simulateTransactions(request)` accepts a stock `SimulateRequest` or a `dtModels.DTSimulateRequest`, and sends it as algosdk would, with several groups allowed. Simulate is upstream's otherwise: dt-algorand dt5 removed the fork's simulate options (`rounds`, `parallelGroups`, the validity window modes and `protocol`), which `query()` replaced. For read-only calls at several rounds, each run alone, or under a later protocol, use [Query](#query).
@@ -359,6 +398,8 @@ const res = await algod.simulateTransactions(request).do();
 
 - `groupResult(groupIndex)`: one group, as `{ ok: true, result }` or `{ ok: false, error }`;
 - `groupResults(groupCount?)`: every group's outcome, in request order. It defaults to the number of groups the request had (`requestGroupCount`, set by `simulateTransactions().do()`).
+
+With state change tracing (`execTraceConfig` with `stateChange: true`), each `ApplicationStateOperation` in a trace's `stateChanges` also has `appId` from a dtalgod node: the app whose state the opcode changed, which is not the running app for the foreign box opcodes (`app_box_*`). Stock algod leaves it undefined.
 
 The `error` is a `SimulateGroupError` with `kind`:
 
@@ -499,6 +540,7 @@ if (!query) {
 | `timeLimitSeconds` | how long the node works on a simulate, query, versions or delta request before a 504, 0 for no limit                                                                                           |
 | `simulate`         | `SimulateLimits` of `POST /v2/transactions/simulate`, below                                                                                                                                    |
 | `query`            | `QueryLimits` of `POST /v2/query` (`maxCalls`, `maxCallBudget`, `maxCallLogBytes`, `maxCallStateBytes`, `maxResponseBytes`, `maxRounds`, `maxTotalCalls`); undefined when queries are disabled |
+| `stateChanges`     | `StateChangesLimits` of the state changes endpoint (`maxResponseBytes`, 0 for no limit); undefined when the node does not serve it                                                             |
 | `reported`         | the node reported these; false for the fallback below                                                                                                                                          |
 
 `simulate`:
@@ -510,9 +552,9 @@ if (!query) {
 
 dt5 nodes no longer report simulate's `max-rounds` and `resource-limit-multiplier`, and the client ignores them when a dt4 node sends them.
 
-A 0 limit from the node means no limit. `simulate` and `query` are frozen too.
+A 0 limit from the node means no limit. `simulate`, `query` and `stateChanges` are frozen too.
 
-The client reads capabilities leniently, so a node with a key more or less than this client knows still answers `capabilities()`: unknown keys are ignored, and a missing key takes a safe default. The flags default to false and `timeLimitSeconds` to 0. `simulate` defaults to stock algod's limits (1 group, 320,000 extra budget). In `query`, `maxCalls` and `maxRounds` default to 1, `maxCallBudget` to 700, the byte limits to 0, and `maxTotalCalls` to `maxCalls * maxRounds`. A value of the wrong type still fails. dt-algosdk 3.9.0-dt.4.1.0.0 and earlier required every key, so they cannot read a dt5 node's capabilities, which lack `simulate.max-rounds`.
+The client reads capabilities leniently, so a node with a key more or less than this client knows still answers `capabilities()`: unknown keys are ignored, and a missing key takes a safe default. The flags default to false and `timeLimitSeconds` to 0. `simulate` defaults to stock algod's limits (1 group, 320,000 extra budget). In `query`, `maxCalls` and `maxRounds` default to 1, `maxCallBudget` to 700, the byte limits to 0, and `maxTotalCalls` to `maxCalls * maxRounds`. In `stateChanges`, `maxResponseBytes` defaults to 0. A value of the wrong type still fails. dt-algosdk 3.9.0-dt.4.1.0.0 and earlier required every key, so they cannot read a dt5 node's capabilities, which lack `simulate.max-rounds`.
 
 Every dtalgod node serves its capabilities, so stock algod is the only node without them (a 404): it gets stock algod's instead (`CapabilitiesResponse.stock()`), with `reported` false: no time travel, no queries, and one group per simulate request, so send one request per round with `round` set. `getCapabilities()` is the uncached request, which throws `DTUnsupportedError` on a 404. The endpoint replaces `GET /v2/transactions/simulate/limits` of earlier fork builds, which the client no longer reads.
 
@@ -643,11 +685,12 @@ dt-algosdk covers the API of the current dt-algorand release. Every dt-algorand 
 | Time travel: reads at past rounds, `...Versions`, simulate at any round | `EnableTimeTravel`                         | `supportsDT()` (`timeTravel` of the capabilities)              | `DTUnsupportedError` (the `/versions` and holders routes 404, `round` is a 400)  |
 | Asset holders                                                           | `TimeTravelHoldersIndex` (and time travel) | `supportsAssetHolders()`, one probe that reads nothing, cached | `DTUnsupportedError`; an index not built yet is a 503 for `isHistoryUnavailable` |
 | Query                                                                   | `MaxAPIQueryCalls` above 0                 | `query` of the capabilities                                    | `DTUnsupportedError`                                                             |
+| State changes of a round                                                | `EnableTimeTravel`                         | `supportsStateChanges()` (`stateChanges` of the capabilities)  | `DTUnsupportedError`                                                             |
 | Several groups per simulate request                                     | `MaxAPISimulateGroups` above 1             | `simulate.maxTxnGroups` of the capabilities                    | the node's 400 `too many transaction groups`                                     |
 | Execution traces, protocol `future`                                     | `EnableDeveloperAPI`                       | `developerApi` of the capabilities                             | the node's 400                                                                   |
 | `X-Algod-Effort`                                                        | `EnableEffortHeader`                       | the header is present                                          | `effortOf(headers)` is undefined                                                 |
 
-Against stock algod, `DTAlgodClient` works for everything inherited from `AlgodClient`. `capabilities()` falls back to stock algod's (`reported` false), so `supportsDT()` and `supportsAssetHolders()` are false and `query` is undefined. Gate the additions on these: stock algod ignores `round` and answers with the latest state (a read at a round throws `DTUnsupportedError`, as the answer has no `X-Algod-TT-Round`), rejects several simulate groups with its own 400, and answers the fork's routes unevenly: `getAssetVersions`, `accountAssetVersions`, `accountApplicationVersions` and `getAssetHolders` get its router's 400 (`Invalid format for parameter asset-id` or `application-id`), thrown as the plain HTTP error, while the other `...Versions` methods get a 404, thrown as a `DTUnsupportedError` that says time travel is off.
+Against stock algod, `DTAlgodClient` works for everything inherited from `AlgodClient`. `capabilities()` falls back to stock algod's (`reported` false), so `supportsDT()`, `supportsAssetHolders()` and `supportsStateChanges()` are false and `query` is undefined. Gate the additions on these: stock algod ignores `round` and answers with the latest state (a read at a round throws `DTUnsupportedError`, as the answer has no `X-Algod-TT-Round`), rejects several simulate groups with its own 400, and answers the fork's routes unevenly: `getAssetVersions`, `accountAssetVersions`, `accountApplicationVersions` and `getAssetHolders` get its router's 400 (`Invalid format for parameter asset-id` or `application-id`), thrown as the plain HTTP error, while the other `...Versions` methods get a 404, thrown as a `DTUnsupportedError` that says time travel is off.
 
 ## Bug fixes and changes to upstream code
 
@@ -656,6 +699,8 @@ Against stock algod, `DTAlgodClient` works for everything inherited from `AlgodC
 - `URLTokenBaseHTTPClient` built the `headers` of responses and HTTP errors with names and values swapped (`{ "1": "retry-after" }`), because `Headers.forEach` passes the value first. They are now keyed by the lowercased header name (`{ "retry-after": "1" }`), so retry logic can read `Retry-After` from a 503.
 
 - `base64ToBytes` and `bytesToBase64` without Node's `Buffer` (browsers) built the bytes with `Uint8Array.from` and a callback, and the string one `String.fromCodePoint` per byte. They now use a `charCodeAt` loop and `String.fromCharCode` over 32 KB chunks: for 32 KB, 0.13 ms instead of 3.6 ms to decode and 0.29 ms instead of 2.3 ms to encode. Every box value, program, state key and `changedKeys` entry decoded in a browser goes through them. Node keeps using `Buffer`.
+
+- `ApplicationStateOperation` (in the generated `modelsv2`) gains an optional `appId`, the `app-id` dtalgod nodes add to each state change of a simulate execution trace. It is not in upstream's spec: keep it when regenerating the models.
 
 - `JSONRequest` gains `doWithHeaders()`, which returns the decoded data and the response headers (lowercased names). It runs `executeRequest` then `prepare`, so every subclass's checks apply as in `do()`.
 

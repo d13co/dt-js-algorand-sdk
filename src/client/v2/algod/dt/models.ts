@@ -27,7 +27,10 @@ import {
   ByteArraySchema,
   OptionalSchema,
 } from '../../../../encoding/schema/index.js';
-import { base64ToBytes } from '../../../../encoding/binarydata.js';
+import {
+  base64ToBytes,
+  bytesToBase64,
+} from '../../../../encoding/binarydata.js';
 import {
   Account,
   Application,
@@ -2462,6 +2465,19 @@ class LenientNamedMapSchema extends NamedMapSchema {
 }
 
 /**
+ * An {@link OptionalSchema} whose value is left out only when undefined, not
+ * when it is the inner schema's default: for an object whose presence says
+ * something, such as {@link CapabilitiesResponse.stateChanges}, which a node
+ * with no size limit (`maxResponseBytes` 0) still sends.
+ */
+class PresentOptionalSchema extends OptionalSchema {
+  // eslint-disable-next-line class-methods-use-this
+  public isDefaultValue(data: unknown): boolean {
+    return data === undefined;
+  }
+}
+
+/**
  * The limits a node places on `POST /v2/query` requests
  * ({@link CapabilitiesResponse.query}). The values are the ones the node
  * applies, after it clamps its configuration.
@@ -2718,6 +2734,65 @@ export class SimulateLimits implements Encodable {
 }
 
 /**
+ * The limit a node places on `GET /v2/deltas/{round}/txn/state-changes`
+ * ({@link CapabilitiesResponse.stateChanges}), present when the node serves
+ * it (node config `EnableTimeTravel`).
+ */
+export class StateChangesLimits implements Encodable {
+  private static encodingSchemaValue: Schema | undefined;
+
+  static get encodingSchema(): Schema {
+    if (!this.encodingSchemaValue) {
+      this.encodingSchemaValue = new LenientNamedMapSchema([]);
+      (this.encodingSchemaValue as NamedMapSchema).pushEntries({
+        key: 'max-response-bytes',
+        valueSchema: new Uint64Schema(),
+        omitEmpty: false,
+      });
+    }
+    return this.encodingSchemaValue;
+  }
+
+  /**
+   * The most bytes an answer may take, encoded (msgpack, as the client asks
+   * for it); a larger one fails with a 400 (`isStateChangesTooLarge`): narrow
+   * the request with `app()` or `txids()`. 0 means no limit (node config
+   * `MaxAPIStateChangesResponseBytes`).
+   */
+  public maxResponseBytes: number;
+
+  /**
+   * Creates a new `StateChangesLimits` object.
+   * @param maxResponseBytes - The most bytes an answer may take; 0 means no
+   * limit.
+   */
+  constructor({ maxResponseBytes }: { maxResponseBytes: number | bigint }) {
+    this.maxResponseBytes = ensureSafeInteger(maxResponseBytes);
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  getEncodingSchema(): Schema {
+    return StateChangesLimits.encodingSchema;
+  }
+
+  toEncodingData(): Map<string, unknown> {
+    return new Map<string, unknown>([
+      ['max-response-bytes', this.maxResponseBytes],
+    ]);
+  }
+
+  static fromEncodingData(data: unknown): StateChangesLimits {
+    if (!(data instanceof Map)) {
+      throw new Error(`Invalid decoded StateChangesLimits: ${data}`);
+    }
+    // A key the node left out is 0, the node's own "no limit".
+    return new StateChangesLimits({
+      maxResponseBytes: data.get('max-response-bytes') ?? 0,
+    });
+  }
+}
+
+/**
  * The fork features a node has on, and the limits it places on simulate and
  * query requests (`GET /v2/capabilities`, tag `dtalgorand`). Every dtalgod
  * node serves it; stock algod answers 404. The values are the ones the node
@@ -2725,6 +2800,8 @@ export class SimulateLimits implements Encodable {
  *
  * `query` is undefined when the node has queries disabled
  * (`MaxAPIQueryCalls` 0): fall back to simulate then, one round per request.
+ * `stateChanges` is undefined when the node does not serve
+ * `getTxnStateChangesForRound`.
  *
  * Decoding tolerates keys the node leaves out, as an older or newer node may,
  * and ignores keys this client does not know. A missing key takes a safe
@@ -2764,6 +2841,13 @@ export class CapabilitiesResponse implements Encodable {
         {
           key: 'query',
           valueSchema: new OptionalSchema(QueryLimits.encodingSchema),
+          omitEmpty: true,
+        },
+        {
+          key: 'state-changes',
+          valueSchema: new PresentOptionalSchema(
+            StateChangesLimits.encodingSchema
+          ),
           omitEmpty: true,
         }
       );
@@ -2825,6 +2909,14 @@ export class CapabilitiesResponse implements Encodable {
   public query?: QueryLimits;
 
   /**
+   * The limit of `GET /v2/deltas/{round}/txn/state-changes`
+   * (`DTAlgodClient.getTxnStateChangesForRound`). Undefined when the node does
+   * not serve it: it has time travel off, or it predates the endpoint.
+   * {@link DTAlgodClient.supportsStateChanges} reads it.
+   */
+  public stateChanges?: StateChangesLimits;
+
+  /**
    * Whether the node reported these capabilities: true when decoded from its
    * response, false for {@link CapabilitiesResponse.stock}, the fallback for
    * stock algod. Not part of the response's encoding.
@@ -2840,6 +2932,8 @@ export class CapabilitiesResponse implements Encodable {
    * @param simulate - The limits of simulate requests.
    * @param query - The limits of `POST /v2/query`; undefined when the node has
    * queries disabled.
+   * @param stateChanges - The limit of the state changes endpoint; undefined
+   * when the node does not serve it.
    * @param reported - Whether the node reported these capabilities. Not
    * encoded; defaults to false, and decoding sets it to true.
    */
@@ -2849,6 +2943,7 @@ export class CapabilitiesResponse implements Encodable {
     timeLimitSeconds,
     simulate,
     query,
+    stateChanges,
     reported = false,
   }: {
     timeTravel: boolean;
@@ -2856,6 +2951,7 @@ export class CapabilitiesResponse implements Encodable {
     timeLimitSeconds: number | bigint;
     simulate: SimulateLimits;
     query?: QueryLimits;
+    stateChanges?: StateChangesLimits;
     reported?: boolean;
   }) {
     this.timeTravel = timeTravel;
@@ -2863,6 +2959,7 @@ export class CapabilitiesResponse implements Encodable {
     this.timeLimitSeconds = ensureSafeInteger(timeLimitSeconds);
     this.simulate = simulate;
     this.query = query;
+    this.stateChanges = stateChanges;
     this.reported = reported;
   }
 
@@ -2883,6 +2980,12 @@ export class CapabilitiesResponse implements Encodable {
           ? this.query.toEncodingData()
           : undefined,
       ],
+      [
+        'state-changes',
+        typeof this.stateChanges !== 'undefined'
+          ? this.stateChanges.toEncodingData()
+          : undefined,
+      ],
     ]);
   }
 
@@ -2900,6 +3003,10 @@ export class CapabilitiesResponse implements Encodable {
       query:
         typeof data.get('query') !== 'undefined'
           ? QueryLimits.fromEncodingData(data.get('query'))
+          : undefined,
+      stateChanges:
+        typeof data.get('state-changes') !== 'undefined'
+          ? StateChangesLimits.fromEncodingData(data.get('state-changes'))
           : undefined,
       reported: true,
     });
@@ -3780,6 +3887,363 @@ export class AssetHoldersResponse implements Encodable {
       nextToken: data.get('next-token'),
       holders: (data.get('holders') ?? []).map((h: unknown) =>
         AssetHolder.fromEncodingData(h)
+      ),
+    });
+  }
+}
+
+/**
+ * Bytes the node sends as base64 text in both encodings, as it does the
+ * `bytes` of a {@link TealValue}: the field is a string in the node's model,
+ * so its msgpack is a str, not a bin, and `ByteArraySchema` would reject it.
+ * A bin is decoded too. Encoded as base64 text, as the node does.
+ */
+class Base64TextBytesSchema extends ByteArraySchema {
+  // eslint-disable-next-line class-methods-use-this
+  public prepareMsgpack(data: unknown): MsgpackEncodingData {
+    if (data instanceof Uint8Array) return bytesToBase64(data);
+    throw new Error(`Invalid byte array: (${typeof data}) ${data}`);
+  }
+
+  public fromPreparedMsgpack(
+    encoded: MsgpackEncodingData,
+    rawStringProvider: MsgpackRawStringProvider
+  ): Uint8Array {
+    if (typeof encoded === 'string') return base64ToBytes(encoded);
+    return super.fromPreparedMsgpack(encoded, rawStringProvider);
+  }
+}
+
+let stateChangeTealValueSchemaValue: Schema | undefined;
+
+/**
+ * The schema of a {@link TealValue} in a state change: `TealValue`'s, but with
+ * `bytes` read from base64 text in msgpack too (see `Base64TextBytesSchema`).
+ */
+function stateChangeTealValueSchema(): Schema {
+  if (!stateChangeTealValueSchemaValue) {
+    stateChangeTealValueSchemaValue = new NamedMapSchema([]);
+    (stateChangeTealValueSchemaValue as NamedMapSchema).pushEntries(
+      {
+        key: 'bytes',
+        valueSchema: new Base64TextBytesSchema(),
+        omitEmpty: true,
+      },
+      { key: 'type', valueSchema: new Uint64Schema(), omitEmpty: true },
+      { key: 'uint', valueSchema: new Uint64Schema(), omitEmpty: true }
+    );
+  }
+  return stateChangeTealValueSchemaValue;
+}
+
+/**
+ * An app state key a transaction changed, with its value before and after the
+ * transaction (net over it and its inner transactions).
+ *
+ * A missing `before`: the key did not exist. A missing `after`: the key was
+ * deleted, its local state cleared (CloseOut, ClearState), or its app deleted
+ * (globals only: the boxes of a deleted app stay). A box's value is the whole
+ * box, as `bytes`.
+ */
+export class AppStateChange implements Encodable {
+  private static encodingSchemaValue: Schema | undefined;
+
+  static get encodingSchema(): Schema {
+    if (!this.encodingSchemaValue) {
+      this.encodingSchemaValue = new NamedMapSchema([]);
+      (this.encodingSchemaValue as NamedMapSchema).pushEntries(
+        { key: 'app-id', valueSchema: new Uint64Schema(), omitEmpty: true },
+        {
+          key: 'app-state-type',
+          valueSchema: new StringSchema(),
+          omitEmpty: true,
+        },
+        {
+          key: 'account',
+          valueSchema: new OptionalSchema(new StringSchema()),
+          omitEmpty: true,
+        },
+        { key: 'key', valueSchema: new ByteArraySchema(), omitEmpty: true },
+        {
+          key: 'before',
+          valueSchema: new OptionalSchema(stateChangeTealValueSchema()),
+          omitEmpty: true,
+        },
+        {
+          key: 'after',
+          valueSchema: new OptionalSchema(stateChangeTealValueSchema()),
+          omitEmpty: true,
+        }
+      );
+    }
+    return this.encodingSchemaValue;
+  }
+
+  /** The app whose state changed. */
+  public appId: bigint;
+
+  /**
+   * The kind of state: `g` global state, `l` local state, `b` a box. A value
+   * this client does not know is kept as the node sent it.
+   */
+  public appStateType: string;
+
+  /** For a local state change, the account whose local state changed. */
+  public account?: Address;
+
+  /** The global or local state key, or the box name. */
+  public key: Uint8Array;
+
+  /** The value before the transaction; undefined if the key did not exist. */
+  public before?: TealValue;
+
+  /**
+   * The value after the transaction; undefined if the key was deleted, its
+   * local state cleared, or its app deleted.
+   */
+  public after?: TealValue;
+
+  /**
+   * Creates a new `AppStateChange` object.
+   * @param appId - The app whose state changed.
+   * @param appStateType - `g` global state, `l` local state, `b` a box.
+   * @param account - For a local state change, the account.
+   * @param key - The state key or box name (bytes, or base64).
+   * @param before - The value before; undefined if the key did not exist.
+   * @param after - The value after; undefined if the key is gone.
+   */
+  constructor({
+    appId,
+    appStateType,
+    account,
+    key,
+    before,
+    after,
+  }: {
+    appId: number | bigint;
+    appStateType: string;
+    account?: Address | string;
+    key: string | Uint8Array;
+    before?: TealValue;
+    after?: TealValue;
+  }) {
+    this.appId = ensureBigInt(appId);
+    this.appStateType = appStateType;
+    this.account =
+      typeof account === 'string' ? Address.fromString(account) : account;
+    this.key = typeof key === 'string' ? base64ToBytes(key) : key;
+    this.before = before;
+    this.after = after;
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  getEncodingSchema(): Schema {
+    return AppStateChange.encodingSchema;
+  }
+
+  toEncodingData(): Map<string, unknown> {
+    return new Map<string, unknown>([
+      ['app-id', this.appId],
+      ['app-state-type', this.appStateType],
+      [
+        'account',
+        typeof this.account !== 'undefined'
+          ? this.account.toString()
+          : undefined,
+      ],
+      ['key', this.key],
+      [
+        'before',
+        typeof this.before !== 'undefined'
+          ? this.before.toEncodingData()
+          : undefined,
+      ],
+      [
+        'after',
+        typeof this.after !== 'undefined'
+          ? this.after.toEncodingData()
+          : undefined,
+      ],
+    ]);
+  }
+
+  static fromEncodingData(data: unknown): AppStateChange {
+    if (!(data instanceof Map)) {
+      throw new Error(`Invalid decoded AppStateChange: ${data}`);
+    }
+    const value = (v: unknown) =>
+      typeof v !== 'undefined' ? TealValue.fromEncodingData(v) : undefined;
+    return new AppStateChange({
+      appId: data.get('app-id'),
+      appStateType: data.get('app-state-type'),
+      account: data.get('account'),
+      key: data.get('key'),
+      before: value(data.get('before')),
+      after: value(data.get('after')),
+    });
+  }
+}
+
+/**
+ * The app state changes of a transaction of a round, top-level or inner, net
+ * over it and its inner transactions.
+ */
+export class TxnStateChanges implements Encodable {
+  private static encodingSchemaValue: Schema | undefined;
+
+  static get encodingSchema(): Schema {
+    if (!this.encodingSchemaValue) {
+      this.encodingSchemaValue = new NamedMapSchema([]);
+      (this.encodingSchemaValue as NamedMapSchema).pushEntries(
+        {
+          key: 'path',
+          valueSchema: new ArraySchema(new Uint64Schema()),
+          omitEmpty: true,
+        },
+        {
+          key: 'txid',
+          valueSchema: new OptionalSchema(new StringSchema()),
+          omitEmpty: true,
+        },
+        {
+          key: 'changes',
+          valueSchema: new ArraySchema(AppStateChange.encodingSchema),
+          omitEmpty: true,
+        }
+      );
+    }
+    return this.encodingSchemaValue;
+  }
+
+  /**
+   * Where the transaction is: its index in the block's payset, then, for an
+   * inner transaction, its index among its parent's inner transactions at
+   * each level. Inner indexes run on across all of a parent's `itxn_submit`
+   * calls, as in the apply data's inner transactions.
+   */
+  public path: number[];
+
+  /** The transaction ID, for a top-level transaction (`path` of length 1). */
+  public txid?: string;
+
+  /** The keys the transaction changed, in the order it first changed them. */
+  public changes: AppStateChange[];
+
+  /**
+   * Creates a new `TxnStateChanges` object.
+   * @param path - The payset index, then the inner indexes.
+   * @param txid - The transaction ID, for a top-level transaction.
+   * @param changes - The keys the transaction changed.
+   */
+  constructor({
+    path,
+    txid,
+    changes,
+  }: {
+    path: (number | bigint)[];
+    txid?: string;
+    changes: AppStateChange[];
+  }) {
+    this.path = path.map(ensureSafeInteger);
+    this.txid = txid;
+    this.changes = changes;
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  getEncodingSchema(): Schema {
+    return TxnStateChanges.encodingSchema;
+  }
+
+  toEncodingData(): Map<string, unknown> {
+    return new Map<string, unknown>([
+      ['path', this.path],
+      ['txid', this.txid],
+      ['changes', this.changes.map((c) => c.toEncodingData())],
+    ]);
+  }
+
+  static fromEncodingData(data: unknown): TxnStateChanges {
+    if (!(data instanceof Map)) {
+      throw new Error(`Invalid decoded TxnStateChanges: ${data}`);
+    }
+    return new TxnStateChanges({
+      path: data.get('path') ?? [],
+      txid: data.get('txid'),
+      changes: (data.get('changes') ?? []).map((c: unknown) =>
+        AppStateChange.fromEncodingData(c)
+      ),
+    });
+  }
+}
+
+/**
+ * The app state changes of each transaction of a round
+ * (`GET /v2/deltas/{round}/txn/state-changes`).
+ */
+export class TxnStateChangesResponse implements Encodable {
+  private static encodingSchemaValue: Schema | undefined;
+
+  static get encodingSchema(): Schema {
+    if (!this.encodingSchemaValue) {
+      this.encodingSchemaValue = new NamedMapSchema([]);
+      (this.encodingSchemaValue as NamedMapSchema).pushEntries(
+        { key: 'round', valueSchema: new Uint64Schema(), omitEmpty: true },
+        {
+          key: 'txns',
+          valueSchema: new ArraySchema(TxnStateChanges.encodingSchema),
+          omitEmpty: true,
+        }
+      );
+    }
+    return this.encodingSchemaValue;
+  }
+
+  /** The round. */
+  public round: bigint;
+
+  /**
+   * The transactions that changed app state, top-level and inner, in
+   * execution order (a parent before its inner transactions). A transaction
+   * that changed nothing, or nothing the filters kept, is left out.
+   */
+  public txns: TxnStateChanges[];
+
+  /**
+   * Creates a new `TxnStateChangesResponse` object.
+   * @param round - The round.
+   * @param txns - The transactions that changed app state, in execution order.
+   */
+  constructor({
+    round,
+    txns,
+  }: {
+    round: number | bigint;
+    txns: TxnStateChanges[];
+  }) {
+    this.round = ensureBigInt(round);
+    this.txns = txns;
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  getEncodingSchema(): Schema {
+    return TxnStateChangesResponse.encodingSchema;
+  }
+
+  toEncodingData(): Map<string, unknown> {
+    return new Map<string, unknown>([
+      ['round', this.round],
+      ['txns', this.txns.map((t) => t.toEncodingData())],
+    ]);
+  }
+
+  static fromEncodingData(data: unknown): TxnStateChangesResponse {
+    if (!(data instanceof Map)) {
+      throw new Error(`Invalid decoded TxnStateChangesResponse: ${data}`);
+    }
+    return new TxnStateChangesResponse({
+      round: data.get('round'),
+      txns: (data.get('txns') ?? []).map((t: unknown) =>
+        TxnStateChanges.fromEncodingData(t)
       ),
     });
   }

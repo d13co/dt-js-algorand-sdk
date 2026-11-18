@@ -31,13 +31,20 @@ import {
   QueryRoundResult,
   QueryCallResult,
   isQueryResponseTooLarge,
+  isStateChangesTooLarge,
+  TxnStateChangesResponse,
+  TxnStateChanges,
+  AppStateChange,
+  StateChangesLimits,
 } from '../src/client/v2/algod/dt/index';
 import { AlgodClient } from '../src/client/v2/algod/algod';
 import { assignGroupID, computeGroupID } from '../src/group';
 import * as algosdk from '../src/index';
 import {
+  ApplicationStateOperation,
   PendingTransactionResponse,
   SimulateRequest,
+  TealValue,
   SimulateRequestTransactionGroup,
   SimulateResponse,
   SimulateTraceConfig,
@@ -680,6 +687,7 @@ describe('time travel', () => {
             maxExtraOpcodeBudget: 640000,
           },
           query: undefined,
+          stateChanges: undefined,
           reported: true,
         }
       );
@@ -3578,5 +3586,280 @@ describe('response headers and error helpers', () => {
       ),
       false
     );
+  });
+});
+
+describe('getTxnStateChangesForRound', () => {
+  const A = 'AAAAASVCTO6S5PAJWXAVE6D37WDBIMC54IMVSZTJXSYHXZLKH7644TKOUM';
+  const T1 = 'TXIDTXIDTXIDTXIDTXIDTXIDTXIDTXIDTXIDTXIDTXIDTXIDTXID';
+  const T2 = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+  /**
+   * What go-algorand's msgpack codec writes for a TxnStateChangesResponse
+   * (round 12345678901234567): a global set to 2^64-1 by app 2^53+1, then a
+   * local of app 5 holding bytes 010203 that was deleted, and an inner
+   * transaction at path [0, 1] with no changes (synthetic: the node leaves
+   * such transactions out, but an empty list must decode). The TealValue `bytes` are
+   * base64 text (a msgpack str), the keys bins.
+   */
+  const goMsgpack = Uint8Array.from(
+    Buffer.from(
+      '82a5726f756e64cf002bdc545d6b4b87a474786e739283a76368616e67657392' +
+        '84a5616674657283a56279746573a0a47479706502a475696e74cfffffffffff' +
+        'ffffffa66170702d6964cf0020000000000001ae6170702d73746174652d7479' +
+        '7065a167a36b6579c4026b3185a76163636f756e74d93a414141414153564354' +
+        '4f36533550414a575841564536443337574442494d433534494d56535a544a58' +
+        '535948585a4c4b4837363434544b4f554da66170702d696405ae6170702d7374' +
+        '6174652d74797065a16ca66265666f726583a56279746573a441514944a47479' +
+        '706501a475696e7400a36b6579c402ff00a4706174689100a474786964d93454' +
+        '5849445458494454584944545849445458494454584944545849445458494454' +
+        '5849445458494454584944545849445458494482a76368616e67657390a47061' +
+        '7468920001',
+      'hex'
+    )
+  );
+  const msgpackAt = (body: Uint8Array) => () => ({ status: 200, body });
+  const status404 = (message: string) => () => ({
+    status: 404,
+    json: { message },
+  });
+
+  it('sends the filters as msgpack and decodes the node encoding', async () => {
+    const stub = new StubClient([msgpackAt(goMsgpack)]);
+    const res = await new DTAlgodClient(stub, '')
+      .getTxnStateChangesForRound(BigInt('12345678901234567'))
+      .app(5)
+      .txid(T1)
+      .txids([T2, T1])
+      .do();
+    assert.deepStrictEqual(stub.calls[0], {
+      path: '/v2/deltas/12345678901234567/txn/state-changes',
+      query: { format: 'msgpack', app: '5', txid: T1, txids: `${T2},${T1}` },
+    });
+    assert.ok(res instanceof TxnStateChangesResponse);
+    assert.strictEqual(res.round, BigInt('12345678901234567'));
+    assert.strictEqual(res.txns.length, 2);
+    const [top, inner] = res.txns;
+    assert.ok(top instanceof TxnStateChanges);
+    assert.deepStrictEqual(top.path, [0]);
+    assert.strictEqual(top.txid, T1);
+    assert.deepStrictEqual(inner.path, [0, 1]);
+    assert.strictEqual(inner.txid, undefined);
+    assert.deepStrictEqual(inner.changes, []);
+
+    const [g, l] = top.changes;
+    assert.ok(g instanceof AppStateChange);
+    assert.strictEqual(g.appId, BigInt('9007199254740993'));
+    assert.strictEqual(g.appStateType, 'g');
+    assert.strictEqual(g.account, undefined);
+    assert.deepStrictEqual(g.key, new TextEncoder().encode('k1'));
+    assert.strictEqual(g.before, undefined);
+    assert.ok(g.after instanceof TealValue);
+    assert.strictEqual(g.after.type, 2);
+    assert.strictEqual(g.after.uint, BigInt('18446744073709551615'));
+    assert.deepStrictEqual(g.after.bytes, new Uint8Array());
+
+    assert.strictEqual(l.appId, BigInt(5));
+    assert.strictEqual(l.appStateType, 'l');
+    assert.strictEqual(l.account?.toString(), A);
+    assert.deepStrictEqual(l.key, Uint8Array.from([0xff, 0]));
+    assert.strictEqual(l.after, undefined);
+    assert.strictEqual(l.before?.type, 1);
+    assert.deepStrictEqual(l.before?.bytes, Uint8Array.from([1, 2, 3]));
+    assert.strictEqual(l.before?.uint, BigInt(0));
+  });
+
+  it('decodes the node JSON, and round-trips both encodings', () => {
+    const json = JSON.stringify({
+      round: 7,
+      txns: [
+        {
+          path: [2],
+          txid: T1,
+          changes: [
+            {
+              'app-id': 9,
+              'app-state-type': 'b',
+              key: 'Ym94',
+              after: { bytes: 'AQID', type: 1, uint: 0 },
+            },
+          ],
+        },
+      ],
+    });
+    const fromJSON = decodeJSON(json, TxnStateChangesResponse);
+    const box = fromJSON.txns[0].changes[0];
+    assert.strictEqual(box.appStateType, 'b');
+    assert.deepStrictEqual(box.key, new TextEncoder().encode('box'));
+    assert.deepStrictEqual(box.after?.bytes, Uint8Array.from([1, 2, 3]));
+    assert.deepStrictEqual(
+      decodeJSON(encodeJSON(fromJSON), TxnStateChangesResponse),
+      fromJSON
+    );
+
+    const fromGo = decodeMsgpack(goMsgpack, TxnStateChangesResponse);
+    assert.deepStrictEqual(
+      decodeMsgpack(encodeMsgpack(fromGo), TxnStateChangesResponse),
+      fromGo
+    );
+    // TealValue bytes are written as base64 text, as the node writes them.
+    const raw = msgpackDecode(encodeMsgpack(fromGo), { useMap: true }) as Map<
+      string,
+      any
+    >;
+    const before = raw.get('txns')[0].get('changes')[1].get('before');
+    assert.strictEqual(before.get('bytes'), 'AQID');
+  });
+
+  it('clears and replaces the filters, and rejects bad txids', () => {
+    const request = new DTAlgodClient(
+      new StubClient([]),
+      ''
+    ).getTxnStateChangesForRound(5);
+    request.app(7).app(0).txids([T1]).txids([T2]);
+    assert.deepStrictEqual(request.query, { format: 'msgpack', txids: T2 });
+    assert.throws(() => request.txids([]), /at least one transaction ID/);
+    assert.throws(() => request.txids([`${T1},${T2}`]), /Not a transaction ID/);
+    assert.throws(() => request.txid(T1.toLowerCase()), /Not a transaction ID/);
+    assert.throws(() => request.app(-1), /Not an app ID/);
+    assert.throws(() => request.app(BigInt(2) ** BigInt(64)), /Not an app ID/);
+    assert.deepStrictEqual(request.query, { format: 'msgpack', txids: T2 });
+  });
+
+  it('throws an answer for another round', async () => {
+    const stub = new StubClient([msgpackAt(goMsgpack)]);
+    await assert.rejects(
+      new DTAlgodClient(stub, '').getTxnStateChangesForRound(5).do(),
+      /for round 12345678901234567, not the round asked for, 5/
+    );
+  });
+
+  it('maps a node without the endpoint to DTUnsupportedError', async () => {
+    const unsupported = [
+      status404('Not Found'),
+      status404("the node's ledger has no time travel history"),
+      status404(
+        'failed retrieving State Delta: state changes need the time travel history'
+      ),
+    ];
+    for (const answer of unsupported) {
+      // eslint-disable-next-line no-await-in-loop
+      await assert.rejects(
+        new DTAlgodClient(new StubClient([answer]), '')
+          .getTxnStateChangesForRound(5)
+          .do(),
+        (err: unknown) =>
+          err instanceof DTUnsupportedError &&
+          err.requestedRound === BigInt(5) &&
+          err.cause !== undefined
+      );
+    }
+    const passThrough = [
+      status404('failed retrieving State Delta: round 5 is not in the history'),
+      status404(
+        `failed retrieving State Delta: the transaction is not in the round: ${T1}, round 5`
+      ),
+      badRequest('failed to parse a txid'),
+    ];
+    for (const answer of passThrough) {
+      // eslint-disable-next-line no-await-in-loop
+      await assert.rejects(
+        new DTAlgodClient(new StubClient([answer]), '')
+          .getTxnStateChangesForRound(5)
+          .do(),
+        (err: unknown) =>
+          !(err instanceof DTUnsupportedError) &&
+          [400, 404].includes((err as any).response?.status)
+      );
+    }
+  });
+
+  it('recognizes an answer over the size limit', async () => {
+    const stub = new StubClient([
+      badRequest(
+        'the state changes take more than MaxAPIStateChangesResponseBytes (16777216 bytes): narrow them with the app, txid or txids parameters'
+      ),
+    ]);
+    const err = await new DTAlgodClient(stub, '')
+      .getTxnStateChangesForRound(5)
+      .do()
+      .then(
+        () => undefined,
+        (e: unknown) => e
+      );
+    assert.ok(isStateChangesTooLarge(err));
+    assert.ok(!isStateChangesTooLarge(new Error('query response too large')));
+    assert.ok(!isQueryResponseTooLarge(err));
+  });
+
+  it('reads stateChanges from the capabilities', async () => {
+    const client = new DTAlgodClient(
+      new StubClient([
+        ok({
+          ...nodeCaps,
+          'state-changes': { 'max-response-bytes': 16777216 },
+        }),
+      ]),
+      ''
+    );
+    assert.strictEqual(await client.supportsStateChanges(), true);
+    const caps = await client.capabilities();
+    assert.ok(caps.stateChanges instanceof StateChangesLimits);
+    assert.strictEqual(caps.stateChanges.maxResponseBytes, 16777216);
+    assert.ok(Object.isFrozen(caps.stateChanges));
+    // A key the node leaves out is 0, no limit.
+    const lenient = decodeJSON(
+      JSON.stringify({ ...nodeCaps, 'state-changes': {} }),
+      CapabilitiesResponse
+    );
+    assert.strictEqual(lenient.stateChanges?.maxResponseBytes, 0);
+    // A node with no limit sends 0, and stateChanges survives a round trip.
+    const noLimit = decodeJSON(
+      JSON.stringify({
+        ...nodeCaps,
+        'state-changes': { 'max-response-bytes': 0 },
+      }),
+      CapabilitiesResponse
+    );
+    for (const again of [
+      decodeJSON(encodeJSON(noLimit), CapabilitiesResponse),
+      decodeMsgpack(encodeMsgpack(noLimit), CapabilitiesResponse),
+    ]) {
+      assert.strictEqual(again.stateChanges?.maxResponseBytes, 0);
+    }
+
+    const without = new DTAlgodClient(new StubClient([ok(nodeCaps)]), '');
+    assert.strictEqual(await without.supportsStateChanges(), false);
+    const stock = new DTAlgodClient(new StubClient([status(404)]), '');
+    assert.strictEqual(await stock.supportsStateChanges(), false);
+    assert.strictEqual(CapabilitiesResponse.stock().stateChanges, undefined);
+    assert.ok(DTAlgodClient.features.includes('state-changes'));
+  });
+});
+
+describe('simulate: app-id on state changes', () => {
+  it('decodes, encodes and leaves out app-id', () => {
+    const op = {
+      'app-state-type': 'b',
+      key: 'Ym94',
+      operation: 'w',
+      'new-value': { type: 1, bytes: 'AQID' },
+      'app-id': 1234,
+    };
+    const fromJSON = decodeJSON(JSON.stringify(op), ApplicationStateOperation);
+    assert.strictEqual(fromJSON.appId, BigInt(1234));
+    const fromMsgpack = decodeMsgpack(
+      encodeMsgpack(fromJSON),
+      ApplicationStateOperation
+    );
+    assert.strictEqual(fromMsgpack.appId, BigInt(1234));
+    const stock: Record<string, unknown> = { ...op };
+    delete stock['app-id'];
+    const fromStock = decodeJSON(
+      JSON.stringify(stock),
+      ApplicationStateOperation
+    );
+    assert.strictEqual(fromStock.appId, undefined);
+    assert.ok(!('app-id' in JSON.parse(encodeJSON(fromStock))));
+    assert.ok(DTAlgodClient.features.includes('simulate-app-id'));
   });
 });

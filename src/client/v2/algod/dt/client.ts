@@ -14,6 +14,7 @@ import AccountAssetVersions from './accountAssetVersions.js';
 import AccountApplicationVersions from './accountApplicationVersions.js';
 import GetAssetVersions from './getAssetVersions.js';
 import GetAssetHolders from './getAssetHolders.js';
+import GetTxnStateChangesForRound from './getTxnStateChangesForRound.js';
 import GetApplicationVersions from './getApplicationVersions.js';
 import GetApplicationBoxByNameAt from './getApplicationBoxByNameAt.js';
 import GetApplicationBoxesAt from './getApplicationBoxesAt.js';
@@ -79,6 +80,10 @@ export class DTAlgodClient extends AlgodClient {
    *   `accountVersions` and `accountApplicationVersions`, and `changedKeys`;
    * - `versions-pages`: `pages()` on the `...Versions` methods;
    * - `holders`: `getAssetHolders` and `supportsAssetHolders`;
+   * - `state-changes`: `getTxnStateChangesForRound`, `supportsStateChanges`,
+   *   `stateChanges` on `capabilities()` and `isStateChangesTooLarge`;
+   * - `simulate-app-id`: `appId` on the `stateChanges` of simulate's
+   *   execution traces;
    * - `response-headers`: `doWithHeaders()` on every request, and
    *   `effortOf` / `parseEffortHeader` for the `X-Algod-Effort` header;
    * - `error-helpers`: `isNodeBusy`, `retryAfterSeconds`,
@@ -113,6 +118,8 @@ export class DTAlgodClient extends AlgodClient {
     'versions-keys',
     'versions-pages',
     'holders',
+    'state-changes',
+    'simulate-app-id',
     'response-headers',
     'error-helpers',
     'round-header',
@@ -415,6 +422,41 @@ export class DTAlgodClient extends AlgodClient {
   }
 
   /**
+   * Given a round, list the app state changes of each of its transactions
+   * that changed any, top-level and inner, in execution order: globals, local
+   * states and boxes, each with its app and its value before and after the
+   * transaction. Filter with `app()`, `txid()` and `txids()` (all of a
+   * group's transactions in one request). Requires time travel
+   * (`EnableTimeTravel`); a node without the endpoint is thrown as a
+   * {@link DTUnsupportedError}, and
+   * {@link DTAlgodClient.supportsStateChanges} finds out first.
+   *
+   * The node re-evaluates the round's block for each request, whatever the
+   * filters, and fails an answer over
+   * `CapabilitiesResponse.stateChanges.maxResponseBytes` with a 400
+   * (`isStateChangesTooLarge`).
+   *
+   * #### Example
+   * ```typescript
+   * const { txns } = await algodClient
+   *   .getTxnStateChangesForRound(50_000_000)
+   *   .app(1284326447)
+   *   .do();
+   * for (const { path, txid, changes } of txns) {
+   *   for (const c of changes) {
+   *     console.log(path, txid, c.appStateType, c.key, c.before, c.after);
+   *   }
+   * }
+   * ```
+   *
+   * @param round - The round.
+   * @category GET
+   */
+  getTxnStateChangesForRound(round: number | bigint) {
+    return new GetTxnStateChangesForRound(this.c, round);
+  }
+
+  /**
    * Given an account address, list the rounds at which anything
    * `accountInformation` returns changed. Each version lists only the objects
    * that changed in that round.
@@ -632,8 +674,8 @@ export class DTAlgodClient extends AlgodClient {
    *
    * This is how the client tells what the node has: every dtalgod node
    * serves its capabilities, and its optional features show in them
-   * (`timeTravel`, `developerApi`, `query`, `simulate.maxTxnGroups` above
-   * 1). Only the asset holders index does not:
+   * (`timeTravel`, `developerApi`, `query`, `stateChanges`,
+   * `simulate.maxTxnGroups` above 1). Only the asset holders index does not:
    * see {@link DTAlgodClient.supportsAssetHolders}.
    *
    * Stock algod has no capabilities endpoint and answers 404; the answer is
@@ -669,6 +711,7 @@ export class DTAlgodClient extends AlgodClient {
         .then((caps) => {
           Object.freeze(caps.simulate);
           if (caps.query) Object.freeze(caps.query);
+          if (caps.stateChanges) Object.freeze(caps.stateChanges);
           return Object.freeze(caps);
         });
     }
@@ -694,6 +737,24 @@ export class DTAlgodClient extends AlgodClient {
    */
   async supportsDT(): Promise<boolean> {
     return (await this.capabilities()).timeTravel;
+  }
+
+  /**
+   * Whether the node serves {@link DTAlgodClient.getTxnStateChangesForRound}:
+   * it reports `stateChanges` in {@link DTAlgodClient.capabilities}, as a
+   * node with time travel does. It costs no request once the capabilities are
+   * cached, and is false on stock algod and on dtalgod nodes from before the
+   * endpoint. Errors, such as network failures, are rethrown and not cached.
+   *
+   * #### Example
+   * ```typescript
+   * if (await algodClient.supportsStateChanges()) {
+   *   const { txns } = await algodClient.getTxnStateChangesForRound(round).do();
+   * }
+   * ```
+   */
+  async supportsStateChanges(): Promise<boolean> {
+    return (await this.capabilities()).stateChanges !== undefined;
   }
 
   /**

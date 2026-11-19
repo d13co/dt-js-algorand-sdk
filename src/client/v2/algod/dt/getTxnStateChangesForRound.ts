@@ -3,7 +3,19 @@ import { HTTPClient, HTTPClientResponse } from '../../../client.js';
 import { decodeMsgpack } from '../../../../encoding/encoding.js';
 import { ensureBigInt } from '../../../../utils/utils.js';
 import { describe, DTUnsupportedError } from './errors.js';
-import { TxnStateChangesResponse } from './models.js';
+import { CapabilitiesResponse, TxnStateChangesResponse } from './models.js';
+
+/**
+ * What `include()` can add to a state changes answer, as `groups`:
+ * - `accounts`: each group's account changes (`GroupStateChanges.accounts`);
+ * - `assets`: its holding and asset params changes (`holdings`, `assets`);
+ * - `apps`: its app params and local state changes (`apps`, `localStates`).
+ */
+export type StateChangesInclude = 'accounts' | 'assets' | 'apps';
+
+/** Every value of {@link StateChangesInclude}, as `full()` sends them. */
+export const STATE_CHANGES_INCLUDE: readonly StateChangesInclude[] =
+  Object.freeze(['accounts', 'assets', 'apps']);
 
 /** A transaction ID: 52 characters of unpadded base32. */
 const TXID = /^[A-Z2-7]{52}$/;
@@ -63,15 +75,30 @@ export function stateChangesUnsupportedReason(err: unknown) {
  * The answer does not carry `X-Algod-TT-Round`; the round is the path's, and
  * the response's `round` is checked against it.
  *
+ * With `include()` or `full()`, the answer also has `groups`: everything
+ * else each group changed (accounts, holdings, asset and app params, local
+ * state opt-ins and opt-outs) with the values before and after the group,
+ * and the round's `feeSink`. A node that cannot add them (see
+ * `CapabilitiesResponse.stateChanges.include`, and
+ * `DTAlgodClient.supportsFullDeltas`) would ignore the parameter, so the
+ * request checks the node's capabilities first and throws a
+ * {@link DTUnsupportedError} without sending it.
+ *
  * #### Example
  * ```typescript
- * const { txns } = await algodClient
+ * const res = await algodClient
  *   .getTxnStateChangesForRound(50_000_000)
  *   .txids(group.map((t) => t.txID()))
+ *   .full()
  *   .do();
- * for (const t of txns) {
+ * for (const t of res.txns) {
  *   for (const c of t.changes) {
  *     console.log(t.path, c.appId, c.appStateType, c.key, c.before, c.after);
+ *   }
+ * }
+ * for (const g of res.groups!) {
+ *   for (const a of withoutFeeSink(g, res.feeSink!).accounts) {
+ *     console.log(a.address, changedFields(a.before, a.after));
  *   }
  * }
  * ```
@@ -81,7 +108,22 @@ export function stateChangesUnsupportedReason(err: unknown) {
 export default class GetTxnStateChangesForRound extends JSONRequest<TxnStateChangesResponse> {
   private round: bigint;
 
-  constructor(c: HTTPClient, round: number | bigint) {
+  private included: StateChangesInclude[] = [];
+
+  /**
+   * @param c - The HTTP client.
+   * @param round - The round.
+   * @param capabilities - The node's capabilities, checked before sending
+   * `include` (`DTAlgodClient.capabilities`, which caches them).
+   * @param forgetCapabilities - Drops the cached capabilities, when a node
+   * ignored `include` that they said it offers.
+   */
+  constructor(
+    c: HTTPClient,
+    round: number | bigint,
+    private capabilities: () => Promise<CapabilitiesResponse>,
+    private forgetCapabilities: () => void = () => {}
+  ) {
     super(c);
     this.round = ensureBigInt(round);
     this.query.format = 'msgpack';
@@ -140,10 +182,57 @@ export default class GetTxnStateChangesForRound extends JSONRequest<TxnStateChan
     return this;
   }
 
+  /**
+   * Also list what each group changed other than app state, as the answer's
+   * `groups` (and its `feeSink`): `accounts`, `assets` (holdings and asset
+   * params) and `apps` (app params and local states), in any order; repeats
+   * are ignored. Replaces any list set before. `txids()` and `txid()` narrow
+   * the groups to theirs; `app()` does not. An empty list or an unknown
+   * value is rejected here; a node that cannot add one of them is thrown as
+   * a {@link DTUnsupportedError} by `do()`, without sending the request.
+   *
+   * @param parts - What to add.
+   * @category query
+   */
+  include(parts: readonly StateChangesInclude[]) {
+    if (parts.length === 0) {
+      throw new Error('include needs at least one of accounts, assets, apps');
+    }
+    for (const p of parts) {
+      if (!STATE_CHANGES_INCLUDE.includes(p)) {
+        throw new Error(
+          `Not a state changes include: ${JSON.stringify(p)} (accounts, assets or apps)`
+        );
+      }
+    }
+    this.included = STATE_CHANGES_INCLUDE.filter((p) => parts.includes(p));
+    this.query.include = this.included.join(',');
+    return this;
+  }
+
+  /**
+   * Everything: `include(['accounts', 'assets', 'apps'])`.
+   *
+   * @category query
+   */
+  full() {
+    return this.include(STATE_CHANGES_INCLUDE);
+  }
+
   protected async executeRequest(
     headers?: Record<string, string>,
     customOptions?: Record<string, unknown>
   ): Promise<HTTPClientResponse> {
+    if (this.included.length > 0) {
+      const offered = (await this.capabilities()).stateChanges?.include ?? [];
+      const missing = this.included.filter((p) => !offered.includes(p));
+      if (missing.length > 0) {
+        throw new DTUnsupportedError(
+          `The node cannot list group changes: it does not offer include=${missing.join(',')}`,
+          { requestedRound: this.round }
+        );
+      }
+    }
     try {
       return await super.executeRequest(headers, customOptions);
     } catch (err) {
@@ -160,7 +249,12 @@ export default class GetTxnStateChangesForRound extends JSONRequest<TxnStateChan
 
   /**
    * Decodes the response and checks that it is for the round asked for. A
-   * mismatch is a node bug, thrown as an `Error`.
+   * mismatch is a node bug, thrown as an `Error`. With `include`, the node
+   * always sends `feeSink`: an answer without it is from a node that ignored
+   * `include`, as one behind the same address but older may, thrown as a
+   * {@link DTUnsupportedError} (and the cached capabilities are dropped).
+   * `groups` is an empty list if the node left it out (a round with no
+   * transactions).
    */
   prepare(response: HTTPClientResponse): TxnStateChangesResponse {
     const data = decodeMsgpack(response.body, TxnStateChangesResponse);
@@ -168,6 +262,16 @@ export default class GetTxnStateChangesForRound extends JSONRequest<TxnStateChan
       throw new Error(
         `The state changes are for round ${data.round}, not the round asked for, ${this.round}`
       );
+    }
+    if (this.included.length > 0) {
+      if (data.feeSink === undefined) {
+        this.forgetCapabilities();
+        throw new DTUnsupportedError(
+          `The node cannot list group changes: it ignored include=${this.included.join(',')}`,
+          { requestedRound: this.round }
+        );
+      }
+      if (data.groups === undefined) data.groups = [];
     }
     return data;
   }

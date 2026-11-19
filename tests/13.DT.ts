@@ -36,12 +36,30 @@ import {
   TxnStateChanges,
   AppStateChange,
   StateChangesLimits,
+  GroupStateChanges,
+  AccountStateChange,
+  AccountState,
+  AssetHoldingChange,
+  AssetParamsChange,
+  AppParamsChange,
+  LocalStateChange,
+  StateChangesInclude,
+  STATE_CHANGES_INCLUDE,
+  groupOf,
+  txnsOf,
+  changedFields,
+  withoutFeeSink,
 } from '../src/client/v2/algod/dt/index';
 import { AlgodClient } from '../src/client/v2/algod/algod';
 import { assignGroupID, computeGroupID } from '../src/group';
 import * as algosdk from '../src/index';
 import {
+  ApplicationLocalState,
+  ApplicationParams,
   ApplicationStateOperation,
+  ApplicationStateSchema,
+  AssetHolding,
+  AssetParams,
   PendingTransactionResponse,
   SimulateRequest,
   TealValue,
@@ -3598,22 +3616,22 @@ describe('getTxnStateChangesForRound', () => {
    * (round 12345678901234567): a global set to 2^64-1 by app 2^53+1, then a
    * local of app 5 holding bytes 010203 that was deleted, and an inner
    * transaction at path [0, 1] with no changes (synthetic: the node leaves
-   * such transactions out, but an empty list must decode). The TealValue `bytes` are
-   * base64 text (a msgpack str), the keys bins.
+   * such transactions out, but an empty list must decode). The value
+   * `bytes` and the keys are bins.
    */
   const goMsgpack = Uint8Array.from(
     Buffer.from(
       '82a5726f756e64cf002bdc545d6b4b87a474786e739283a76368616e67657392' +
-        '84a5616674657283a56279746573a0a47479706502a475696e74cfffffffffff' +
-        'ffffffa66170702d6964cf0020000000000001ae6170702d73746174652d7479' +
-        '7065a167a36b6579c4026b3185a76163636f756e74d93a414141414153564354' +
-        '4f36533550414a575841564536443337574442494d433534494d56535a544a58' +
-        '535948585a4c4b4837363434544b4f554da66170702d696405ae6170702d7374' +
-        '6174652d74797065a16ca66265666f726583a56279746573a441514944a47479' +
-        '706501a475696e7400a36b6579c402ff00a4706174689100a474786964d93454' +
-        '5849445458494454584944545849445458494454584944545849445458494454' +
-        '5849445458494454584944545849445458494482a76368616e67657390a47061' +
-        '7468920001',
+        '84a5616674657283a56279746573c400a47479706502a475696e74cfffffffff' +
+        'ffffffffa66170702d6964cf0020000000000001ae6170702d73746174652d74' +
+        '797065a167a36b6579c4026b3185a76163636f756e74d93a4141414141535643' +
+        '544f36533550414a575841564536443337574442494d433534494d56535a544a' +
+        '58535948585a4c4b4837363434544b4f554da66170702d696405ae6170702d73' +
+        '746174652d74797065a16ca66265666f726583a56279746573c403010203a474' +
+        '79706501a475696e7400a36b6579c402ff00a4706174689100a474786964d934' +
+        '5458494454584944545849445458494454584944545849445458494454584944' +
+        '545849445458494454584944545849445458494482a76368616e67657390a470' +
+        '617468920001',
       'hex'
     )
   );
@@ -3701,13 +3719,13 @@ describe('getTxnStateChangesForRound', () => {
       decodeMsgpack(encodeMsgpack(fromGo), TxnStateChangesResponse),
       fromGo
     );
-    // TealValue bytes are written as base64 text, as the node writes them.
+    // Value bytes are bins, as the node writes them.
     const raw = msgpackDecode(encodeMsgpack(fromGo), { useMap: true }) as Map<
       string,
       any
     >;
     const before = raw.get('txns')[0].get('changes')[1].get('before');
-    assert.strictEqual(before.get('bytes'), 'AQID');
+    assert.deepStrictEqual(before.get('bytes'), Uint8Array.from([1, 2, 3]));
   });
 
   it('clears and replaces the filters, and rejects bad txids', () => {
@@ -3833,6 +3851,616 @@ describe('getTxnStateChangesForRound', () => {
     assert.strictEqual(await stock.supportsStateChanges(), false);
     assert.strictEqual(CapabilitiesResponse.stock().stateChanges, undefined);
     assert.ok(DTAlgodClient.features.includes('state-changes'));
+  });
+});
+
+describe('getTxnStateChangesForRound: full deltas', () => {
+  const A = 'AAAAASVCTO6S5PAJWXAVE6D37WDBIMC54IMVSZTJXSYHXZLKH7644TKOUM';
+  const Z = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY5HFKQ';
+  const SINK = 'Y76M3MSY6DKBRHBL7C3NNDXGS5IIMQVQVUAB6MP4XEMMGVF2QWNPL226CA';
+  const T1 = 'TXIDTXIDTXIDTXIDTXIDTXIDTXIDTXIDTXIDTXIDTXIDTXIDTXID';
+  const T2 = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+  const T3 = 'BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB';
+  const groupId = new Uint8Array(32).fill(7);
+  const account = (amount: number, extra: Record<string, unknown> = {}) => ({
+    amount,
+    'min-balance': 100000,
+    status: 'Offline',
+    ...extra,
+  });
+  /** The node's JSON for a round of two groups (payset [T1, T2], [T3]). */
+  const nodeJSON = {
+    round: 7,
+    'fee-sink': SINK,
+    txns: [
+      {
+        path: [0],
+        txid: T1,
+        changes: [
+          {
+            'app-id': 456,
+            'app-state-type': 'g',
+            key: 'azE=',
+            after: { type: 2, uint: 1 },
+          },
+        ],
+      },
+      {
+        path: [0, 1],
+        changes: [
+          {
+            'app-id': 789,
+            'app-state-type': 'b',
+            key: 'Ym94',
+            before: { type: 1, bytes: 'AQ==' },
+          },
+        ],
+      },
+      {
+        path: [2],
+        txid: T3,
+        changes: [
+          {
+            'app-id': 456,
+            'app-state-type': 'l',
+            account: A,
+            key: 'azE=',
+            after: { type: 1, bytes: 'AQID' },
+          },
+        ],
+      },
+    ],
+    groups: [
+      {
+        first: 0,
+        count: 2,
+        'group-id': Buffer.from(groupId).toString('base64'),
+        txids: [T1, T2],
+        accounts: [
+          {
+            address: A,
+            before: account(5000000, { 'auth-addr': Z }),
+            after: account(4899000, {
+              'min-balance': 228500,
+              'total-apps-opted-in': 1,
+              'apps-total-schema': { 'num-uint': 2, 'num-byte-slice': 1 },
+              'auth-addr': Z,
+            }),
+          },
+          { address: SINK, before: account(1), after: account(2001) },
+          { address: Z, before: null, after: account(100000) },
+        ],
+        holdings: [
+          {
+            address: A,
+            'asset-id': 31566704,
+            before: { 'asset-id': 31566704, amount: 10, 'is-frozen': false },
+            after: { 'asset-id': 31566704, amount: 0, 'is-frozen': false },
+          },
+        ],
+        assets: [
+          {
+            'asset-id': 123,
+            after: {
+              creator: A,
+              decimals: 6,
+              total: 1000,
+              'unit-name': 'U',
+              'name-b64': 'TmFtZQ==',
+            },
+          },
+        ],
+        apps: [
+          {
+            'app-id': 456,
+            before: {
+              creator: A,
+              'approval-program': 'BoEB',
+              'clear-state-program': 'BoEB',
+            },
+            after: {
+              creator: A,
+              'approval-program': 'BoEC',
+              'clear-state-program': 'BoEB',
+            },
+          },
+        ],
+        'local-states': [
+          {
+            address: A,
+            'app-id': 456,
+            after: { id: 456, schema: { 'num-uint': 2, 'num-byte-slice': 1 } },
+          },
+        ],
+      },
+      {
+        first: 2,
+        count: 1,
+        txids: [T3],
+        accounts: [
+          { address: SINK, before: account(2001), after: account(3001) },
+        ],
+      },
+    ],
+  };
+  /**
+   * What go-algorand's msgpack codec writes for the same answer (the node's
+   * generated models, encoded as the handler does).
+   */
+  const goFull = Uint8Array.from(
+    Buffer.from(
+      '84a86665652d73696e6bd93a5937364d334d535936444b425248424c3743334e' +
+        '4e445847533549494d51565156554142364d503458454d4d4756463251574e50' +
+        '4c3232364341a667726f7570739289a86163636f756e74739383a76164647265' +
+        '7373d93a4141414141535643544f36533550414a575841564536443337574442' +
+        '494d433534494d56535a544a58535948585a4c4b4837363434544b4f554da561' +
+        '6674657289a6616d6f756e74ce004ac0b8b1617070732d746f74616c2d736368' +
+        '656d6182ae6e756d2d627974652d736c69636501a86e756d2d75696e7402a961' +
+        '7574682d61646472d93a41414141414141414141414141414141414141414141' +
+        '4141414141414141414141414141414141414141414141414141414141415935' +
+        '48464b51ab6d696e2d62616c616e6365ce00037c94a6737461747573a74f6666' +
+        '6c696e65b3746f74616c2d617070732d6f707465642d696e01b5746f74616c2d' +
+        '6173736574732d6f707465642d696e00b2746f74616c2d637265617465642d61' +
+        '70707300b4746f74616c2d637265617465642d61737365747300a66265666f72' +
+        '6588a6616d6f756e74ce004c4b40a9617574682d61646472d93a414141414141' +
+        '4141414141414141414141414141414141414141414141414141414141414141' +
+        '4141414141414141414141414141593548464b51ab6d696e2d62616c616e6365' +
+        'ce000186a0a6737461747573a74f66666c696e65b3746f74616c2d617070732d' +
+        '6f707465642d696e00b5746f74616c2d6173736574732d6f707465642d696e00' +
+        'b2746f74616c2d637265617465642d6170707300b4746f74616c2d6372656174' +
+        '65642d6173736574730083a761646472657373d93a5937364d334d535936444b' +
+        '425248424c3743334e4e445847533549494d51565156554142364d503458454d' +
+        '4d4756463251574e504c3232364341a5616674657287a6616d6f756e74cd07d1' +
+        'ab6d696e2d62616c616e6365ce000186a0a6737461747573a74f66666c696e65' +
+        'b3746f74616c2d617070732d6f707465642d696e00b5746f74616c2d61737365' +
+        '74732d6f707465642d696e00b2746f74616c2d637265617465642d6170707300' +
+        'b4746f74616c2d637265617465642d61737365747300a66265666f726587a661' +
+        '6d6f756e7401ab6d696e2d62616c616e6365ce000186a0a6737461747573a74f' +
+        '66666c696e65b3746f74616c2d617070732d6f707465642d696e00b5746f7461' +
+        '6c2d6173736574732d6f707465642d696e00b2746f74616c2d63726561746564' +
+        '2d6170707300b4746f74616c2d637265617465642d6173736574730082a76164' +
+        '6472657373d93a41414141414141414141414141414141414141414141414141' +
+        '414141414141414141414141414141414141414141414141414141593548464b' +
+        '51a5616674657287a6616d6f756e74ce000186a0ab6d696e2d62616c616e6365' +
+        'ce000186a0a6737461747573a74f66666c696e65b3746f74616c2d617070732d' +
+        '6f707465642d696e00b5746f74616c2d6173736574732d6f707465642d696e00' +
+        'b2746f74616c2d637265617465642d6170707300b4746f74616c2d6372656174' +
+        '65642d61737365747300a4617070739183a5616674657283b0617070726f7661' +
+        '6c2d70726f6772616dc403068102b3636c6561722d73746174652d70726f6772' +
+        '616dc403068101a763726561746f72d93a4141414141535643544f3653355041' +
+        '4a575841564536443337574442494d433534494d56535a544a58535948585a4c' +
+        '4b4837363434544b4f554da66170702d6964cd01c8a66265666f726583b06170' +
+        '70726f76616c2d70726f6772616dc403068101b3636c6561722d73746174652d' +
+        '70726f6772616dc403068101a763726561746f72d93a4141414141535643544f' +
+        '36533550414a575841564536443337574442494d433534494d56535a544a5853' +
+        '5948585a4c4b4837363434544b4f554da66173736574739182a5616674657285' +
+        'a763726561746f72d93a4141414141535643544f36533550414a575841564536' +
+        '443337574442494d433534494d56535a544a58535948585a4c4b483736343454' +
+        '4b4f554da8646563696d616c7306a86e616d652d623634c4044e616d65a5746f' +
+        '74616ccd03e8a9756e69742d6e616d65a155a861737365742d69647ba5636f75' +
+        '6e7402a5666972737400a867726f75702d6964c4200707070707070707070707' +
+        '070707070707070707070707070707070707070707a8686f6c64696e67739184' +
+        'a761646472657373d93a4141414141535643544f36533550414a575841564536' +
+        '443337574442494d433534494d56535a544a58535948585a4c4b483736343454' +
+        '4b4f554da5616674657283a6616d6f756e7400a861737365742d6964ce01e1ab' +
+        '70a969732d66726f7a656ec2a861737365742d6964ce01e1ab70a66265666f72' +
+        '6583a6616d6f756e740aa861737365742d6964ce01e1ab70a969732d66726f7a' +
+        '656ec2ac6c6f63616c2d7374617465739183a761646472657373d93a41414141' +
+        '41535643544f36533550414a575841564536443337574442494d433534494d56' +
+        '535a544a58535948585a4c4b4837363434544b4f554da5616674657282a26964' +
+        'cd01c8a6736368656d6182ae6e756d2d627974652d736c69636501a86e756d2d' +
+        '75696e7402a66170702d6964cd01c8a5747869647392d9345458494454584944' +
+        '5458494454584944545849445458494454584944545849445458494454584944' +
+        '545849445458494454584944d934414141414141414141414141414141414141' +
+        '4141414141414141414141414141414141414141414141414141414141414141' +
+        '414184a86163636f756e74739183a761646472657373d93a5937364d334d5359' +
+        '36444b425248424c3743334e4e445847533549494d51565156554142364d5034' +
+        '58454d4d4756463251574e504c3232364341a5616674657287a6616d6f756e74' +
+        'cd0bb9ab6d696e2d62616c616e6365ce000186a0a6737461747573a74f66666c' +
+        '696e65b3746f74616c2d617070732d6f707465642d696e00b5746f74616c2d61' +
+        '73736574732d6f707465642d696e00b2746f74616c2d637265617465642d6170' +
+        '707300b4746f74616c2d637265617465642d61737365747300a66265666f7265' +
+        '87a6616d6f756e74cd07d1ab6d696e2d62616c616e6365ce000186a0a6737461' +
+        '747573a74f66666c696e65b3746f74616c2d617070732d6f707465642d696e00' +
+        'b5746f74616c2d6173736574732d6f707465642d696e00b2746f74616c2d6372' +
+        '65617465642d6170707300b4746f74616c2d637265617465642d617373657473' +
+        '00a5636f756e7401a5666972737402a5747869647391d9344242424242424242' +
+        '4242424242424242424242424242424242424242424242424242424242424242' +
+        '424242424242424242424242a5726f756e6407a474786e739383a76368616e67' +
+        '65739184a5616674657283a56279746573c400a47479706502a475696e7401a6' +
+        '6170702d6964cd01c8ae6170702d73746174652d74797065a167a36b6579c402' +
+        '6b31a4706174689100a474786964d93454584944545849445458494454584944' +
+        '5458494454584944545849445458494454584944545849445458494454584944' +
+        '5458494482a76368616e6765739184a66170702d6964cd0315ae6170702d7374' +
+        '6174652d74797065a162a66265666f726583a56279746573c40101a474797065' +
+        '01a475696e7400a36b6579c403626f78a47061746892000183a76368616e6765' +
+        '739185a76163636f756e74d93a4141414141535643544f36533550414a575841' +
+        '564536443337574442494d433534494d56535a544a58535948585a4c4b483736' +
+        '3434544b4f554da5616674657283a56279746573c403010203a47479706501a4' +
+        '75696e7400a66170702d6964cd01c8ae6170702d73746174652d74797065a16c' +
+        'a36b6579c4026b31a4706174689102a474786964d93442424242424242424242' +
+        '4242424242424242424242424242424242424242424242424242424242424242' +
+        '42424242424242424242',
+      'hex'
+    )
+  );
+  /** An opt-in to an app with an empty local schema, as the node encodes it. */
+  const goEmptyLocal = Uint8Array.from(
+    Buffer.from(
+      '83a761646472657373d93a4141414141535643544f36533550414a5758415645' +
+        '36443337574442494d433534494d56535a544a58535948585a4c4b4837363434' +
+        '544b4f554da5616674657282a2696405a6736368656d6182ae6e756d2d627974' +
+        '652d736c69636500a86e756d2d75696e7400a66170702d696405',
+      'hex'
+    )
+  );
+  const fromNode = () =>
+    decodeJSON(JSON.stringify(nodeJSON), TxnStateChangesResponse);
+  const fullCaps = {
+    ...nodeCaps,
+    'state-changes': {
+      'max-response-bytes': 16777216,
+      include: ['accounts', 'assets', 'apps'],
+    },
+  };
+  const capsWith = (include?: string[]) => ({
+    ...nodeCaps,
+    'state-changes': {
+      'max-response-bytes': 16777216,
+      ...(include ? { include } : {}),
+    },
+  });
+  const msgpackAt = (body: Uint8Array) => () => ({ status: 200, body });
+
+  it('decodes groups, and round-trips both encodings', () => {
+    const res = fromNode();
+    assert.strictEqual(res.feeSink?.toString(), SINK);
+    assert.strictEqual(res.groups?.length, 2);
+    const [g, g2] = res.groups!;
+    assert.ok(g instanceof GroupStateChanges);
+    assert.strictEqual(g.first, 0);
+    assert.strictEqual(g.count, 2);
+    assert.deepStrictEqual(g.groupId, groupId);
+    assert.deepStrictEqual(g.txids, [T1, T2]);
+    assert.strictEqual(g2.groupId, undefined);
+    assert.deepStrictEqual(g2.holdings, []);
+    assert.deepStrictEqual(g2.localStates, []);
+
+    const [a, sink, created] = g.accounts;
+    assert.ok(a instanceof AccountStateChange);
+    assert.ok(a.before instanceof AccountState);
+    assert.strictEqual(a.address.toString(), A);
+    assert.strictEqual(a.before.amount, BigInt(5000000));
+    assert.strictEqual(a.before.authAddr?.toString(), Z);
+    assert.strictEqual(a.before.appsTotalSchema, undefined);
+    assert.strictEqual(a.after?.minBalance, BigInt(228500));
+    assert.strictEqual(a.after?.totalAppsOptedIn, 1);
+    assert.ok(a.after?.appsTotalSchema instanceof ApplicationStateSchema);
+    assert.strictEqual(a.after?.appsTotalSchema.numUint, 2);
+    assert.strictEqual(sink.address.toString(), SINK);
+    assert.strictEqual(created.before, undefined);
+    assert.strictEqual(created.after?.amount, BigInt(100000));
+
+    const [h] = g.holdings;
+    assert.ok(h instanceof AssetHoldingChange);
+    assert.ok(h.before instanceof AssetHolding);
+    assert.strictEqual(h.assetId, BigInt(31566704));
+    assert.strictEqual(h.before.amount, BigInt(10));
+    assert.strictEqual(h.after?.amount, BigInt(0));
+
+    const [asset] = g.assets;
+    assert.ok(asset instanceof AssetParamsChange);
+    assert.strictEqual(asset.before, undefined);
+    assert.ok(asset.after instanceof AssetParams);
+    assert.strictEqual(asset.after.total, BigInt(1000));
+    assert.deepStrictEqual(
+      asset.after.nameB64,
+      new TextEncoder().encode('Name')
+    );
+
+    const [app] = g.apps;
+    assert.ok(app instanceof AppParamsChange);
+    assert.ok(app.after instanceof ApplicationParams);
+    assert.deepStrictEqual(
+      app.after.approvalProgram,
+      Uint8Array.from([6, 129, 2])
+    );
+    assert.strictEqual(app.after.globalState, undefined);
+
+    const [local] = g.localStates;
+    assert.ok(local instanceof LocalStateChange);
+    assert.strictEqual(local.appId, BigInt(456));
+    assert.strictEqual(local.before, undefined);
+    assert.ok(local.after instanceof ApplicationLocalState);
+    assert.strictEqual(local.after.id, BigInt(456));
+    assert.strictEqual(local.after.schema.numByteSlice, 1);
+    assert.strictEqual(local.after.keyValue, undefined);
+
+    // The node's msgpack decodes to the same.
+    assert.deepStrictEqual(decodeMsgpack(goFull, TxnStateChangesResponse), res);
+    assert.deepStrictEqual(
+      decodeJSON(encodeJSON(res), TxnStateChangesResponse),
+      res
+    );
+    const packed = encodeMsgpack(res);
+    assert.deepStrictEqual(decodeMsgpack(packed, TxnStateChangesResponse), res);
+    const raw = msgpackDecode(packed, { useMap: true }) as Map<string, any>;
+    assert.ok(raw.get('groups')[0].get('group-id') instanceof Uint8Array);
+    // An empty list of groups survives the round trip.
+    const none = new TxnStateChangesResponse({
+      round: 7,
+      txns: [],
+      groups: [],
+    });
+    assert.deepStrictEqual(
+      decodeMsgpack(encodeMsgpack(none), TxnStateChangesResponse).groups,
+      []
+    );
+    assert.strictEqual(
+      decodeMsgpack(
+        encodeMsgpack(new TxnStateChangesResponse({ round: 7, txns: [] })),
+        TxnStateChangesResponse
+      ).groups,
+      undefined
+    );
+  });
+
+  it('sends include once the capabilities offer it', async () => {
+    const stub = new StubClient([
+      ok(fullCaps),
+      msgpackAt(encodeMsgpack(fromNode())),
+      msgpackAt(encodeMsgpack(fromNode())),
+    ]);
+    const client = new DTAlgodClient(stub, '');
+    const res = await client
+      .getTxnStateChangesForRound(7)
+      .txids([T1])
+      .full()
+      .do();
+    assert.strictEqual(stub.calls[0].path, '/v2/capabilities');
+    assert.deepStrictEqual(stub.calls[1], {
+      path: '/v2/deltas/7/txn/state-changes',
+      query: {
+        format: 'msgpack',
+        txids: T1,
+        include: 'accounts,assets,apps',
+      },
+    });
+    assert.strictEqual(res.groups?.length, 2);
+    // Canonical order, repeats dropped; the capabilities are cached.
+    await client
+      .getTxnStateChangesForRound(7)
+      .include(['apps', 'accounts', 'apps'])
+      .do();
+    assert.strictEqual(stub.calls.length, 3);
+    assert.strictEqual(stub.calls[2].query?.include, 'accounts,apps');
+  });
+
+  it('gives an empty groups list when the node leaves it out', async () => {
+    const empty = encodeMsgpack(
+      new TxnStateChangesResponse({ round: 7, txns: [], feeSink: SINK })
+    );
+    const stub = new StubClient([
+      ok(fullCaps),
+      msgpackAt(empty),
+      msgpackAt(empty),
+    ]);
+    const client = new DTAlgodClient(stub, '');
+    const withInclude = await client
+      .getTxnStateChangesForRound(7)
+      .include(['accounts'])
+      .do();
+    assert.deepStrictEqual(withInclude.groups, []);
+    const without = await client.getTxnStateChangesForRound(7).do();
+    assert.strictEqual(without.groups, undefined);
+  });
+
+  it('throws an answer from a node that ignored include', async () => {
+    // The capabilities said yes, but the node that answered (an older one
+    // behind the same address) ignored include: no fee-sink, no groups.
+    const ignored = encodeMsgpack(
+      new TxnStateChangesResponse({ round: 7, txns: [] })
+    );
+    const stub = new StubClient([
+      ok(fullCaps),
+      msgpackAt(ignored),
+      ok(capsWith()),
+    ]);
+    const client = new DTAlgodClient(stub, '');
+    await assert.rejects(
+      client.getTxnStateChangesForRound(7).full().do(),
+      (err: unknown) =>
+        err instanceof DTUnsupportedError &&
+        /ignored include=accounts,assets,apps/.test(err.message)
+    );
+    // The cached capabilities were dropped, so the next check asks again.
+    assert.strictEqual(await client.supportsFullDeltas(), false);
+    assert.strictEqual(stub.calls.length, 3);
+  });
+
+  it('keeps an empty before or after when re-encoded', () => {
+    const sent = decodeMsgpack(goEmptyLocal, LocalStateChange);
+    assert.strictEqual(sent.before, undefined);
+    assert.strictEqual(sent.after?.id, BigInt(5));
+    assert.strictEqual(sent.after?.schema.numUint, 0);
+    const optIn = new LocalStateChange({
+      address: A,
+      appId: 5,
+      after: new ApplicationLocalState({
+        id: 5,
+        schema: new ApplicationStateSchema({ numUint: 0, numByteSlice: 0 }),
+      }),
+    });
+    const holding = new AssetHoldingChange({
+      address: A,
+      assetId: 0,
+      after: new AssetHolding({ assetId: 0, amount: 0, isFrozen: false }),
+    });
+    for (const again of [
+      decodeJSON(encodeJSON(optIn), LocalStateChange),
+      decodeMsgpack(encodeMsgpack(optIn), LocalStateChange),
+    ]) {
+      assert.strictEqual(again.before, undefined);
+      assert.ok(again.after instanceof ApplicationLocalState);
+      assert.strictEqual(again.after.id, BigInt(5));
+      assert.strictEqual(again.after.schema.numUint, 0);
+    }
+    for (const again of [
+      decodeJSON(encodeJSON(holding), AssetHoldingChange),
+      decodeMsgpack(encodeMsgpack(holding), AssetHoldingChange),
+    ]) {
+      assert.ok(again.after instanceof AssetHolding);
+    }
+  });
+
+  it('does not send include to a node that does not offer it', async () => {
+    const cases: Array<[unknown[], StateChangesInclude[], RegExp]> = [
+      [
+        [ok(capsWith())],
+        ['accounts', 'assets', 'apps'],
+        /include=accounts,assets,apps/,
+      ],
+      [[ok(capsWith(['accounts']))], ['accounts', 'apps'], /include=apps$/],
+      [[ok(nodeCaps)], ['assets'], /include=assets$/],
+      [[status(404)], ['assets'], /include=assets$/],
+    ];
+    for (const [answers, include, message] of cases) {
+      const stub = new StubClient(answers as any);
+      // eslint-disable-next-line no-await-in-loop
+      await assert.rejects(
+        new DTAlgodClient(stub, '')
+          .getTxnStateChangesForRound(7)
+          .include(include)
+          .do(),
+        (err: unknown) =>
+          err instanceof DTUnsupportedError &&
+          err.requestedRound === BigInt(7) &&
+          message.test(err.message)
+      );
+      assert.strictEqual(stub.calls.length, 1);
+    }
+  });
+
+  it('rejects bad include values', () => {
+    const request = new DTAlgodClient(
+      new StubClient([]),
+      ''
+    ).getTxnStateChangesForRound(7);
+    request.include(['assets']);
+    assert.throws(() => request.include([]), /at least one of/);
+    assert.throws(
+      () => request.include(['accounts', 'boxes' as StateChangesInclude]),
+      /Not a state changes include: "boxes"/
+    );
+    assert.deepStrictEqual(request.query, {
+      format: 'msgpack',
+      include: 'assets',
+    });
+    assert.deepStrictEqual(STATE_CHANGES_INCLUDE, [
+      'accounts',
+      'assets',
+      'apps',
+    ]);
+    assert.ok(Object.isFrozen(STATE_CHANGES_INCLUDE));
+  });
+
+  it('finds a group and its transactions', () => {
+    const res = fromNode();
+    const [g, g2] = res.groups!;
+    assert.strictEqual(groupOf(res, T2), g);
+    assert.strictEqual(groupOf(res, T3), g2);
+    assert.strictEqual(groupOf(res, T1.replace('X', 'Y')), undefined);
+    assert.deepStrictEqual(
+      txnsOf(res, g).map((t) => t.path),
+      [[0], [0, 1]]
+    );
+    assert.deepStrictEqual(
+      txnsOf(res, g2).map((t) => t.path),
+      [[2]]
+    );
+    const bare = new TxnStateChangesResponse({ round: 7, txns: res.txns });
+    assert.throws(() => groupOf(bare, T1), /include\(\) or full\(\)/);
+  });
+
+  it('lists the changed fields', () => {
+    const [g] = fromNode().groups!;
+    const [a, , created] = g.accounts;
+    assert.deepStrictEqual(changedFields(a.before, a.after), [
+      'amount',
+      'minBalance',
+      'totalAppsOptedIn',
+      'appsTotalSchema',
+    ]);
+    assert.deepStrictEqual(changedFields(created.before, created.after), [
+      'amount',
+      'minBalance',
+      'status',
+      'totalAppsOptedIn',
+      'totalAssetsOptedIn',
+      'totalCreatedApps',
+      'totalCreatedAssets',
+    ]);
+    assert.deepStrictEqual(changedFields(a.after, a.after), []);
+    assert.deepStrictEqual(changedFields(undefined, undefined), []);
+    assert.deepStrictEqual(changedFields(g.apps[0].before, g.apps[0].after), [
+      'approvalProgram',
+    ]);
+    assert.deepStrictEqual(
+      changedFields(g.holdings[0].before, g.holdings[0].after),
+      ['amount']
+    );
+    // Equal values in distinct objects are the same.
+    const copy = decodeJSON(encodeJSON(a.after!), AccountState);
+    assert.notStrictEqual(copy.appsTotalSchema, a.after?.appsTotalSchema);
+    assert.deepStrictEqual(changedFields(a.after, copy), []);
+  });
+
+  it('drops the fee sink', () => {
+    const res = fromNode();
+    const [g, g2] = res.groups!;
+    const without = withoutFeeSink(g, res.feeSink!);
+    assert.ok(without instanceof GroupStateChanges);
+    assert.deepStrictEqual(
+      without.accounts.map((a) => a.address.toString()),
+      [A, Z]
+    );
+    assert.strictEqual(g.accounts.length, 3);
+    assert.deepStrictEqual(without.holdings, g.holdings);
+    assert.deepStrictEqual(withoutFeeSink(g2, SINK).accounts, []);
+  });
+
+  it('reads include from the capabilities', async () => {
+    const client = new DTAlgodClient(new StubClient([ok(fullCaps)]), '');
+    assert.strictEqual(await client.supportsFullDeltas(), true);
+    const caps = await client.capabilities();
+    assert.deepStrictEqual(caps.stateChanges?.include, [
+      'accounts',
+      'assets',
+      'apps',
+    ]);
+    assert.ok(Object.isFrozen(caps.stateChanges?.include));
+    for (const again of [
+      decodeJSON(encodeJSON(caps), CapabilitiesResponse),
+      decodeMsgpack(encodeMsgpack(caps), CapabilitiesResponse),
+    ]) {
+      assert.deepStrictEqual(
+        again.stateChanges?.include,
+        caps.stateChanges?.include
+      );
+    }
+    for (const answer of [
+      ok(capsWith()),
+      ok(capsWith(['accounts', 'assets'])),
+      ok(nodeCaps),
+      status(404),
+    ]) {
+      const other = new DTAlgodClient(new StubClient([answer]), '');
+      // eslint-disable-next-line no-await-in-loop
+      assert.strictEqual(await other.supportsFullDeltas(), false);
+    }
+    const older = decodeJSON(JSON.stringify(capsWith()), CapabilitiesResponse);
+    assert.deepStrictEqual(older.stateChanges?.include, []);
+    assert.ok(DTAlgodClient.features.includes('full-deltas'));
   });
 });
 

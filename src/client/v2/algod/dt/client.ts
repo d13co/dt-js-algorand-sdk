@@ -14,7 +14,9 @@ import AccountAssetVersions from './accountAssetVersions.js';
 import AccountApplicationVersions from './accountApplicationVersions.js';
 import GetAssetVersions from './getAssetVersions.js';
 import GetAssetHolders from './getAssetHolders.js';
-import GetTxnStateChangesForRound from './getTxnStateChangesForRound.js';
+import GetTxnStateChangesForRound, {
+  STATE_CHANGES_INCLUDE,
+} from './getTxnStateChangesForRound.js';
 import GetApplicationVersions from './getApplicationVersions.js';
 import GetApplicationBoxByNameAt from './getApplicationBoxByNameAt.js';
 import GetApplicationBoxesAt from './getApplicationBoxesAt.js';
@@ -84,6 +86,10 @@ export class DTAlgodClient extends AlgodClient {
    *   `stateChanges` on `capabilities()` and `isStateChangesTooLarge`;
    * - `simulate-app-id`: `appId` on the `stateChanges` of simulate's
    *   execution traces;
+   * - `full-deltas`: `include()` and `full()` on
+   *   `getTxnStateChangesForRound`, its `groups` and `feeSink`,
+   *   `supportsFullDeltas`, `include` on `capabilities().stateChanges`, and
+   *   `groupOf`, `txnsOf`, `changedFields` and `withoutFeeSink`;
    * - `response-headers`: `doWithHeaders()` on every request, and
    *   `effortOf` / `parseEffortHeader` for the `X-Algod-Effort` header;
    * - `error-helpers`: `isNodeBusy`, `retryAfterSeconds`,
@@ -120,6 +126,7 @@ export class DTAlgodClient extends AlgodClient {
     'holders',
     'state-changes',
     'simulate-app-id',
+    'full-deltas',
     'response-headers',
     'error-helpers',
     'round-header',
@@ -453,7 +460,14 @@ export class DTAlgodClient extends AlgodClient {
    * @category GET
    */
   getTxnStateChangesForRound(round: number | bigint) {
-    return new GetTxnStateChangesForRound(this.c, round);
+    return new GetTxnStateChangesForRound(
+      this.c,
+      round,
+      () => this.capabilities(),
+      () => {
+        this.capabilitiesResult = undefined;
+      }
+    );
   }
 
   /**
@@ -711,7 +725,10 @@ export class DTAlgodClient extends AlgodClient {
         .then((caps) => {
           Object.freeze(caps.simulate);
           if (caps.query) Object.freeze(caps.query);
-          if (caps.stateChanges) Object.freeze(caps.stateChanges);
+          if (caps.stateChanges) {
+            Object.freeze(caps.stateChanges.include);
+            Object.freeze(caps.stateChanges);
+          }
           return Object.freeze(caps);
         });
     }
@@ -755,6 +772,27 @@ export class DTAlgodClient extends AlgodClient {
    */
   async supportsStateChanges(): Promise<boolean> {
     return (await this.capabilities()).stateChanges !== undefined;
+  }
+
+  /**
+   * Whether {@link DTAlgodClient.getTxnStateChangesForRound} can list what
+   * each group changed with `full()`: the node offers every
+   * {@link STATE_CHANGES_INCLUDE} value in `stateChanges.include` of
+   * {@link DTAlgodClient.capabilities}. It costs no request once the
+   * capabilities are cached, and is false on stock algod and on dtalgod nodes
+   * from before full deltas. Errors, such as network failures, are rethrown
+   * and not cached.
+   *
+   * #### Example
+   * ```typescript
+   * const req = algodClient.getTxnStateChangesForRound(round).txids(ids);
+   * if (await algodClient.supportsFullDeltas()) req.full();
+   * const { txns, groups } = await req.do();
+   * ```
+   */
+  async supportsFullDeltas(): Promise<boolean> {
+    const offered = (await this.capabilities()).stateChanges?.include ?? [];
+    return STATE_CHANGES_INCLUDE.every((p) => offered.includes(p));
   }
 
   /**

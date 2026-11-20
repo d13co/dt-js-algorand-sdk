@@ -16,6 +16,7 @@ import GetAssetVersions from './getAssetVersions.js';
 import GetAssetHolders from './getAssetHolders.js';
 import GetTxnStateChangesForRound, {
   STATE_CHANGES_INCLUDE,
+  StateChangesInclude,
 } from './getTxnStateChangesForRound.js';
 import GetApplicationVersions from './getApplicationVersions.js';
 import GetApplicationBoxByNameAt from './getApplicationBoxByNameAt.js';
@@ -90,6 +91,10 @@ export class DTAlgodClient extends AlgodClient {
    *   `getTxnStateChangesForRound`, its `groups` and `feeSink`,
    *   `supportsFullDeltas`, `include` on `capabilities().stateChanges`, and
    *   `groupOf`, `txnsOf`, `changedFields` and `withoutFeeSink`;
+   * - `dev-traces`: `include()` of `budget`, `reads` and `trace`, and
+   *   `trace()`, on `getTxnStateChangesForRound`, its `budget`, `reads`,
+   *   `traces` and `programs`, `supportsStateChangesInclude`, and
+   *   `programLine` and `budgetOf`;
    * - `response-headers`: `doWithHeaders()` on every request, and
    *   `effortOf` / `parseEffortHeader` for the `X-Algod-Effort` header;
    * - `error-helpers`: `isNodeBusy`, `retryAfterSeconds`,
@@ -127,6 +132,7 @@ export class DTAlgodClient extends AlgodClient {
     'state-changes',
     'simulate-app-id',
     'full-deltas',
+    'dev-traces',
     'response-headers',
     'error-helpers',
     'round-header',
@@ -793,6 +799,35 @@ export class DTAlgodClient extends AlgodClient {
   async supportsFullDeltas(): Promise<boolean> {
     const offered = (await this.capabilities()).stateChanges?.include ?? [];
     return STATE_CHANGES_INCLUDE.every((p) => offered.includes(p));
+  }
+
+  /**
+   * Whether {@link DTAlgodClient.getTxnStateChangesForRound} can add each of
+   * these to its answer with `include()`: the node lists them all in
+   * `stateChanges.include` of {@link DTAlgodClient.capabilities}. `trace` is
+   * there only on a node with `EnableDeveloperAPI`. It costs no request once
+   * the capabilities are cached, and is false on stock algod and on dtalgod
+   * nodes from before the values. Errors, such as network failures, are
+   * rethrown and not cached.
+   *
+   * #### Example
+   * ```typescript
+   * const req = algodClient.getTxnStateChangesForRound(round).txid(txid);
+   * if (await algodClient.supportsStateChangesInclude('budget')) {
+   *   req.include(['budget']);
+   * }
+   * if (await algodClient.supportsStateChangesInclude('trace')) req.trace();
+   * ```
+   *
+   * @param value - An include value.
+   * @param more - More include values, all needed.
+   */
+  async supportsStateChangesInclude(
+    value: StateChangesInclude,
+    ...more: StateChangesInclude[]
+  ): Promise<boolean> {
+    const offered = (await this.capabilities()).stateChanges?.include ?? [];
+    return [value, ...more].every((p) => offered.includes(p));
   }
 
   /**

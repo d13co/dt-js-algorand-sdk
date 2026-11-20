@@ -6,16 +6,37 @@ import { describe, DTUnsupportedError } from './errors.js';
 import { CapabilitiesResponse, TxnStateChangesResponse } from './models.js';
 
 /**
- * What `include()` can add to a state changes answer, as `groups`:
+ * What `include()` can add to a state changes answer as `groups`, and what
+ * `full()` adds:
  * - `accounts`: each group's account changes (`GroupStateChanges.accounts`);
  * - `assets`: its holding and asset params changes (`holdings`, `assets`);
  * - `apps`: its app params and local state changes (`apps`, `localStates`).
  */
-export type StateChangesInclude = 'accounts' | 'assets' | 'apps';
+export type StateChangesGroupInclude = 'accounts' | 'assets' | 'apps';
 
-/** Every value of {@link StateChangesInclude}, as `full()` sends them. */
-export const STATE_CHANGES_INCLUDE: readonly StateChangesInclude[] =
+/**
+ * What `include()` can add to a state changes answer: the
+ * {@link StateChangesGroupInclude} values, and
+ * - `budget`: the opcode budget of each program run (`budget`);
+ * - `reads`: the app state each transaction read (`reads`);
+ * - `trace`: the execution traces of one transaction's group and the
+ *   disassembly of their programs (`traces`, `programs`); see `trace()`.
+ */
+export type StateChangesInclude =
+  | StateChangesGroupInclude
+  | 'budget'
+  | 'reads'
+  | 'trace';
+
+/** The {@link StateChangesGroupInclude} values, as `full()` sends them. */
+export const STATE_CHANGES_INCLUDE: readonly StateChangesGroupInclude[] =
   Object.freeze(['accounts', 'assets', 'apps']);
+
+/** Every value of {@link StateChangesInclude}, in the order they are sent. */
+export const ALL_STATE_CHANGES_INCLUDE: readonly StateChangesInclude[] =
+  Object.freeze(['accounts', 'assets', 'apps', 'budget', 'reads', 'trace']);
+
+const GROUP_INCLUDE: readonly string[] = STATE_CHANGES_INCLUDE;
 
 /** A transaction ID: 52 characters of unpadded base32. */
 const TXID = /^[A-Z2-7]{52}$/;
@@ -49,6 +70,24 @@ export function stateChangesUnsupportedReason(err: unknown) {
 }
 
 /**
+ * Whether a 400 answer to a state changes request with `include` says the
+ * node does not offer a value its cached capabilities listed: a node from
+ * before budget, reads and traces, which takes only the group values, or
+ * one without `EnableDeveloperAPI` asked for `trace`. Either
+ * means the node behind the address changed since the capabilities were
+ * read.
+ */
+function includeRejected(err: unknown): boolean {
+  const { status, text } = describe(err);
+  return (
+    status === 400 &&
+    /include takes accounts, assets and apps,|include=trace needs node config EnableDeveloperAPI/.test(
+      text
+    )
+  );
+}
+
+/**
  * The app state changes of each transaction of a round
  * (`GET /v2/deltas/{round}/txn/state-changes`): globals, local states and
  * boxes, each with its app and its value before and after the transaction,
@@ -78,11 +117,16 @@ export function stateChangesUnsupportedReason(err: unknown) {
  * With `include()` or `full()`, the answer also has `groups`: everything
  * else each group changed (accounts, holdings, asset and app params, local
  * state opt-ins and opt-outs) with the values before and after the group,
- * and the round's `feeSink`. A node that cannot add them (see
- * `CapabilitiesResponse.stateChanges.include`, and
- * `DTAlgodClient.supportsFullDeltas`) would ignore the parameter, so the
- * request checks the node's capabilities first and throws a
- * {@link DTUnsupportedError} without sending it.
+ * and the round's `feeSink`. `include()` also takes `budget` (the opcode
+ * budget of each program run, `budget`), `reads` (the app state each
+ * transaction read, `reads`) and `trace` (see `trace()`: one transaction
+ * group's execution traces, `traces`, and the disassembly of their
+ * programs, `programs`). A node that cannot add a value (see
+ * `CapabilitiesResponse.stateChanges.include`,
+ * `DTAlgodClient.supportsFullDeltas` and
+ * `DTAlgodClient.supportsStateChangesInclude`) would ignore the parameter or
+ * reject it, so the request checks the node's capabilities first and throws
+ * a {@link DTUnsupportedError} without sending it.
  *
  * #### Example
  * ```typescript
@@ -101,6 +145,20 @@ export function stateChangesUnsupportedReason(err: unknown) {
  *     console.log(a.address, changedFields(a.before, a.after));
  *   }
  * }
+ *
+ * // One transaction's group, traced, with each program's budget.
+ * const traced = await algodClient
+ *   .getTxnStateChangesForRound(round)
+ *   .include(['budget', 'reads'])
+ *   .trace(txid)
+ *   .do();
+ * const top = traced.traces!.find((t) => t.txid === txid)!.execTrace;
+ * for (const step of top.approvalProgramTrace ?? []) {
+ *   const line = programLine(traced, top.approvalProgramHash!, step.pc);
+ *   console.log(step.pc, line?.text);
+ * }
+ * // The traced transaction's own programs: its logic sig, its app's.
+ * for (const b of budgetOf(traced, txid)) console.log(b.kind, b.cost);
  * ```
  *
  * @category GET
@@ -183,52 +241,112 @@ export default class GetTxnStateChangesForRound extends JSONRequest<TxnStateChan
   }
 
   /**
-   * Also list what each group changed other than app state, as the answer's
-   * `groups` (and its `feeSink`): `accounts`, `assets` (holdings and asset
-   * params) and `apps` (app params and local states), in any order; repeats
-   * are ignored. Replaces any list set before. `txids()` and `txid()` narrow
-   * the groups to theirs; `app()` does not. An empty list or an unknown
-   * value is rejected here; a node that cannot add one of them is thrown as
-   * a {@link DTUnsupportedError} by `do()`, without sending the request.
+   * What else to list, in any order; repeats are ignored. Replaces any list
+   * set before (`full()` and `trace()` add to it instead):
+   * - what each group changed other than app state, as the answer's
+   *   `groups` (and its `feeSink`): `accounts`, `assets` (holdings and asset
+   *   params) and `apps` (app params and local states);
+   * - `budget`: the opcode budget of each program run, as `budget`;
+   * - `reads`: the app state each transaction read, as `reads`;
+   * - `trace`: one transaction group's execution traces and programs, as
+   *   `traces` and `programs` (see `trace()`, which also checks the txid).
+   *
+   * `txids()` and `txid()` narrow them all to their transactions (and
+   * groups); `app()` does not, as it narrows only `txns`. An empty list or an
+   * unknown value is rejected here; a node that cannot add one of them is
+   * thrown as a {@link DTUnsupportedError} by `do()`, without sending the
+   * request.
    *
    * @param parts - What to add.
    * @category query
    */
   include(parts: readonly StateChangesInclude[]) {
     if (parts.length === 0) {
-      throw new Error('include needs at least one of accounts, assets, apps');
+      throw new Error(
+        `include needs at least one of ${ALL_STATE_CHANGES_INCLUDE.join(', ')}`
+      );
     }
     for (const p of parts) {
-      if (!STATE_CHANGES_INCLUDE.includes(p)) {
+      if (!ALL_STATE_CHANGES_INCLUDE.includes(p)) {
         throw new Error(
-          `Not a state changes include: ${JSON.stringify(p)} (accounts, assets or apps)`
+          `Not a state changes include: ${JSON.stringify(p)} (${ALL_STATE_CHANGES_INCLUDE.join(', ')})`
         );
       }
     }
-    this.included = STATE_CHANGES_INCLUDE.filter((p) => parts.includes(p));
+    this.included = ALL_STATE_CHANGES_INCLUDE.filter((p) => parts.includes(p));
     this.query.include = this.included.join(',');
     return this;
   }
 
+  /** Adds to the include list instead of replacing it. */
+  private addInclude(parts: readonly StateChangesInclude[]) {
+    return this.include([...this.included, ...parts]);
+  }
+
   /**
-   * Everything: `include(['accounts', 'assets', 'apps'])`.
+   * Every group change: adds `accounts`, `assets` and `apps` to the include
+   * list, keeping any other value set before (`budget`, `reads`, `trace`).
    *
    * @category query
    */
   full() {
-    return this.include(STATE_CHANGES_INCLUDE);
+    return this.addInclude(STATE_CHANGES_INCLUDE);
+  }
+
+  /**
+   * The execution traces of one transaction's group, as simulate gives them
+   * with stack, scratch and state changes, as the answer's `traces`, and the
+   * disassembly of the programs they ran, as `programs` (`programLine` maps
+   * a trace's `pc` to its line): adds `trace` to the include list, keeping
+   * the values set before. `txid` sets `txid()`.
+   *
+   * The node traces exactly one transaction, given with `txid()`, or with a
+   * `txids()` list of one distinct ID (or the same one in both): anything
+   * else is thrown by `do()` without sending the request. It needs a node
+   * with `EnableDeveloperAPI`, whose capabilities list `trace`
+   * (`DTAlgodClient.supportsStateChangesInclude('trace')`); on another, `do()`
+   * throws a {@link DTUnsupportedError} without sending it.
+   *
+   * @param txid - The transaction to trace, if not given with `txid()` or
+   * `txids()`.
+   * @category query
+   */
+  trace(txid?: string) {
+    if (txid !== undefined) this.txid(txid);
+    return this.addInclude(['trace']);
+  }
+
+  /** The distinct transaction IDs of `txid()` and `txids()`. */
+  private askedTxids(): Set<string> {
+    const ids = new Set<string>();
+    if (this.query.txid !== undefined) ids.add(this.query.txid as string);
+    if (this.query.txids !== undefined) {
+      for (const id of (this.query.txids as string).split(',')) ids.add(id);
+    }
+    return ids;
   }
 
   protected async executeRequest(
     headers?: Record<string, string>,
     customOptions?: Record<string, unknown>
   ): Promise<HTTPClientResponse> {
+    if (this.included.includes('trace')) {
+      const n = this.askedTxids().size;
+      if (n !== 1) {
+        throw new Error(
+          `trace needs exactly one transaction, with txid() or txids(), not ${n}`
+        );
+      }
+    }
     if (this.included.length > 0) {
       const offered = (await this.capabilities()).stateChanges?.include ?? [];
       const missing = this.included.filter((p) => !offered.includes(p));
       if (missing.length > 0) {
+        const why = missing.includes('trace')
+          ? ' (trace needs EnableDeveloperAPI)'
+          : '';
         throw new DTUnsupportedError(
-          `The node cannot list group changes: it does not offer include=${missing.join(',')}`,
+          `The node cannot add to the state changes: it does not offer include=${missing.join(',')}${why}`,
           { requestedRound: this.round }
         );
       }
@@ -236,6 +354,13 @@ export default class GetTxnStateChangesForRound extends JSONRequest<TxnStateChan
     try {
       return await super.executeRequest(headers, customOptions);
     } catch (err) {
+      if (this.included.length > 0 && includeRejected(err)) {
+        this.forgetCapabilities();
+        throw new DTUnsupportedError(
+          `The node cannot add to the state changes: it rejected include=${this.included.join(',')}`,
+          { requestedRound: this.round, cause: err }
+        );
+      }
       const reason = stateChangesUnsupportedReason(err);
       if (reason !== undefined) {
         throw new DTUnsupportedError(
@@ -249,12 +374,16 @@ export default class GetTxnStateChangesForRound extends JSONRequest<TxnStateChan
 
   /**
    * Decodes the response and checks that it is for the round asked for. A
-   * mismatch is a node bug, thrown as an `Error`. With `include`, the node
-   * always sends `feeSink`: an answer without it is from a node that ignored
-   * `include`, as one behind the same address but older may, thrown as a
-   * {@link DTUnsupportedError} (and the cached capabilities are dropped).
-   * `groups` is an empty list if the node left it out (a round with no
-   * transactions).
+   * mismatch is a node bug, thrown as an `Error`. With a group include
+   * (`accounts`, `assets`, `apps`), the node always sends `feeSink`, and with
+   * `trace` always `traces`: an answer without them is from a node that
+   * ignored `include`, as one behind the same address but older may, thrown
+   * as a {@link DTUnsupportedError} (and the cached capabilities are
+   * dropped). A list asked for that the node left out because it was empty
+   * (`groups`, `budget`, `reads`, `programs`) is an empty list. With only
+   * `budget` and `reads`, nothing in the answer tells a node that ignored
+   * them from one that had none: an empty list is trusted to the
+   * capabilities.
    */
   prepare(response: HTTPClientResponse): TxnStateChangesResponse {
     const data = decodeMsgpack(response.body, TxnStateChangesResponse);
@@ -263,16 +392,27 @@ export default class GetTxnStateChangesForRound extends JSONRequest<TxnStateChan
         `The state changes are for round ${data.round}, not the round asked for, ${this.round}`
       );
     }
-    if (this.included.length > 0) {
-      if (data.feeSink === undefined) {
-        this.forgetCapabilities();
-        throw new DTUnsupportedError(
-          `The node cannot list group changes: it ignored include=${this.included.join(',')}`,
-          { requestedRound: this.round }
-        );
-      }
-      if (data.groups === undefined) data.groups = [];
+    const has = (p: StateChangesInclude) => this.included.includes(p);
+    // With trace, the node lists every transaction of the traced one's group
+    // (an empty trace for one that ran no program), and a txid not in the
+    // round is a 404, so a 200 without traces ignored include.
+    const ignored =
+      (this.included.some((p) => GROUP_INCLUDE.includes(p)) &&
+        data.feeSink === undefined) ||
+      (has('trace') && data.traces === undefined);
+    if (ignored) {
+      this.forgetCapabilities();
+      throw new DTUnsupportedError(
+        `The node cannot add to the state changes: it ignored include=${this.included.join(',')}`,
+        { requestedRound: this.round }
+      );
     }
+    if (this.included.some((p) => GROUP_INCLUDE.includes(p))) {
+      data.groups ??= [];
+    }
+    if (has('budget')) data.budget ??= [];
+    if (has('reads')) data.reads ??= [];
+    if (has('trace')) data.programs ??= [];
     return data;
   }
 }

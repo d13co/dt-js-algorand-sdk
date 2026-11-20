@@ -15,13 +15,16 @@ import {
   QueryLimits,
   EFFORT_HEADER,
   effortOf,
+  TxnStateChangesResponse,
+  programLine,
+  budgetOf,
 } from '../src/client/v2/algod/dt/index';
 import { SimulateRequestTransactionGroup } from '../src/client/v2/algod/models/types';
 import { makePaymentTxnWithSuggestedParamsFromObject } from '../src/makeTxn';
 import { SignedTransaction } from '../src/signedTransaction';
 import { Transaction } from '../src/transaction';
 import { SuggestedParams } from '../src/types/transactions/base';
-import { encodeMsgpack } from '../src/encoding/encoding';
+import { encodeMsgpack, decodeJSON } from '../src/encoding/encoding';
 import generateAccount from '../src/account';
 import { encodeUint64 } from '../src/encoding/uint64';
 
@@ -619,6 +622,112 @@ describe('time travel against a live node', function liveSuite() {
         assert.ok(v.boxes.length >= 1);
         for (const b of v.boxes) assert.strictEqual(b.name[0], p[0]);
       }
+    });
+  });
+
+  describe('state changes: budget, reads and traces', () => {
+    /** The node's JSON answer for the same request, decoded. */
+    const fromJSON = async (round: bigint, query: Record<string, string>) => {
+      const url = new URL(
+        `/v2/deltas/${round}/txn/state-changes?${new URLSearchParams(query)}`,
+        server
+      );
+      const res = await fetch(url, {
+        headers: { 'X-Algo-API-Token': env.DT_ALGOD_TOKEN ?? '' },
+      });
+      assert.strictEqual(res.status, 200, await res.clone().text());
+      return decodeJSON(await res.text(), TxnStateChangesResponse);
+    };
+
+    before(async function needsValues() {
+      if (!(await c.supportsStateChangesInclude('budget', 'reads'))) {
+        this.skip();
+      }
+    });
+
+    it('lists budget and reads near the tip, the same in JSON', async () => {
+      const round = latest - 5n;
+      const res = await c
+        .getTxnStateChangesForRound(round)
+        .include(['budget', 'reads'])
+        .do();
+      const json = await fromJSON(round, { include: 'budget,reads' });
+      json.budget ??= [];
+      json.reads ??= [];
+      assert.deepStrictEqual(json, res);
+      for (const b of res.budget!) {
+        assert.ok(['approval', 'clear', 'logic-sig'].includes(b.kind));
+        assert.ok(b.path.length >= 1);
+        assert.strictEqual(b.txid !== undefined, b.path.length === 1);
+      }
+      for (const t of res.reads!) {
+        for (const r of t.reads) {
+          assert.strictEqual(r.length !== undefined, r.appStateType === 'b');
+          if (r.appStateType === 'b' || !r.exists) {
+            assert.strictEqual(r.value, undefined);
+          }
+        }
+      }
+    });
+
+    it("traces an app call's group, every step on a line of its program", async function trace() {
+      if (!(await c.supportsStateChangesInclude('trace'))) this.skip();
+      // A recent app call, with inner app calls if one is near: a node that
+      // is not archival keeps only recent blocks.
+      let round = 0n;
+      let txid: string | undefined;
+      for (let r = latest - 5n; r > latest - 40n && !txid; r -= 1n) {
+        // eslint-disable-next-line no-await-in-loop
+        const { budget } = await c
+          .getTxnStateChangesForRound(r)
+          .include(['budget'])
+          .do();
+        const inner = budget!.find((b) => b.path.length > 1);
+        const top = inner
+          ? budget!.find((b) => b.path[0] === inner.path[0] && b.txid)
+          : budget!.find((b) => b.txid);
+        if (top && (inner || r === latest - 39n)) {
+          round = r;
+          txid = top.txid;
+        }
+      }
+      if (!txid) this.skip();
+      const SWAP_ROUND = round;
+      const SWAP_TXID = txid!;
+      const res = await c
+        .getTxnStateChangesForRound(SWAP_ROUND)
+        .include(['budget', 'reads'])
+        .trace(SWAP_TXID)
+        .do();
+      const json = await fromJSON(SWAP_ROUND, {
+        txid: SWAP_TXID,
+        include: 'budget,reads,trace',
+      });
+      json.budget ??= [];
+      json.reads ??= [];
+      json.programs ??= [];
+      assert.deepStrictEqual(json, res);
+      assert.ok(res.traces!.some((t) => t.txid === SWAP_TXID));
+      assert.ok(budgetOf(res, SWAP_TXID).length >= 1);
+      let steps = 0;
+      const walk = (
+        tr: (typeof res.traces)[number]['execTrace'] | undefined
+      ): void => {
+        if (!tr) return;
+        for (const [hash, programSteps] of [
+          [tr.approvalProgramHash, tr.approvalProgramTrace],
+          [tr.clearStateProgramHash, tr.clearStateProgramTrace],
+          [tr.logicSigHash, tr.logicSigTrace],
+        ] as const) {
+          for (const step of programSteps ?? []) {
+            steps += 1;
+            assert.ok(programLine(res, hash!, step.pc), `pc ${step.pc}`);
+          }
+        }
+        for (const inner of tr.innerTrace ?? []) walk(inner);
+      };
+      for (const t of res.traces!) walk(t.execTrace);
+      assert.ok(steps > 0);
     });
   });
 

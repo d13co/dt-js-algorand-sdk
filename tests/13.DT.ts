@@ -45,10 +45,19 @@ import {
   LocalStateChange,
   StateChangesInclude,
   STATE_CHANGES_INCLUDE,
+  ALL_STATE_CHANGES_INCLUDE,
+  ProgramBudget,
+  TxnStateReads,
+  AppStateRead,
+  TxnExecTrace,
+  ProgramDisassembly,
+  DisassemblyLine,
   groupOf,
   txnsOf,
   changedFields,
   withoutFeeSink,
+  programLine,
+  budgetOf,
 } from '../src/client/v2/algod/dt/index';
 import { AlgodClient } from '../src/client/v2/algod/algod';
 import { assignGroupID, computeGroupID } from '../src/group';
@@ -69,6 +78,7 @@ import {
   SimulateTransactionGroupResult,
   SimulateTransactionResult,
   SimulationEvalOverrides,
+  SimulationTransactionExecTrace,
 } from '../src/client/v2/algod/models/types';
 import { NamedMapSchema } from '../src/encoding/schema/index';
 import {
@@ -4489,5 +4499,647 @@ describe('simulate: app-id on state changes', () => {
     assert.strictEqual(fromStock.appId, undefined);
     assert.ok(!('app-id' in JSON.parse(encodeJSON(fromStock))));
     assert.ok(DTAlgodClient.features.includes('simulate-app-id'));
+  });
+});
+
+describe('getTxnStateChangesForRound: budget, reads and traces', () => {
+  const A = 'AAAAASVCTO6S5PAJWXAVE6D37WDBIMC54IMVSZTJXSYHXZLKH7644TKOUM';
+  const T1 = 'TXIDTXIDTXIDTXIDTXIDTXIDTXIDTXIDTXIDTXIDTXIDTXIDTXID';
+  const T2 = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+  const T3 = 'BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB';
+  const b64 = (text: string) => Buffer.from(text).toString('base64');
+  const H1 = Buffer.alloc(32, 1).toString('base64');
+  const H2 = Buffer.alloc(32, 2).toString('base64');
+  const H3 = Buffer.alloc(32, 3).toString('base64');
+  /**
+   * The node's JSON for txid T1 with include=budget,reads,trace: T1 (a logic
+   * sig, then app 5, which calls app 6) is grouped with T3 (a payment), and
+   * the budget and reads also cover T2 (a clear state call that ran out of
+   * budget), as without the txid filter.
+   */
+  const nodeJSON = {
+    round: 9,
+    txns: [],
+    budget: [
+      {
+        path: [0],
+        txid: T1,
+        kind: 'logic-sig',
+        cost: 3,
+        'budget-before': 20000,
+        'budget-after': 19997,
+      },
+      {
+        path: [0],
+        txid: T1,
+        kind: 'approval',
+        'app-id': 5,
+        cost: 900,
+        'budget-before': 1400,
+        'budget-after': 1200,
+      },
+      {
+        path: [0, 0],
+        kind: 'approval',
+        'app-id': 6,
+        cost: 10,
+        'budget-before': 1390,
+        'budget-after': 1380,
+      },
+      {
+        path: [1],
+        txid: T2,
+        kind: 'clear',
+        'app-id': 7,
+        cost: 702,
+        'budget-before': 700,
+        'budget-after': -2,
+        failed: true,
+      },
+    ],
+    reads: [
+      {
+        path: [0],
+        txid: T1,
+        reads: [
+          {
+            'app-id': 5,
+            'app-state-type': 'g',
+            key: b64('counter'),
+            exists: true,
+            value: { type: 2, uint: 42, bytes: '' },
+          },
+          {
+            'app-id': 5,
+            'app-state-type': 'l',
+            account: A,
+            key: b64('k'),
+            exists: false,
+          },
+          {
+            'app-id': 5,
+            'app-state-type': 'b',
+            key: b64('box'),
+            exists: true,
+            length: 1024,
+          },
+          {
+            'app-id': 5,
+            'app-state-type': 'b',
+            key: b64('gone'),
+            exists: false,
+          },
+        ],
+      },
+      {
+        path: [0, 0],
+        reads: [
+          {
+            'app-id': 6,
+            'app-state-type': 'g',
+            key: b64('x'),
+            exists: true,
+            value: { type: 1, uint: 0, bytes: b64('\u0001\u0002') },
+          },
+        ],
+      },
+    ],
+    traces: [
+      {
+        txid: T1,
+        'exec-trace': {
+          'logic-sig-hash': H2,
+          'logic-sig-trace': [{ pc: 1 }],
+          'approval-program-hash': H1,
+          'approval-program-trace': [
+            { pc: 1, 'stack-additions': [{ type: 2, uint: 43 }] },
+            { pc: 3, 'stack-additions': [{ type: 1, bytes: b64('counter') }] },
+            { pc: 12 },
+            {
+              pc: 13,
+              'stack-pop-count': 2,
+              'state-changes': [
+                {
+                  'app-id': 5,
+                  'app-state-type': 'g',
+                  key: b64('counter'),
+                  'new-value': { type: 2, uint: 43 },
+                  operation: 'w',
+                },
+              ],
+            },
+            { pc: 14 },
+            { pc: 16 },
+          ],
+          'inner-trace': [
+            {
+              'approval-program-hash': H3,
+              'approval-program-trace': [{ pc: 1 }],
+            },
+          ],
+        },
+      },
+      { txid: T3, 'exec-trace': {} },
+    ],
+    programs: [
+      {
+        hash: H1,
+        lines: [
+          { text: '#pragma version 10' },
+          { pc: 1, text: 'pushint 43' },
+          { text: 'main:' },
+          { pc: 3, text: 'pushbytes 0x636f756e746572 // "counter"' },
+          { pc: 12, text: 'swap' },
+          { pc: 13, text: 'app_global_put' },
+          { pc: 14, text: 'pushint 1' },
+          { pc: 16, text: 'return' },
+        ],
+      },
+      {
+        hash: H2,
+        lines: [{ text: '#pragma version 10' }, { pc: 1, text: 'pushint 1' }],
+      },
+      {
+        hash: H3,
+        lines: [{ text: '#pragma version 10' }, { pc: 1, text: 'pushint 1' }],
+      },
+    ],
+  };
+  /**
+   * What go-algorand's msgpack codec writes for the same answer, built from
+   * the node's own models (model.TxnStateChangesResponse): bytes are bins,
+   * `budget-after` -2 a negative fixint, and zero values the models leave
+   * out (`failed` false, `app-id` 0, a box's 0 length, `pc` 0) are absent.
+   */
+  const nodeMsgpack = Uint8Array.from(
+    Buffer.from(
+      '86a66275646765749486ac6275646765742d6166746572cd4e1dad6275646765' +
+        '742d6265666f7265cd4e20a4636f737403a46b696e64a96c6f6769632d736967' +
+        'a4706174689100a474786964d934545849445458494454584944545849445458' +
+        '4944545849445458494454584944545849445458494454584944545849445458' +
+        '494487a66170702d696405ac6275646765742d6166746572cd04b0ad62756467' +
+        '65742d6265666f7265cd0578a4636f7374cd0384a46b696e64a8617070726f76' +
+        '616ca4706174689100a474786964d93454584944545849445458494454584944' +
+        '5458494454584944545849445458494454584944545849445458494454584944' +
+        '5458494486a66170702d696406ac6275646765742d6166746572cd0564ad6275' +
+        '646765742d6265666f7265cd056ea4636f73740aa46b696e64a8617070726f76' +
+        '616ca47061746892000088a66170702d696407ac6275646765742d6166746572' +
+        'fead6275646765742d6265666f7265cd02bca4636f7374cd02bea66661696c65' +
+        '64c3a46b696e64a5636c656172a4706174689101a474786964d9344141414141' +
+        '4141414141414141414141414141414141414141414141414141414141414141' +
+        '414141414141414141414141414141a870726f6772616d739382a468617368c4' +
+        '2001010101010101010101010101010101010101010101010101010101010101' +
+        '01a56c696e65739881a474657874b223707261676d612076657273696f6e2031' +
+        '3082a2706301a474657874aa70757368696e7420343381a474657874a56d6169' +
+        '6e3a82a2706303a474657874d927707573686279746573203078363336663735' +
+        '3665373436353732202f2f2022636f756e7465722282a270630ca474657874a4' +
+        '7377617082a270630da474657874ae6170705f676c6f62616c5f70757482a270' +
+        '630ea474657874a970757368696e74203182a2706310a474657874a672657475' +
+        '726e82a468617368c42002020202020202020202020202020202020202020202' +
+        '02020202020202020202a56c696e65739281a474657874b223707261676d6120' +
+        '76657273696f6e20313082a2706301a474657874a970757368696e74203182a4' +
+        '68617368c4200303030303030303030303030303030303030303030303030303' +
+        '030303030303a56c696e65739281a474657874b223707261676d612076657273' +
+        '696f6e20313082a2706301a474657874a970757368696e742031a57265616473' +
+        '9283a4706174689100a572656164739485a66170702d696405ae6170702d7374' +
+        '6174652d74797065a167a6657869737473c3a36b6579c407636f756e746572a5' +
+        '76616c756583a56279746573c400a47479706502a475696e742a85a76163636f' +
+        '756e74d93a4141414141535643544f36533550414a5758415645364433375744' +
+        '42494d433534494d56535a544a58535948585a4c4b4837363434544b4f554da6' +
+        '6170702d696405ae6170702d73746174652d74797065a16ca6657869737473c2' +
+        'a36b6579c4016b85a66170702d696405ae6170702d73746174652d74797065a1' +
+        '62a6657869737473c3a36b6579c403626f78a66c656e677468cd040084a66170' +
+        '702d696405ae6170702d73746174652d74797065a162a6657869737473c2a36b' +
+        '6579c404676f6e65a474786964d9345458494454584944545849445458494454' +
+        '5849445458494454584944545849445458494454584944545849445458494454' +
+        '58494482a470617468920000a572656164739185a66170702d696406ae617070' +
+        '2d73746174652d74797065a167a6657869737473c3a36b6579c40178a576616c' +
+        '756583a56279746573c4020102a47479706501a475696e7400a5726f756e6409' +
+        'a67472616365739282aa657865632d747261636585b5617070726f76616c2d70' +
+        '726f6772616d2d68617368c42001010101010101010101010101010101010101' +
+        '01010101010101010101010101b6617070726f76616c2d70726f6772616d2d74' +
+        '726163659682a2706301af737461636b2d6164646974696f6e739182a4747970' +
+        '6502a475696e742b82a2706303af737461636b2d6164646974696f6e739182a5' +
+        '6279746573c407636f756e746572a4747970650181a270630c83a270630daf73' +
+        '7461636b2d706f702d636f756e7402ad73746174652d6368616e6765739185a6' +
+        '6170702d696405ae6170702d73746174652d74797065a167a36b6579c407636f' +
+        '756e746572a96e65772d76616c756582a47479706502a475696e742ba96f7065' +
+        '726174696f6ea17781a270630e81a2706310ab696e6e65722d74726163659182' +
+        'b5617070726f76616c2d70726f6772616d2d68617368c4200303030303030303' +
+        '030303030303030303030303030303030303030303030303b6617070726f7661' +
+        '6c2d70726f6772616d2d74726163659181a2706301ae6c6f6769632d7369672d' +
+        '68617368c4200202020202020202020202020202020202020202020202020202' +
+        '020202020202af6c6f6769632d7369672d74726163659181a2706301a4747869' +
+        '64d9345458494454584944545849445458494454584944545849445458494454' +
+        '584944545849445458494454584944545849445458494482aa657865632d7472' +
+        '61636580a474786964d934424242424242424242424242424242424242424242' +
+        '42424242424242424242424242424242424242424242424242424242424242a4' +
+        '74786e7390',
+      'hex'
+    )
+  );
+  const fromNode = () => decodeMsgpack(nodeMsgpack, TxnStateChangesResponse);
+  const devCaps = (include: string[]) => ({
+    ...nodeCaps,
+    'state-changes': { 'max-response-bytes': 16777216, include },
+  });
+  const allCaps = devCaps([...ALL_STATE_CHANGES_INCLUDE]);
+  const msgpackAt = (body: Uint8Array) => () => ({ status: 200, body });
+
+  it('decodes the node encodings, and round-trips both', () => {
+    const res = fromNode();
+    assert.deepStrictEqual(
+      decodeJSON(JSON.stringify(nodeJSON), TxnStateChangesResponse),
+      res
+    );
+
+    const [lsig, approval, inner, clear] = res.budget!;
+    assert.ok(lsig instanceof ProgramBudget);
+    assert.deepStrictEqual(lsig.path, [0]);
+    assert.strictEqual(lsig.txid, T1);
+    assert.strictEqual(lsig.kind, 'logic-sig');
+    assert.strictEqual(lsig.appId, undefined);
+    assert.strictEqual(lsig.budgetBefore, 20000);
+    assert.strictEqual(approval.appId, BigInt(5));
+    assert.strictEqual(approval.cost, 900);
+    assert.strictEqual(approval.failed, undefined);
+    assert.deepStrictEqual(inner.path, [0, 0]);
+    assert.strictEqual(inner.txid, undefined);
+    assert.strictEqual(clear.kind, 'clear');
+    assert.strictEqual(clear.budgetAfter, -2);
+    assert.strictEqual(clear.failed, true);
+
+    const [top, innerReads] = res.reads!;
+    assert.ok(top instanceof TxnStateReads);
+    assert.strictEqual(top.txid, T1);
+    const [g, l, box, gone] = top.reads;
+    assert.ok(g instanceof AppStateRead);
+    assert.strictEqual(g.appId, BigInt(5));
+    assert.deepStrictEqual(g.key, new TextEncoder().encode('counter'));
+    assert.strictEqual(g.exists, true);
+    assert.ok(g.value instanceof TealValue);
+    assert.strictEqual(g.value.uint, BigInt(42));
+    assert.strictEqual(g.length, undefined);
+    assert.strictEqual(l.account?.toString(), A);
+    assert.strictEqual(l.exists, false);
+    assert.strictEqual(l.value, undefined);
+    assert.strictEqual(box.length, 1024);
+    assert.strictEqual(box.value, undefined);
+    // The node leaves a 0 length out; a box always has one.
+    assert.strictEqual(gone.exists, false);
+    assert.strictEqual(gone.length, 0);
+    assert.deepStrictEqual(
+      innerReads.reads[0].value?.bytes,
+      Uint8Array.from([1, 2])
+    );
+
+    const [t1, t3] = res.traces!;
+    assert.ok(t1 instanceof TxnExecTrace);
+    assert.strictEqual(t1.txid, T1);
+    assert.ok(t1.execTrace instanceof SimulationTransactionExecTrace);
+    assert.deepStrictEqual(
+      t1.execTrace.approvalProgramHash,
+      Uint8Array.from(Buffer.from(H1, 'base64'))
+    );
+    const write = t1.execTrace.approvalProgramTrace![3].stateChanges![0];
+    assert.ok(write instanceof ApplicationStateOperation);
+    assert.strictEqual(write.appId, BigInt(5));
+    assert.strictEqual(write.newValue?.uint, BigInt(43));
+    assert.strictEqual(t1.execTrace.innerTrace?.length, 1);
+    assert.strictEqual(t3.execTrace.approvalProgramTrace, undefined);
+
+    const [p1] = res.programs!;
+    assert.ok(p1 instanceof ProgramDisassembly);
+    assert.ok(p1.lines[0] instanceof DisassemblyLine);
+    assert.strictEqual(p1.lines[0].pc, undefined);
+    assert.strictEqual(p1.lines[0].text, '#pragma version 10');
+    assert.strictEqual(p1.lines[1].pc, 1);
+
+    assert.deepStrictEqual(
+      decodeMsgpack(encodeMsgpack(res), TxnStateChangesResponse),
+      res
+    );
+    assert.deepStrictEqual(
+      decodeJSON(encodeJSON(res), TxnStateChangesResponse),
+      res
+    );
+    const raw = msgpackDecode(encodeMsgpack(res), { useMap: true }) as Map<
+      string,
+      any
+    >;
+    assert.ok(raw.get('programs')[0].get('hash') instanceof Uint8Array);
+    assert.strictEqual(raw.get('budget')[3].get('budget-after'), -2);
+    // Zero values the node keeps stay; a box's 0 length is left out, as the
+    // node does.
+    const gRaw = raw.get('reads')[0].get('reads');
+    assert.strictEqual(gRaw[1].get('exists'), false);
+    assert.strictEqual(gRaw[3].has('length'), false);
+    assert.strictEqual(raw.get('budget')[0].has('app-id'), false);
+    // Required keys stay when zero, as the node sends them: a program that
+    // spent nothing and ended with no budget left.
+    const spent = new ProgramBudget({
+      path: [0],
+      kind: 'approval',
+      cost: 0,
+      budgetBefore: 0,
+      budgetAfter: 0,
+    });
+    const spentRaw = msgpackDecode(encodeMsgpack(spent), {
+      useMap: true,
+    }) as Map<string, unknown>;
+    assert.deepStrictEqual([...spentRaw.keys()].sort(), [
+      'budget-after',
+      'budget-before',
+      'cost',
+      'kind',
+      'path',
+    ]);
+    assert.deepStrictEqual(decodeJSON(encodeJSON(spent), ProgramBudget), spent);
+    const line = new DisassemblyLine({ text: '' });
+    assert.deepStrictEqual(
+      [
+        ...(
+          msgpackDecode(encodeMsgpack(line), { useMap: true }) as Map<
+            string,
+            unknown
+          >
+        ).keys(),
+      ],
+      ['text']
+    );
+    // Empty lists survive the round trip; absent ones stay absent.
+    const none = new TxnStateChangesResponse({
+      round: 9,
+      txns: [],
+      budget: [],
+      programs: [],
+    });
+    const again = decodeMsgpack(encodeMsgpack(none), TxnStateChangesResponse);
+    assert.deepStrictEqual(again.budget, []);
+    assert.deepStrictEqual(again.programs, []);
+    assert.strictEqual(again.reads, undefined);
+    assert.strictEqual(again.traces, undefined);
+  });
+
+  it('sends budget, reads and trace, and trace() checks the one txid', async () => {
+    const stub = new StubClient([
+      ok(allCaps),
+      msgpackAt(nodeMsgpack),
+      msgpackAt(nodeMsgpack),
+      msgpackAt(nodeMsgpack),
+    ]);
+    const client = new DTAlgodClient(stub, '');
+    const res = await client
+      .getTxnStateChangesForRound(9)
+      .include(['reads', 'budget'])
+      .trace(T1)
+      .do();
+    assert.deepStrictEqual(stub.calls[1], {
+      path: '/v2/deltas/9/txn/state-changes',
+      query: { format: 'msgpack', txid: T1, include: 'budget,reads,trace' },
+    });
+    assert.strictEqual(res.traces?.length, 2);
+    // full() and trace() add to the list; include() replaces it.
+    const request = client
+      .getTxnStateChangesForRound(9)
+      .txids([T1])
+      .trace()
+      .full();
+    assert.strictEqual(request.query.include, 'accounts,assets,apps,trace');
+    request.include(['budget']).trace();
+    assert.strictEqual(request.query.include, 'budget,trace');
+    // The same txid in txid() and txids() is one transaction.
+    await client
+      .getTxnStateChangesForRound(9)
+      .txid(T1)
+      .txids([T1, T1])
+      .trace()
+      .do();
+    await client
+      .getTxnStateChangesForRound(9)
+      .include(['trace'])
+      .txids([T1])
+      .do();
+    assert.strictEqual(stub.calls.length, 4);
+
+    for (const req of [
+      client.getTxnStateChangesForRound(9).trace(),
+      client.getTxnStateChangesForRound(9).txids([T1, T2]).trace(),
+      client.getTxnStateChangesForRound(9).txid(T1).txids([T2]).trace(),
+      client.getTxnStateChangesForRound(9).txids([T1, T2]).include(['trace']),
+    ]) {
+      // eslint-disable-next-line no-await-in-loop
+      await assert.rejects(req.do(), /trace needs exactly one transaction/);
+    }
+    assert.strictEqual(stub.calls.length, 4);
+    assert.throws(
+      () => client.getTxnStateChangesForRound(9).trace('nope'),
+      /Not a transaction ID/
+    );
+    assert.deepStrictEqual(ALL_STATE_CHANGES_INCLUDE, [
+      'accounts',
+      'assets',
+      'apps',
+      'budget',
+      'reads',
+      'trace',
+    ]);
+    assert.ok(Object.isFrozen(ALL_STATE_CHANGES_INCLUDE));
+  });
+
+  it('checks each value against the capabilities', async () => {
+    const cases: Array<[unknown, StateChangesInclude[], RegExp]> = [
+      [devCaps(['accounts', 'assets', 'apps']), ['budget'], /include=budget$/],
+      [
+        devCaps(['accounts', 'assets', 'apps', 'budget', 'reads']),
+        ['budget', 'trace'],
+        /include=trace \(trace needs EnableDeveloperAPI\)$/,
+      ],
+      [devCaps([]), ['reads', 'apps'], /include=apps,reads$/],
+      [nodeCaps, ['budget'], /include=budget$/],
+    ];
+    for (const [caps, include, message] of cases) {
+      const stub = new StubClient([ok(caps)]);
+      // eslint-disable-next-line no-await-in-loop
+      await assert.rejects(
+        new DTAlgodClient(stub, '')
+          .getTxnStateChangesForRound(9)
+          .txid(T1)
+          .include(include)
+          .do(),
+        (err: unknown) =>
+          err instanceof DTUnsupportedError &&
+          err.requestedRound === BigInt(9) &&
+          message.test(err.message)
+      );
+      assert.strictEqual(stub.calls.length, 1);
+    }
+    const client = new DTAlgodClient(
+      new StubClient([
+        ok(devCaps(['accounts', 'assets', 'apps', 'budget', 'reads'])),
+      ]),
+      ''
+    );
+    assert.strictEqual(
+      await client.supportsStateChangesInclude('budget', 'reads'),
+      true
+    );
+    assert.strictEqual(
+      await client.supportsStateChangesInclude('trace'),
+      false
+    );
+    assert.strictEqual(await client.supportsFullDeltas(), true);
+    assert.ok(DTAlgodClient.features.includes('dev-traces'));
+  });
+
+  it('throws the 400 of a node that no longer offers a value', async () => {
+    const rejections = [
+      // A node from before budget, reads and traces.
+      'include takes accounts, assets and apps, comma-separated: "budget"',
+      // A node restarted without EnableDeveloperAPI.
+      "include=trace needs node config EnableDeveloperAPI, as simulate's execution traces do",
+    ];
+    for (const message of rejections) {
+      const stub = new StubClient([
+        ok(allCaps),
+        badRequest(message),
+        ok(devCaps(['accounts', 'assets', 'apps'])),
+      ]);
+      const client = new DTAlgodClient(stub, '');
+      // eslint-disable-next-line no-await-in-loop
+      await assert.rejects(
+        client.getTxnStateChangesForRound(9).include(['budget']).trace(T1).do(),
+        (err: unknown) =>
+          err instanceof DTUnsupportedError &&
+          /rejected include=budget,trace$/.test(err.message)
+      );
+      // The cached capabilities were dropped, so the next check asks again.
+      // eslint-disable-next-line no-await-in-loop
+      const again = await client.supportsStateChangesInclude('trace');
+      assert.strictEqual(again, false);
+      assert.strictEqual(stub.calls.length, 3);
+    }
+    // Other 400s pass through, and keep the capabilities.
+    const stub = new StubClient([
+      ok(allCaps),
+      badRequest(
+        'include=trace needs exactly one transaction, in txid or txids'
+      ),
+    ]);
+    const client = new DTAlgodClient(stub, '');
+    await assert.rejects(
+      client.getTxnStateChangesForRound(9).trace(T1).do(),
+      (err: unknown) =>
+        !(err instanceof DTUnsupportedError) &&
+        /exactly one transaction/.test(String(err))
+    );
+    assert.strictEqual(await client.supportsStateChangesInclude('trace'), true);
+    assert.strictEqual(stub.calls.length, 2);
+  });
+
+  it('gives empty lists for what the node left out, and throws an ignored trace', async () => {
+    // A traced payment: one trace, empty, and nothing else.
+    const empty = encodeMsgpack(
+      new TxnStateChangesResponse({
+        round: 9,
+        txns: [],
+        traces: [
+          new TxnExecTrace({
+            txid: T1,
+            execTrace: new SimulationTransactionExecTrace({}),
+          }),
+        ],
+      })
+    );
+    const ignored = encodeMsgpack(
+      new TxnStateChangesResponse({ round: 9, txns: [] })
+    );
+    const stub = new StubClient([
+      ok(allCaps),
+      msgpackAt(empty),
+      msgpackAt(ignored),
+      msgpackAt(ignored),
+      ok(devCaps(['accounts', 'assets', 'apps'])),
+    ]);
+    const client = new DTAlgodClient(stub, '');
+    const res = await client
+      .getTxnStateChangesForRound(9)
+      .include(['budget', 'reads'])
+      .trace(T1)
+      .do();
+    assert.deepStrictEqual(res.budget, []);
+    assert.deepStrictEqual(res.reads, []);
+    assert.strictEqual(res.traces?.length, 1);
+    assert.deepStrictEqual(res.programs, []);
+    assert.strictEqual(res.groups, undefined);
+    // budget and reads alone cannot tell an ignored include from none.
+    const quiet = await client
+      .getTxnStateChangesForRound(9)
+      .include(['budget'])
+      .do();
+    assert.deepStrictEqual(quiet.budget, []);
+    assert.strictEqual(quiet.reads, undefined);
+    await assert.rejects(
+      client.getTxnStateChangesForRound(9).trace(T1).do(),
+      (err: unknown) =>
+        err instanceof DTUnsupportedError &&
+        /ignored include=trace$/.test(err.message)
+    );
+    // The cached capabilities were dropped, so the next check asks again.
+    assert.strictEqual(
+      await client.supportsStateChangesInclude('trace'),
+      false
+    );
+    assert.strictEqual(stub.calls.length, 5);
+  });
+
+  it('maps a trace pc to its line', () => {
+    const res = fromNode();
+    const { execTrace } = res.traces![0];
+    const lines = execTrace.approvalProgramTrace!.map(
+      (step) => programLine(res, execTrace.approvalProgramHash!, step.pc)?.text
+    );
+    assert.deepStrictEqual(lines, [
+      'pushint 43',
+      'pushbytes 0x636f756e746572 // "counter"',
+      'swap',
+      'app_global_put',
+      'pushint 1',
+      'return',
+    ]);
+    assert.strictEqual(programLine(res, H2, BigInt(1))?.text, 'pushint 1');
+    assert.strictEqual(
+      programLine(res, execTrace.innerTrace![0].approvalProgramHash!, 1)?.text,
+      'pushint 1'
+    );
+    // Inside an opcode's immediates, the version byte, an unknown program.
+    assert.strictEqual(programLine(res, H1, 2), undefined);
+    assert.strictEqual(programLine(res, H1, 0), undefined);
+    assert.strictEqual(
+      programLine(res, Buffer.alloc(32, 9).toString('base64'), 1),
+      undefined
+    );
+    assert.throws(
+      () =>
+        programLine(new TxnStateChangesResponse({ round: 9, txns: [] }), H1, 1),
+      /ask for them with trace\(\)/
+    );
+  });
+
+  it("finds a transaction's program runs", () => {
+    const res = fromNode();
+    assert.deepStrictEqual(
+      budgetOf(res, T1).map((b) => b.kind),
+      ['logic-sig', 'approval']
+    );
+    assert.deepStrictEqual(budgetOf(res, [0]), budgetOf(res, T1));
+    assert.deepStrictEqual(budgetOf(res, [0, 0]), [res.budget![2]]);
+    assert.deepStrictEqual(budgetOf(res, [BigInt(1)]), [res.budget![3]]);
+    assert.deepStrictEqual(budgetOf(res, [2]), []);
+    assert.deepStrictEqual(budgetOf(res, T3), []);
+    assert.throws(
+      () => budgetOf(new TxnStateChangesResponse({ round: 9, txns: [] }), [0]),
+      /ask for it with include\(\['budget'\]\)/
+    );
   });
 });

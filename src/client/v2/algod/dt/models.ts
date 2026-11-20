@@ -2675,6 +2675,11 @@ export class SimulateLimits implements Encodable {
           key: 'max-extra-opcode-budget',
           valueSchema: new Uint64Schema(),
           omitEmpty: false,
+        },
+        {
+          key: 'exec-trace-config',
+          valueSchema: new ArraySchema(new StringSchema()),
+          omitEmpty: true,
         }
       );
     }
@@ -2695,19 +2700,33 @@ export class SimulateLimits implements Encodable {
   public maxExtraOpcodeBudget: number;
 
   /**
+   * The fork's `execTraceConfig` options the node takes, beyond upstream's:
+   * `state-change-app-id` (`SimulateTraceConfig.stateChangeAppId`). Empty on
+   * stock algod and on dtalgod nodes from before them, which answer 400 to
+   * them. `DTAlgodClient.supportsStateChangeAppId` reads it. A value this
+   * client does not know is kept.
+   */
+  public execTraceConfig: string[];
+
+  /**
    * Creates a new `SimulateLimits` object.
    * @param maxTxnGroups - The most transaction groups a request may hold.
    * @param maxExtraOpcodeBudget - The most `extraOpcodeBudget`, per group.
+   * @param execTraceConfig - The fork's `execTraceConfig` options the node
+   * takes.
    */
   constructor({
     maxTxnGroups,
     maxExtraOpcodeBudget,
+    execTraceConfig = [],
   }: {
     maxTxnGroups: number | bigint;
     maxExtraOpcodeBudget: number | bigint;
+    execTraceConfig?: string[];
   }) {
     this.maxTxnGroups = ensureSafeInteger(maxTxnGroups);
     this.maxExtraOpcodeBudget = ensureSafeInteger(maxExtraOpcodeBudget);
+    this.execTraceConfig = execTraceConfig;
   }
 
   // eslint-disable-next-line class-methods-use-this
@@ -2719,6 +2738,7 @@ export class SimulateLimits implements Encodable {
     return new Map<string, unknown>([
       ['max-txn-groups', this.maxTxnGroups],
       ['max-extra-opcode-budget', this.maxExtraOpcodeBudget],
+      ['exec-trace-config', this.execTraceConfig],
     ]);
   }
 
@@ -2730,6 +2750,7 @@ export class SimulateLimits implements Encodable {
       // A key the node left out takes stock algod's value.
       maxTxnGroups: data.get('max-txn-groups') ?? 1,
       maxExtraOpcodeBudget: data.get('max-extra-opcode-budget') ?? 320000,
+      execTraceConfig: data.get('exec-trace-config') ?? [],
     });
   }
 }

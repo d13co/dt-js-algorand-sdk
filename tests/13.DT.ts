@@ -713,6 +713,7 @@ describe('time travel', () => {
           simulate: {
             maxTxnGroups: 8,
             maxExtraOpcodeBudget: 640000,
+            execTraceConfig: [],
           },
           query: undefined,
           stateChanges: undefined,
@@ -746,7 +747,7 @@ describe('time travel', () => {
       const got = await new DTAlgodClient(stub, '').capabilities();
       assert.deepStrictEqual(
         { ...got.simulate },
-        { maxTxnGroups: 8, maxExtraOpcodeBudget: 640000 }
+        { maxTxnGroups: 8, maxExtraOpcodeBudget: 640000, execTraceConfig: [] }
       );
     });
 
@@ -921,7 +922,7 @@ describe('time travel', () => {
       assert.strictEqual(got.timeTravel, true);
       assert.deepStrictEqual(
         { ...got.simulate },
-        { maxTxnGroups: 8, maxExtraOpcodeBudget: 320000 }
+        { maxTxnGroups: 8, maxExtraOpcodeBudget: 320000, execTraceConfig: [] }
       );
       assert.deepStrictEqual(
         { ...got.query },
@@ -4499,6 +4500,59 @@ describe('simulate: app-id on state changes', () => {
     assert.strictEqual(fromStock.appId, undefined);
     assert.ok(!('app-id' in JSON.parse(encodeJSON(fromStock))));
     assert.ok(DTAlgodClient.features.includes('simulate-app-id'));
+  });
+
+  it('sends state-change-app-id only when asked', () => {
+    const asked = new SimulateTraceConfig({
+      enable: true,
+      stateChange: true,
+      stateChangeAppId: true,
+    });
+    assert.deepStrictEqual(JSON.parse(encodeJSON(asked)), {
+      enable: true,
+      'state-change': true,
+      'state-change-app-id': true,
+    });
+    assert.strictEqual(
+      decodeMsgpack(encodeMsgpack(asked), SimulateTraceConfig).stateChangeAppId,
+      true
+    );
+    // what stock algod takes
+    const stock = new SimulateTraceConfig({ enable: true, stateChange: true });
+    assert.ok(!('state-change-app-id' in JSON.parse(encodeJSON(stock))));
+    assert.ok(DTAlgodClient.features.includes('state-change-app-id'));
+  });
+
+  it('supportsStateChangeAppId reads simulate.exec-trace-config', async () => {
+    const withOption = new DTAlgodClient(
+      new StubClient([
+        ok({
+          ...nodeCaps,
+          simulate: {
+            ...nodeCaps.simulate,
+            'exec-trace-config': ['state-change-app-id', 'some-new-option'],
+          },
+        }),
+      ]),
+      ''
+    );
+    assert.strictEqual(await withOption.supportsStateChangeAppId(), true);
+    const caps = await withOption.capabilities();
+    assert.deepStrictEqual(caps.simulate.execTraceConfig, [
+      'state-change-app-id',
+      'some-new-option',
+    ]);
+    assert.ok(Object.isFrozen(caps.simulate.execTraceConfig));
+    const roundTrip = decodeJSON(encodeJSON(caps), CapabilitiesResponse);
+    assert.deepStrictEqual(
+      roundTrip.simulate.execTraceConfig,
+      caps.simulate.execTraceConfig
+    );
+
+    const older = new DTAlgodClient(new StubClient([ok(nodeCaps)]), '');
+    assert.strictEqual(await older.supportsStateChangeAppId(), false);
+    const stock = new DTAlgodClient(new StubClient([status(404)]), '');
+    assert.strictEqual(await stock.supportsStateChangeAppId(), false);
   });
 });
 

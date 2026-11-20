@@ -2382,9 +2382,10 @@ export class ApplicationStateOperation implements Encodable {
 
   /**
    * The application whose state the operation changed. It differs from the
-   * running application for the foreign box opcodes (`app_box_*`). Set by
-   * dtalgod nodes only (non-standard fork feature; dt-algosdk: not in
-   * upstream's spec, keep when regenerating).
+   * running application only when a foreign box opcode (`app_box_*`) changes
+   * another application's boxes. Set by dtalgod nodes only, and in a simulate
+   * trace only with `SimulateTraceConfig.stateChangeAppId` (non-standard fork
+   * feature; dt-algosdk: not in upstream's spec, keep when regenerating).
    */
   public appId?: bigint;
 
@@ -6365,6 +6366,12 @@ export class SimulateTraceConfig implements Encodable {
           key: 'state-change',
           valueSchema: new OptionalSchema(new BooleanSchema()),
           omitEmpty: true,
+        },
+        // dt-algosdk: not in upstream's spec, keep when regenerating.
+        {
+          key: 'state-change-app-id',
+          valueSchema: new OptionalSchema(new BooleanSchema()),
+          omitEmpty: true,
         }
       );
     }
@@ -6395,6 +6402,15 @@ export class SimulateTraceConfig implements Encodable {
   public stateChange?: boolean;
 
   /**
+   * Adds `appId` to each state change of the trace. Needs `stateChange`.
+   * dtalgod nodes only: stock algod and dtalgod nodes from before it answer
+   * 400, so check `DTAlgodClient.supportsStateChangeAppId()` first
+   * (non-standard fork feature; dt-algosdk: not in upstream's spec, keep when
+   * regenerating).
+   */
+  public stateChangeAppId?: boolean;
+
+  /**
    * Creates a new `SimulateTraceConfig` object.
    * @param enable - A boolean option for opting in execution trace features simulation endpoint.
    * @param scratchChange - A boolean option enabling returning scratch slot changes together with execution
@@ -6403,22 +6419,27 @@ export class SimulateTraceConfig implements Encodable {
    * during simulation.
    * @param stateChange - A boolean option enabling returning application state changes (global, local,
    * and box changes) with the execution trace during simulation.
+   * @param stateChangeAppId - Adds `appId` to each state change (dtalgod
+   * nodes only).
    */
   constructor({
     enable,
     scratchChange,
     stackChange,
     stateChange,
+    stateChangeAppId,
   }: {
     enable?: boolean;
     scratchChange?: boolean;
     stackChange?: boolean;
     stateChange?: boolean;
+    stateChangeAppId?: boolean;
   }) {
     this.enable = enable;
     this.scratchChange = scratchChange;
     this.stackChange = stackChange;
     this.stateChange = stateChange;
+    this.stateChangeAppId = stateChangeAppId;
   }
 
   // eslint-disable-next-line class-methods-use-this
@@ -6432,6 +6453,7 @@ export class SimulateTraceConfig implements Encodable {
       ['scratch-change', this.scratchChange],
       ['stack-change', this.stackChange],
       ['state-change', this.stateChange],
+      ['state-change-app-id', this.stateChangeAppId],
     ]);
   }
 
@@ -6444,6 +6466,7 @@ export class SimulateTraceConfig implements Encodable {
       scratchChange: data.get('scratch-change'),
       stackChange: data.get('stack-change'),
       stateChange: data.get('state-change'),
+      stateChangeAppId: data.get('state-change-app-id'),
     });
   }
 }

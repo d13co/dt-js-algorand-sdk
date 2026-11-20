@@ -87,6 +87,9 @@ export class DTAlgodClient extends AlgodClient {
    *   `stateChanges` on `capabilities()` and `isStateChangesTooLarge`;
    * - `simulate-app-id`: `appId` on the `stateChanges` of simulate's
    *   execution traces;
+   * - `state-change-app-id`: `stateChangeAppId` on `SimulateTraceConfig`,
+   *   which asks for that `appId`, `execTraceConfig` on
+   *   `capabilities().simulate`, and `supportsStateChangeAppId`;
    * - `full-deltas`: `include()` and `full()` on
    *   `getTxnStateChangesForRound`, its `groups` and `feeSink`,
    *   `supportsFullDeltas`, `include` on `capabilities().stateChanges`, and
@@ -131,6 +134,7 @@ export class DTAlgodClient extends AlgodClient {
     'holders',
     'state-changes',
     'simulate-app-id',
+    'state-change-app-id',
     'full-deltas',
     'dev-traces',
     'response-headers',
@@ -729,6 +733,7 @@ export class DTAlgodClient extends AlgodClient {
           throw err;
         })
         .then((caps) => {
+          Object.freeze(caps.simulate.execTraceConfig);
           Object.freeze(caps.simulate);
           if (caps.query) Object.freeze(caps.query);
           if (caps.stateChanges) {
@@ -828,6 +833,30 @@ export class DTAlgodClient extends AlgodClient {
   ): Promise<boolean> {
     const offered = (await this.capabilities()).stateChanges?.include ?? [];
     return [value, ...more].every((p) => offered.includes(p));
+  }
+
+  /**
+   * Whether simulate takes `stateChangeAppId` in its `execTraceConfig`, which
+   * adds `appId` to each state change of the trace: the node lists
+   * `state-change-app-id` in `simulate.execTraceConfig` of
+   * {@link DTAlgodClient.capabilities}. Stock algod and dtalgod nodes from
+   * before it answer 400 to the option. Traces also need `developerApi`. It
+   * costs no request once the capabilities are cached. Errors, such as
+   * network failures, are rethrown and not cached.
+   *
+   * #### Example
+   * ```typescript
+   * const execTraceConfig = new modelsv2.SimulateTraceConfig({
+   *   enable: true,
+   *   stateChange: true,
+   *   stateChangeAppId: await algodClient.supportsStateChangeAppId(),
+   * });
+   * ```
+   */
+  async supportsStateChangeAppId(): Promise<boolean> {
+    return (await this.capabilities()).simulate.execTraceConfig.includes(
+      'state-change-app-id'
+    );
   }
 
   /**

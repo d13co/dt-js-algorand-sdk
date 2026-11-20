@@ -143,7 +143,7 @@ const algod = algosdk.DTAlgodClient.from(algorand.client.algod);
 
 `supportsDT()`, `supportsAssetHolders()`, `supportsStateChanges()` and `supportsFullDeltas()` say whether the node has the optional features they name; see [Optional node features](#optional-node-features).
 
-`DTAlgodClient.features` lists what this build of the SDK has, for code that finds the class at runtime on an algosdk that may be stock algosdk rather than dt-algosdk, as algokit-utils and generated clients do: `reads-at-round`, `versions`, `simulate-groups`, `from`, `group-results`, `from-transactions`, `capabilities` (`capabilities()`, `getCapabilities()`), `query`, `query-total-calls` (`maxTotalCalls`), `versions-rounds` (`rounds()` and `changedRound`), `versions-keys` (`include('keys')` and `changedKeys`), `versions-pages` (`pages()`), `holders` (`getAssetHolders`, `supportsAssetHolders`), `state-changes` (`getTxnStateChangesForRound`, `supportsStateChanges`, `stateChanges` of the capabilities, `isStateChangesTooLarge`), `simulate-app-id` (`appId` on simulate trace state changes), `full-deltas` (`include()`, `full()`, `groups` and `feeSink` of the state changes, `supportsFullDeltas`, `include` of the capabilities' `stateChanges`, `groupOf`, `txnsOf`, `changedFields`, `withoutFeeSink`), `dev-traces` (`include()` of `budget`, `reads` and `trace`, `trace()`, `budget`, `reads`, `traces` and `programs` of the state changes, `supportsStateChangesInclude`, `programLine`, `budgetOf`), `response-headers` (`doWithHeaders()`, `effortOf`, `parseEffortHeader`), `error-helpers` (`isNodeBusy`, `retryAfterSeconds`, `isTimeLimitExceeded`, `isRoundTooLarge`, `isHistoryUnavailable`), `round-header` (reads at a round check `X-Algod-TT-Round`, `TT_ROUND_HEADER`), `retry-policy` (the [retry policy](#retries), `isTooManyRequests` and `isNetworkError`). It says nothing about the node: ask the node with `capabilities()`, `supportsDT()`, `supportsAssetHolders()`, `supportsStateChanges()`, `supportsFullDeltas()` and `supportsStateChangesInclude()`.
+`DTAlgodClient.features` lists what this build of the SDK has, for code that finds the class at runtime on an algosdk that may be stock algosdk rather than dt-algosdk, as algokit-utils and generated clients do: `reads-at-round`, `versions`, `simulate-groups`, `from`, `group-results`, `from-transactions`, `capabilities` (`capabilities()`, `getCapabilities()`), `query`, `query-total-calls` (`maxTotalCalls`), `versions-rounds` (`rounds()` and `changedRound`), `versions-keys` (`include('keys')` and `changedKeys`), `versions-pages` (`pages()`), `holders` (`getAssetHolders`, `supportsAssetHolders`), `state-changes` (`getTxnStateChangesForRound`, `supportsStateChanges`, `stateChanges` of the capabilities, `isStateChangesTooLarge`), `simulate-app-id` (`appId` on simulate trace state changes), `state-change-app-id` (`stateChangeAppId` on `SimulateTraceConfig`, `execTraceConfig` of the capabilities' `simulate`, `supportsStateChangeAppId`), `full-deltas` (`include()`, `full()`, `groups` and `feeSink` of the state changes, `supportsFullDeltas`, `include` of the capabilities' `stateChanges`, `groupOf`, `txnsOf`, `changedFields`, `withoutFeeSink`), `dev-traces` (`include()` of `budget`, `reads` and `trace`, `trace()`, `budget`, `reads`, `traces` and `programs` of the state changes, `supportsStateChangesInclude`, `programLine`, `budgetOf`), `response-headers` (`doWithHeaders()`, `effortOf`, `parseEffortHeader`), `error-helpers` (`isNodeBusy`, `retryAfterSeconds`, `isTimeLimitExceeded`, `isRoundTooLarge`, `isHistoryUnavailable`), `round-header` (reads at a round check `X-Algod-TT-Round`, `TT_ROUND_HEADER`), `retry-policy` (the [retry policy](#retries), `isTooManyRequests` and `isNetworkError`). It says nothing about the node: ask the node with `capabilities()`, `supportsDT()`, `supportsAssetHolders()`, `supportsStateChanges()`, `supportsFullDeltas()`, `supportsStateChangesInclude()` and `supportsStateChangeAppId()`.
 
 ```typescript
 const DT = (algosdk as any).DTAlgodClient;
@@ -463,7 +463,7 @@ The request checks `stateChanges.include` of the capabilities for each value, as
 
 `DTAlgodClient.simulateTransactions(request)` accepts a stock `SimulateRequest` or a `dtModels.DTSimulateRequest`, and sends it as algosdk would, with several groups allowed. Simulate is upstream's otherwise: dt-algorand dt5 removed the fork's simulate options (`rounds`, `parallelGroups`, the validity window modes and `protocol`), which `query()` replaced. For read-only calls at several rounds, each run alone, or under a later protocol, use [Query](#query).
 
-`round` may be any round since genesis on a time-travel node; a node without time travel can only simulate its last few rounds. Simulating at round R evaluates the transactions as if in block R + 1, so they need `firstValid <= R + 1 <= lastValid`.
+`round` may be any round since genesis on a time-travel node; a node without time travel can only simulate its last few rounds. Simulating at round R evaluates the transactions as if in block R + 1, so they need `firstValid <= R + 1 <= lastValid`. A `round` after the node's latest round is a 400 from dt6 nodes (`round N is after the latest round L`), as in `query()`. dt5 nodes answered 500, which the [retry policy](#retries) retried until it gave up.
 
 ### Several groups
 
@@ -494,7 +494,7 @@ const res = await algod.simulateTransactions(request).do();
 - `groupResult(groupIndex)`: one group, as `{ ok: true, result }` or `{ ok: false, error }`;
 - `groupResults(groupCount?)`: every group's outcome, in request order. It defaults to the number of groups the request had (`requestGroupCount`, set by `simulateTransactions().do()`).
 
-With state change tracing (`execTraceConfig` with `stateChange: true`), each `ApplicationStateOperation` in a trace's `stateChanges` also has `appId` from a dtalgod node: the app whose state the opcode changed, which is not the running app for the foreign box opcodes (`app_box_*`). Stock algod leaves it undefined.
+With state change tracing and `stateChangeAppId` (`execTraceConfig` with `stateChange: true, stateChangeAppId: true`), each `ApplicationStateOperation` in a trace's `stateChanges` also has `appId`: the app whose state the opcode changed. It is the running app unless a foreign box opcode (`app_box_*`) changes another app's boxes. The option is opt-in because upstream's `goal` and `libgoal` refuse a response with the extra field. Only dtalgod nodes that list `state-change-app-id` in the capabilities' `simulate.execTraceConfig` take it: stock algod and older dtalgod nodes answer 400, so check `supportsStateChangeAppId()` first. Without the option `appId` is undefined.
 
 The `error` is a `SimulateGroupError` with `kind`:
 
@@ -640,16 +640,17 @@ if (!query) {
 
 `simulate`:
 
-| Field                  | Meaning                             |
-| ---------------------- | ----------------------------------- |
-| `maxTxnGroups`         | groups per request                  |
-| `maxExtraOpcodeBudget` | most `extraOpcodeBudget`, per group |
+| Field                  | Meaning                                                                                                       |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `maxTxnGroups`         | groups per request                                                                                            |
+| `maxExtraOpcodeBudget` | most `extraOpcodeBudget`, per group                                                                           |
+| `execTraceConfig`      | the fork's `execTraceConfig` options the node takes: `state-change-app-id` (`stateChangeAppId`); `[]` if none |
 
 dt5 nodes no longer report simulate's `max-rounds` and `resource-limit-multiplier`, and the client ignores them when a dt4 node sends them.
 
 A 0 limit from the node means no limit. `simulate`, `query` and `stateChanges` are frozen too.
 
-The client reads capabilities leniently, so a node with a key more or less than this client knows still answers `capabilities()`: unknown keys are ignored, and a missing key takes a safe default. The flags default to false and `timeLimitSeconds` to 0. `simulate` defaults to stock algod's limits (1 group, 320,000 extra budget). In `query`, `maxCalls` and `maxRounds` default to 1, `maxCallBudget` to 700, the byte limits to 0, and `maxTotalCalls` to `maxCalls * maxRounds`. In `stateChanges`, `maxResponseBytes` defaults to 0 and `include` to `[]`. A value of the wrong type still fails. dt-algosdk 3.9.0-dt.4.1.0.0 and earlier required every key, so they cannot read a dt5 node's capabilities, which lack `simulate.max-rounds`.
+The client reads capabilities leniently, so a node with a key more or less than this client knows still answers `capabilities()`: unknown keys are ignored, and a missing key takes a safe default. The flags default to false and `timeLimitSeconds` to 0. `simulate` defaults to stock algod's limits (1 group, 320,000 extra budget, no `execTraceConfig` options). In `query`, `maxCalls` and `maxRounds` default to 1, `maxCallBudget` to 700, the byte limits to 0, and `maxTotalCalls` to `maxCalls * maxRounds`. In `stateChanges`, `maxResponseBytes` defaults to 0 and `include` to `[]`. A value of the wrong type still fails. dt-algosdk 3.9.0-dt.4.1.0.0 and earlier required every key, so they cannot read a dt5 node's capabilities, which lack `simulate.max-rounds`.
 
 Every dtalgod node serves its capabilities, so stock algod is the only node without them (a 404): it gets stock algod's instead (`CapabilitiesResponse.stock()`), with `reported` false: no time travel, no queries, and one group per simulate request, so send one request per round with `round` set. `getCapabilities()` is the uncached request, which throws `DTUnsupportedError` on a 404. The endpoint replaces `GET /v2/transactions/simulate/limits` of earlier fork builds, which the client no longer reads.
 
@@ -798,7 +799,7 @@ Against stock algod, `DTAlgodClient` works for everything inherited from `AlgodC
 
 - `base64ToBytes` and `bytesToBase64` without Node's `Buffer` (browsers) built the bytes with `Uint8Array.from` and a callback, and the string one `String.fromCodePoint` per byte. They now use a `charCodeAt` loop and `String.fromCharCode` over 32 KB chunks: for 32 KB, 0.13 ms instead of 3.6 ms to decode and 0.29 ms instead of 2.3 ms to encode. Every box value, program, state key and `changedKeys` entry decoded in a browser goes through them. Node keeps using `Buffer`.
 
-- `ApplicationStateOperation` (in the generated `modelsv2`) gains an optional `appId`, the `app-id` dtalgod nodes add to each state change of a simulate execution trace. It is not in upstream's spec: keep it when regenerating the models.
+- `ApplicationStateOperation` (in the generated `modelsv2`) gains an optional `appId`, the `app-id` dtalgod nodes add to each state change of a simulate execution trace when asked with `SimulateTraceConfig`'s new `stateChangeAppId` (`state-change-app-id`). Neither is in upstream's spec: keep them when regenerating the models.
 
 - `JSONRequest` gains `doWithHeaders()`, which returns the decoded data and the response headers (lowercased names). It runs `executeRequest` then `prepare`, so every subclass's checks apply as in `do()`.
 

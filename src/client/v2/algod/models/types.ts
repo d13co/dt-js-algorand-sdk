@@ -2341,6 +2341,12 @@ export class ApplicationStateOperation implements Encodable {
           key: 'new-value',
           valueSchema: new OptionalSchema(AvmValue.encodingSchema),
           omitEmpty: true,
+        },
+        // dt-algosdk: not in upstream's spec, keep when regenerating.
+        {
+          key: 'app-id',
+          valueSchema: new OptionalSchema(new Uint64Schema()),
+          omitEmpty: true,
         }
       );
     }
@@ -2375,6 +2381,15 @@ export class ApplicationStateOperation implements Encodable {
   public newValue?: AvmValue;
 
   /**
+   * The application whose state the operation changed. It differs from the
+   * running application only when a foreign box opcode (`app_box_*`) changes
+   * another application's boxes. Set by dtalgod nodes only, and in a simulate
+   * trace only with `SimulateTraceConfig.stateChangeAppId` (non-standard fork
+   * feature; dt-algosdk: not in upstream's spec, keep when regenerating).
+   */
+  public appId?: bigint;
+
+  /**
    * Creates a new `ApplicationStateOperation` object.
    * @param appStateType - Type of application state. Value `g` is **global state**, `l` is **local
    * state**, `b` is **boxes**.
@@ -2383,6 +2398,8 @@ export class ApplicationStateOperation implements Encodable {
    * @param account - For local state changes, the address of the account associated with the local
    * state.
    * @param newValue - Represents an AVM value.
+   * @param appId - The application whose state the operation changed (dtalgod
+   * nodes only).
    */
   constructor({
     appStateType,
@@ -2390,12 +2407,14 @@ export class ApplicationStateOperation implements Encodable {
     operation,
     account,
     newValue,
+    appId,
   }: {
     appStateType: string;
     key: string | Uint8Array;
     operation: string;
     account?: Address | string;
     newValue?: AvmValue;
+    appId?: number | bigint;
   }) {
     this.appStateType = appStateType;
     this.key = typeof key === 'string' ? base64ToBytes(key) : key;
@@ -2403,6 +2422,7 @@ export class ApplicationStateOperation implements Encodable {
     this.account =
       typeof account === 'string' ? Address.fromString(account) : account;
     this.newValue = newValue;
+    this.appId = typeof appId === 'undefined' ? undefined : ensureBigInt(appId);
   }
 
   // eslint-disable-next-line class-methods-use-this
@@ -2427,6 +2447,7 @@ export class ApplicationStateOperation implements Encodable {
           ? this.newValue.toEncodingData()
           : undefined,
       ],
+      ['app-id', this.appId],
     ]);
   }
 
@@ -2443,6 +2464,7 @@ export class ApplicationStateOperation implements Encodable {
         typeof data.get('new-value') !== 'undefined'
           ? AvmValue.fromEncodingData(data.get('new-value'))
           : undefined,
+      appId: data.get('app-id'),
     });
   }
 }
@@ -6344,6 +6366,12 @@ export class SimulateTraceConfig implements Encodable {
           key: 'state-change',
           valueSchema: new OptionalSchema(new BooleanSchema()),
           omitEmpty: true,
+        },
+        // dt-algosdk: not in upstream's spec, keep when regenerating.
+        {
+          key: 'state-change-app-id',
+          valueSchema: new OptionalSchema(new BooleanSchema()),
+          omitEmpty: true,
         }
       );
     }
@@ -6374,6 +6402,15 @@ export class SimulateTraceConfig implements Encodable {
   public stateChange?: boolean;
 
   /**
+   * Adds `appId` to each state change of the trace. Needs `stateChange`.
+   * dtalgod nodes only: stock algod and dtalgod nodes from before it answer
+   * 400, so check `DTAlgodClient.supportsStateChangeAppId()` first
+   * (non-standard fork feature; dt-algosdk: not in upstream's spec, keep when
+   * regenerating).
+   */
+  public stateChangeAppId?: boolean;
+
+  /**
    * Creates a new `SimulateTraceConfig` object.
    * @param enable - A boolean option for opting in execution trace features simulation endpoint.
    * @param scratchChange - A boolean option enabling returning scratch slot changes together with execution
@@ -6382,22 +6419,27 @@ export class SimulateTraceConfig implements Encodable {
    * during simulation.
    * @param stateChange - A boolean option enabling returning application state changes (global, local,
    * and box changes) with the execution trace during simulation.
+   * @param stateChangeAppId - Adds `appId` to each state change (dtalgod
+   * nodes only).
    */
   constructor({
     enable,
     scratchChange,
     stackChange,
     stateChange,
+    stateChangeAppId,
   }: {
     enable?: boolean;
     scratchChange?: boolean;
     stackChange?: boolean;
     stateChange?: boolean;
+    stateChangeAppId?: boolean;
   }) {
     this.enable = enable;
     this.scratchChange = scratchChange;
     this.stackChange = stackChange;
     this.stateChange = stateChange;
+    this.stateChangeAppId = stateChangeAppId;
   }
 
   // eslint-disable-next-line class-methods-use-this
@@ -6411,6 +6453,7 @@ export class SimulateTraceConfig implements Encodable {
       ['scratch-change', this.scratchChange],
       ['stack-change', this.stackChange],
       ['state-change', this.stateChange],
+      ['state-change-app-id', this.stateChangeAppId],
     ]);
   }
 
@@ -6423,6 +6466,7 @@ export class SimulateTraceConfig implements Encodable {
       scratchChange: data.get('scratch-change'),
       stackChange: data.get('stack-change'),
       stateChange: data.get('state-change'),
+      stateChangeAppId: data.get('state-change-app-id'),
     });
   }
 }

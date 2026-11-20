@@ -2701,9 +2701,9 @@ export class SimulateLimits implements Encodable {
 
   /**
    * The fork's `execTraceConfig` options the node takes, beyond upstream's:
-   * `state-change-app-id` (`SimulateTraceConfig.stateChangeAppId`). Empty on
-   * stock algod and on dtalgod nodes from before them, which answer 400 to
-   * them. `DTAlgodClient.supportsStateChangeAppId` reads it. A value this
+   * `state-change-app-id` (`SimulateTraceConfig.stateChangeAppId`). Listed
+   * only with `developerApi`, as every trace needs it. Empty on stock algod
+   * and on dtalgod nodes from before them, which answer 400 to them. `DTAlgodClient.supportsStateChangeAppId` reads it. A value this
    * client does not know is kept.
    */
   public execTraceConfig: string[];

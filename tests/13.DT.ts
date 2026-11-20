@@ -4523,17 +4523,25 @@ describe('simulate: app-id on state changes', () => {
     assert.ok(DTAlgodClient.features.includes('state-change-app-id'));
   });
 
+  /** A current node's capabilities, with the developer API on or off. */
+  const devCaps = (developerApi: boolean) => ({
+    ...nodeCaps,
+    'developer-api': developerApi,
+    simulate: {
+      ...nodeCaps.simulate,
+      'exec-trace-config': ['state-change-app-id', 'some-new-option'],
+    },
+  });
+
+  it("encodes a current node's capabilities as the node does", () => {
+    const body = devCaps(true);
+    const decoded = decodeJSON(JSON.stringify(body), CapabilitiesResponse);
+    assert.deepStrictEqual(JSON.parse(encodeJSON(decoded)), body);
+  });
+
   it('supportsStateChangeAppId reads simulate.exec-trace-config', async () => {
     const withOption = new DTAlgodClient(
-      new StubClient([
-        ok({
-          ...nodeCaps,
-          simulate: {
-            ...nodeCaps.simulate,
-            'exec-trace-config': ['state-change-app-id', 'some-new-option'],
-          },
-        }),
-      ]),
+      new StubClient([ok(devCaps(true))]),
       ''
     );
     assert.strictEqual(await withOption.supportsStateChangeAppId(), true);
@@ -4549,7 +4557,13 @@ describe('simulate: app-id on state changes', () => {
       caps.simulate.execTraceConfig
     );
 
-    const older = new DTAlgodClient(new StubClient([ok(nodeCaps)]), '');
+    // the node lists it only with the developer API, but check both
+    const noDev = new DTAlgodClient(new StubClient([ok(devCaps(false))]), '');
+    assert.strictEqual(await noDev.supportsStateChangeAppId(), false);
+    const older = new DTAlgodClient(
+      new StubClient([ok({ ...nodeCaps, 'developer-api': true })]),
+      ''
+    );
     assert.strictEqual(await older.supportsStateChangeAppId(), false);
     const stock = new DTAlgodClient(new StubClient([status(404)]), '');
     assert.strictEqual(await stock.supportsStateChangeAppId(), false);

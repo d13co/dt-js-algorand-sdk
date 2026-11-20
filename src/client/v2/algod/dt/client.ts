@@ -839,10 +839,11 @@ export class DTAlgodClient extends AlgodClient {
    * Whether simulate takes `stateChangeAppId` in its `execTraceConfig`, which
    * adds `appId` to each state change of the trace: the node lists
    * `state-change-app-id` in `simulate.execTraceConfig` of
-   * {@link DTAlgodClient.capabilities}. Stock algod and dtalgod nodes from
-   * before it answer 400 to the option. Traces also need `developerApi`. It
-   * costs no request once the capabilities are cached. Errors, such as
-   * network failures, are rethrown and not cached.
+   * {@link DTAlgodClient.capabilities}, which it does only with
+   * `developerApi`, as every trace needs it; this checks both. Stock algod and
+   * dtalgod nodes from before it answer 400 to the option. It costs no
+   * request once the capabilities are cached. Errors, such as network
+   * failures, are rethrown and not cached.
    *
    * #### Example
    * ```typescript
@@ -854,8 +855,10 @@ export class DTAlgodClient extends AlgodClient {
    * ```
    */
   async supportsStateChangeAppId(): Promise<boolean> {
-    return (await this.capabilities()).simulate.execTraceConfig.includes(
-      'state-change-app-id'
+    const caps = await this.capabilities();
+    return (
+      caps.developerApi &&
+      caps.simulate.execTraceConfig.includes('state-change-app-id')
     );
   }
 

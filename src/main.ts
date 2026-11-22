@@ -110,6 +110,7 @@ export {
   SimulateGroupOutcome,
   DEFAULT_MAX_SIMULATE_GROUPS,
   isQueryResponseTooLarge,
+  isStateChangesTooLarge,
   isNodeBusy,
   retryAfterSeconds,
   isTimeLimitExceeded,
@@ -126,8 +127,22 @@ export {
   MAX_QUERY_REQUEST_BYTES,
   QUERY_LOG_OVERHEAD_BYTES,
   TT_ROUND_HEADER,
+  STATE_CHANGES_INCLUDE,
+  ALL_STATE_CHANGES_INCLUDE,
+  groupOf,
+  txnsOf,
+  changedFields,
+  withoutFeeSink,
+  programLine,
+  budgetOf,
 } from './client/v2/algod/dt/index.js';
-export type { RunQuery, GetAssetHolders } from './client/v2/algod/dt/index.js';
+export type {
+  RunQuery,
+  GetAssetHolders,
+  GetTxnStateChangesForRound,
+  StateChangesInclude,
+  StateChangesGroupInclude,
+} from './client/v2/algod/dt/index.js';
 export * as dtModels from './client/v2/algod/dt/models.js';
 export * as indexerModels from './client/v2/indexer/models/types.js';
 export {

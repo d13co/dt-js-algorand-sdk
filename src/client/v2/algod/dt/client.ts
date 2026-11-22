@@ -14,6 +14,10 @@ import AccountAssetVersions from './accountAssetVersions.js';
 import AccountApplicationVersions from './accountApplicationVersions.js';
 import GetAssetVersions from './getAssetVersions.js';
 import GetAssetHolders from './getAssetHolders.js';
+import GetTxnStateChangesForRound, {
+  STATE_CHANGES_INCLUDE,
+  StateChangesInclude,
+} from './getTxnStateChangesForRound.js';
 import GetApplicationVersions from './getApplicationVersions.js';
 import GetApplicationBoxByNameAt from './getApplicationBoxByNameAt.js';
 import GetApplicationBoxesAt from './getApplicationBoxesAt.js';
@@ -79,6 +83,21 @@ export class DTAlgodClient extends AlgodClient {
    *   `accountVersions` and `accountApplicationVersions`, and `changedKeys`;
    * - `versions-pages`: `pages()` on the `...Versions` methods;
    * - `holders`: `getAssetHolders` and `supportsAssetHolders`;
+   * - `state-changes`: `getTxnStateChangesForRound`, `supportsStateChanges`,
+   *   `stateChanges` on `capabilities()` and `isStateChangesTooLarge`;
+   * - `simulate-app-id`: `appId` on the `stateChanges` of simulate's
+   *   execution traces;
+   * - `state-change-app-id`: `stateChangeAppId` on `SimulateTraceConfig`,
+   *   which asks for that `appId`, `execTraceConfig` on
+   *   `capabilities().simulate`, and `supportsStateChangeAppId`;
+   * - `full-deltas`: `include()` and `full()` on
+   *   `getTxnStateChangesForRound`, its `groups` and `feeSink`,
+   *   `supportsFullDeltas`, `include` on `capabilities().stateChanges`, and
+   *   `groupOf`, `txnsOf`, `changedFields` and `withoutFeeSink`;
+   * - `dev-traces`: `include()` of `budget`, `reads` and `trace`, and
+   *   `trace()`, on `getTxnStateChangesForRound`, its `budget`, `reads`,
+   *   `traces` and `programs`, `supportsStateChangesInclude`, and
+   *   `programLine` and `budgetOf`;
    * - `response-headers`: `doWithHeaders()` on every request, and
    *   `effortOf` / `parseEffortHeader` for the `X-Algod-Effort` header;
    * - `error-helpers`: `isNodeBusy`, `retryAfterSeconds`,
@@ -113,6 +132,11 @@ export class DTAlgodClient extends AlgodClient {
     'versions-keys',
     'versions-pages',
     'holders',
+    'state-changes',
+    'simulate-app-id',
+    'state-change-app-id',
+    'full-deltas',
+    'dev-traces',
     'response-headers',
     'error-helpers',
     'round-header',
@@ -415,6 +439,48 @@ export class DTAlgodClient extends AlgodClient {
   }
 
   /**
+   * Given a round, list the app state changes of each of its transactions
+   * that changed any, top-level and inner, in execution order: globals, local
+   * states and boxes, each with its app and its value before and after the
+   * transaction. Filter with `app()`, `txid()` and `txids()` (all of a
+   * group's transactions in one request). Requires time travel
+   * (`EnableTimeTravel`); a node without the endpoint is thrown as a
+   * {@link DTUnsupportedError}, and
+   * {@link DTAlgodClient.supportsStateChanges} finds out first.
+   *
+   * The node re-evaluates the round's block for each request, whatever the
+   * filters, and fails an answer over
+   * `CapabilitiesResponse.stateChanges.maxResponseBytes` with a 400
+   * (`isStateChangesTooLarge`).
+   *
+   * #### Example
+   * ```typescript
+   * const { txns } = await algodClient
+   *   .getTxnStateChangesForRound(50_000_000)
+   *   .app(1284326447)
+   *   .do();
+   * for (const { path, txid, changes } of txns) {
+   *   for (const c of changes) {
+   *     console.log(path, txid, c.appStateType, c.key, c.before, c.after);
+   *   }
+   * }
+   * ```
+   *
+   * @param round - The round.
+   * @category GET
+   */
+  getTxnStateChangesForRound(round: number | bigint) {
+    return new GetTxnStateChangesForRound(
+      this.c,
+      round,
+      () => this.capabilities(),
+      () => {
+        this.capabilitiesResult = undefined;
+      }
+    );
+  }
+
+  /**
    * Given an account address, list the rounds at which anything
    * `accountInformation` returns changed. Each version lists only the objects
    * that changed in that round.
@@ -632,8 +698,8 @@ export class DTAlgodClient extends AlgodClient {
    *
    * This is how the client tells what the node has: every dtalgod node
    * serves its capabilities, and its optional features show in them
-   * (`timeTravel`, `developerApi`, `query`, `simulate.maxTxnGroups` above
-   * 1). Only the asset holders index does not:
+   * (`timeTravel`, `developerApi`, `query`, `stateChanges`,
+   * `simulate.maxTxnGroups` above 1). Only the asset holders index does not:
    * see {@link DTAlgodClient.supportsAssetHolders}.
    *
    * Stock algod has no capabilities endpoint and answers 404; the answer is
@@ -667,8 +733,13 @@ export class DTAlgodClient extends AlgodClient {
           throw err;
         })
         .then((caps) => {
+          Object.freeze(caps.simulate.execTraceConfig);
           Object.freeze(caps.simulate);
           if (caps.query) Object.freeze(caps.query);
+          if (caps.stateChanges) {
+            Object.freeze(caps.stateChanges.include);
+            Object.freeze(caps.stateChanges);
+          }
           return Object.freeze(caps);
         });
     }
@@ -694,6 +765,98 @@ export class DTAlgodClient extends AlgodClient {
    */
   async supportsDT(): Promise<boolean> {
     return (await this.capabilities()).timeTravel;
+  }
+
+  /**
+   * Whether the node serves {@link DTAlgodClient.getTxnStateChangesForRound}:
+   * it reports `stateChanges` in {@link DTAlgodClient.capabilities}, as a
+   * node with time travel does. It costs no request once the capabilities are
+   * cached, and is false on stock algod and on dtalgod nodes from before the
+   * endpoint. Errors, such as network failures, are rethrown and not cached.
+   *
+   * #### Example
+   * ```typescript
+   * if (await algodClient.supportsStateChanges()) {
+   *   const { txns } = await algodClient.getTxnStateChangesForRound(round).do();
+   * }
+   * ```
+   */
+  async supportsStateChanges(): Promise<boolean> {
+    return (await this.capabilities()).stateChanges !== undefined;
+  }
+
+  /**
+   * Whether {@link DTAlgodClient.getTxnStateChangesForRound} can list what
+   * each group changed with `full()`: the node offers every
+   * {@link STATE_CHANGES_INCLUDE} value in `stateChanges.include` of
+   * {@link DTAlgodClient.capabilities}. It costs no request once the
+   * capabilities are cached, and is false on stock algod and on dtalgod nodes
+   * from before full deltas. Errors, such as network failures, are rethrown
+   * and not cached.
+   *
+   * #### Example
+   * ```typescript
+   * const req = algodClient.getTxnStateChangesForRound(round).txids(ids);
+   * if (await algodClient.supportsFullDeltas()) req.full();
+   * const { txns, groups } = await req.do();
+   * ```
+   */
+  async supportsFullDeltas(): Promise<boolean> {
+    const offered = (await this.capabilities()).stateChanges?.include ?? [];
+    return STATE_CHANGES_INCLUDE.every((p) => offered.includes(p));
+  }
+
+  /**
+   * Whether {@link DTAlgodClient.getTxnStateChangesForRound} can add each of
+   * these to its answer with `include()`: the node lists them all in
+   * `stateChanges.include` of {@link DTAlgodClient.capabilities}. `trace` is
+   * there only on a node with `EnableDeveloperAPI`. It costs no request once
+   * the capabilities are cached, and is false on stock algod and on dtalgod
+   * nodes from before the values. Errors, such as network failures, are
+   * rethrown and not cached.
+   *
+   * #### Example
+   * ```typescript
+   * const req = algodClient.getTxnStateChangesForRound(round).txid(txid);
+   * if (await algodClient.supportsStateChangesInclude('budget')) {
+   *   req.include(['budget']);
+   * }
+   * if (await algodClient.supportsStateChangesInclude('trace')) req.trace();
+   * ```
+   *
+   * @param value - An include value.
+   * @param more - More include values, all needed.
+   */
+  async supportsStateChangesInclude(
+    value: StateChangesInclude,
+    ...more: StateChangesInclude[]
+  ): Promise<boolean> {
+    const offered = (await this.capabilities()).stateChanges?.include ?? [];
+    return [value, ...more].every((p) => offered.includes(p));
+  }
+
+  /**
+   * Whether simulate takes `stateChangeAppId` in its `execTraceConfig`, which
+   * adds `appId` to each state change of the trace: the node lists
+   * `state-change-app-id` in `simulate.execTraceConfig` of
+   * {@link DTAlgodClient.capabilities}. Stock algod and dtalgod nodes from
+   * before it answer 400 to the option. Traces also need `developerApi`. It
+   * costs no request once the capabilities are cached. Errors, such as
+   * network failures, are rethrown and not cached.
+   *
+   * #### Example
+   * ```typescript
+   * const execTraceConfig = new modelsv2.SimulateTraceConfig({
+   *   enable: true,
+   *   stateChange: true,
+   *   stateChangeAppId: await algodClient.supportsStateChangeAppId(),
+   * });
+   * ```
+   */
+  async supportsStateChangeAppId(): Promise<boolean> {
+    return (await this.capabilities()).simulate.execTraceConfig.includes(
+      'state-change-app-id'
+    );
   }
 
   /**

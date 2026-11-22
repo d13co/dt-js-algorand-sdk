@@ -5,6 +5,7 @@ export {
   SimulateGroupError,
   SimulateGroupErrorKind,
   isQueryResponseTooLarge,
+  isStateChangesTooLarge,
   isNodeBusy,
   retryAfterSeconds,
   isTimeLimitExceeded,
@@ -35,4 +36,21 @@ export {
 } from './effort.js';
 export type { default as RunQuery } from './query.js';
 export type { default as GetAssetHolders } from './getAssetHolders.js';
+export type { default as GetTxnStateChangesForRound } from './getTxnStateChangesForRound.js';
+export {
+  STATE_CHANGES_INCLUDE,
+  ALL_STATE_CHANGES_INCLUDE,
+} from './getTxnStateChangesForRound.js';
+export type {
+  StateChangesInclude,
+  StateChangesGroupInclude,
+} from './getTxnStateChangesForRound.js';
+export {
+  groupOf,
+  txnsOf,
+  changedFields,
+  withoutFeeSink,
+  programLine,
+  budgetOf,
+} from './stateChanges.js';
 export * from './models.js';

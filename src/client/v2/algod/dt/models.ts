@@ -30,16 +30,20 @@ import {
 import { base64ToBytes } from '../../../../encoding/binarydata.js';
 import {
   Account,
+  AccountParticipation,
   Application,
   ApplicationLocalState,
+  ApplicationParams,
   ApplicationStateSchema,
   Asset,
   AssetHolding,
+  AssetParams,
   BoxReference,
   SimulateRequest,
   SimulateRequestTransactionGroup,
   SimulateResponse,
   SimulateTransactionGroupResult,
+  SimulationTransactionExecTrace,
   TealValue,
 } from '../models/types.js';
 import { Address } from '../../../../encoding/address.js';
@@ -2462,6 +2466,19 @@ class LenientNamedMapSchema extends NamedMapSchema {
 }
 
 /**
+ * An {@link OptionalSchema} whose value is left out only when undefined, not
+ * when it is the inner schema's default: for an object whose presence says
+ * something, such as {@link CapabilitiesResponse.stateChanges}, which a node
+ * with no size limit (`maxResponseBytes` 0) still sends.
+ */
+class PresentOptionalSchema extends OptionalSchema {
+  // eslint-disable-next-line class-methods-use-this
+  public isDefaultValue(data: unknown): boolean {
+    return data === undefined;
+  }
+}
+
+/**
  * The limits a node places on `POST /v2/query` requests
  * ({@link CapabilitiesResponse.query}). The values are the ones the node
  * applies, after it clamps its configuration.
@@ -2658,6 +2675,11 @@ export class SimulateLimits implements Encodable {
           key: 'max-extra-opcode-budget',
           valueSchema: new Uint64Schema(),
           omitEmpty: false,
+        },
+        {
+          key: 'exec-trace-config',
+          valueSchema: new ArraySchema(new StringSchema()),
+          omitEmpty: true,
         }
       );
     }
@@ -2678,19 +2700,33 @@ export class SimulateLimits implements Encodable {
   public maxExtraOpcodeBudget: number;
 
   /**
+   * The fork's `execTraceConfig` options the node takes, beyond upstream's:
+   * `state-change-app-id` (`SimulateTraceConfig.stateChangeAppId`). Empty on
+   * stock algod and on dtalgod nodes from before them, which answer 400 to
+   * them. `DTAlgodClient.supportsStateChangeAppId` reads it. A value this
+   * client does not know is kept.
+   */
+  public execTraceConfig: string[];
+
+  /**
    * Creates a new `SimulateLimits` object.
    * @param maxTxnGroups - The most transaction groups a request may hold.
    * @param maxExtraOpcodeBudget - The most `extraOpcodeBudget`, per group.
+   * @param execTraceConfig - The fork's `execTraceConfig` options the node
+   * takes.
    */
   constructor({
     maxTxnGroups,
     maxExtraOpcodeBudget,
+    execTraceConfig = [],
   }: {
     maxTxnGroups: number | bigint;
     maxExtraOpcodeBudget: number | bigint;
+    execTraceConfig?: string[];
   }) {
     this.maxTxnGroups = ensureSafeInteger(maxTxnGroups);
     this.maxExtraOpcodeBudget = ensureSafeInteger(maxExtraOpcodeBudget);
+    this.execTraceConfig = execTraceConfig;
   }
 
   // eslint-disable-next-line class-methods-use-this
@@ -2702,6 +2738,7 @@ export class SimulateLimits implements Encodable {
     return new Map<string, unknown>([
       ['max-txn-groups', this.maxTxnGroups],
       ['max-extra-opcode-budget', this.maxExtraOpcodeBudget],
+      ['exec-trace-config', this.execTraceConfig],
     ]);
   }
 
@@ -2713,6 +2750,96 @@ export class SimulateLimits implements Encodable {
       // A key the node left out takes stock algod's value.
       maxTxnGroups: data.get('max-txn-groups') ?? 1,
       maxExtraOpcodeBudget: data.get('max-extra-opcode-budget') ?? 320000,
+      execTraceConfig: data.get('exec-trace-config') ?? [],
+    });
+  }
+}
+
+/**
+ * The limit a node places on `GET /v2/deltas/{round}/txn/state-changes`, and
+ * what it can add to the answer ({@link CapabilitiesResponse.stateChanges}),
+ * present when the node serves it (node config `EnableTimeTravel`).
+ */
+export class StateChangesLimits implements Encodable {
+  private static encodingSchemaValue: Schema | undefined;
+
+  static get encodingSchema(): Schema {
+    if (!this.encodingSchemaValue) {
+      this.encodingSchemaValue = new LenientNamedMapSchema([]);
+      (this.encodingSchemaValue as NamedMapSchema).pushEntries(
+        {
+          key: 'max-response-bytes',
+          valueSchema: new Uint64Schema(),
+          omitEmpty: false,
+        },
+        {
+          key: 'include',
+          valueSchema: new ArraySchema(new StringSchema()),
+          omitEmpty: true,
+        }
+      );
+    }
+    return this.encodingSchemaValue;
+  }
+
+  /**
+   * The most bytes an answer may take, encoded (msgpack, as the client asks
+   * for it); a larger one fails with a 400 (`isStateChangesTooLarge`): narrow
+   * the request with `app()` or `txids()`. 0 means no limit (node config
+   * `MaxAPIStateChangesResponseBytes`).
+   */
+  public maxResponseBytes: number;
+
+  /**
+   * What the node can add to the answer with `include()`: of `accounts`,
+   * `assets` and `apps` (`groups`), `budget`, `reads` and `trace`, the ones
+   * it serves; `trace` only with `EnableDeveloperAPI`. Empty on a node from
+   * before full deltas, which would ignore `include`; a node with only the
+   * group values answers 400 for the others. `getTxnStateChangesForRound`
+   * checks each value before sending `include`, and
+   * `DTAlgodClient.supportsStateChangesInclude` reads it. A value this client
+   * does not know is kept.
+   */
+  public include: string[];
+
+  /**
+   * Creates a new `StateChangesLimits` object.
+   * @param maxResponseBytes - The most bytes an answer may take; 0 means no
+   * limit.
+   * @param include - What the node can add to the answer with `include()`.
+   */
+  constructor({
+    maxResponseBytes,
+    include = [],
+  }: {
+    maxResponseBytes: number | bigint;
+    include?: string[];
+  }) {
+    this.maxResponseBytes = ensureSafeInteger(maxResponseBytes);
+    this.include = include;
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  getEncodingSchema(): Schema {
+    return StateChangesLimits.encodingSchema;
+  }
+
+  toEncodingData(): Map<string, unknown> {
+    return new Map<string, unknown>([
+      ['max-response-bytes', this.maxResponseBytes],
+      ['include', this.include],
+    ]);
+  }
+
+  static fromEncodingData(data: unknown): StateChangesLimits {
+    if (!(data instanceof Map)) {
+      throw new Error(`Invalid decoded StateChangesLimits: ${data}`);
+    }
+    // A key the node left out is 0, the node's own "no limit", and an
+    // include left out is none.
+    return new StateChangesLimits({
+      maxResponseBytes: data.get('max-response-bytes') ?? 0,
+      include: data.get('include') ?? [],
     });
   }
 }
@@ -2725,6 +2852,8 @@ export class SimulateLimits implements Encodable {
  *
  * `query` is undefined when the node has queries disabled
  * (`MaxAPIQueryCalls` 0): fall back to simulate then, one round per request.
+ * `stateChanges` is undefined when the node does not serve
+ * `getTxnStateChangesForRound`.
  *
  * Decoding tolerates keys the node leaves out, as an older or newer node may,
  * and ignores keys this client does not know. A missing key takes a safe
@@ -2764,6 +2893,13 @@ export class CapabilitiesResponse implements Encodable {
         {
           key: 'query',
           valueSchema: new OptionalSchema(QueryLimits.encodingSchema),
+          omitEmpty: true,
+        },
+        {
+          key: 'state-changes',
+          valueSchema: new PresentOptionalSchema(
+            StateChangesLimits.encodingSchema
+          ),
           omitEmpty: true,
         }
       );
@@ -2825,6 +2961,14 @@ export class CapabilitiesResponse implements Encodable {
   public query?: QueryLimits;
 
   /**
+   * The limit of `GET /v2/deltas/{round}/txn/state-changes`
+   * (`DTAlgodClient.getTxnStateChangesForRound`). Undefined when the node does
+   * not serve it: it has time travel off, or it predates the endpoint.
+   * {@link DTAlgodClient.supportsStateChanges} reads it.
+   */
+  public stateChanges?: StateChangesLimits;
+
+  /**
    * Whether the node reported these capabilities: true when decoded from its
    * response, false for {@link CapabilitiesResponse.stock}, the fallback for
    * stock algod. Not part of the response's encoding.
@@ -2840,6 +2984,8 @@ export class CapabilitiesResponse implements Encodable {
    * @param simulate - The limits of simulate requests.
    * @param query - The limits of `POST /v2/query`; undefined when the node has
    * queries disabled.
+   * @param stateChanges - The limit of the state changes endpoint; undefined
+   * when the node does not serve it.
    * @param reported - Whether the node reported these capabilities. Not
    * encoded; defaults to false, and decoding sets it to true.
    */
@@ -2849,6 +2995,7 @@ export class CapabilitiesResponse implements Encodable {
     timeLimitSeconds,
     simulate,
     query,
+    stateChanges,
     reported = false,
   }: {
     timeTravel: boolean;
@@ -2856,6 +3003,7 @@ export class CapabilitiesResponse implements Encodable {
     timeLimitSeconds: number | bigint;
     simulate: SimulateLimits;
     query?: QueryLimits;
+    stateChanges?: StateChangesLimits;
     reported?: boolean;
   }) {
     this.timeTravel = timeTravel;
@@ -2863,6 +3011,7 @@ export class CapabilitiesResponse implements Encodable {
     this.timeLimitSeconds = ensureSafeInteger(timeLimitSeconds);
     this.simulate = simulate;
     this.query = query;
+    this.stateChanges = stateChanges;
     this.reported = reported;
   }
 
@@ -2883,6 +3032,12 @@ export class CapabilitiesResponse implements Encodable {
           ? this.query.toEncodingData()
           : undefined,
       ],
+      [
+        'state-changes',
+        typeof this.stateChanges !== 'undefined'
+          ? this.stateChanges.toEncodingData()
+          : undefined,
+      ],
     ]);
   }
 
@@ -2900,6 +3055,10 @@ export class CapabilitiesResponse implements Encodable {
       query:
         typeof data.get('query') !== 'undefined'
           ? QueryLimits.fromEncodingData(data.get('query'))
+          : undefined,
+      stateChanges:
+        typeof data.get('state-changes') !== 'undefined'
+          ? StateChangesLimits.fromEncodingData(data.get('state-changes'))
           : undefined,
       reported: true,
     });
@@ -3781,6 +3940,1994 @@ export class AssetHoldersResponse implements Encodable {
       holders: (data.get('holders') ?? []).map((h: unknown) =>
         AssetHolder.fromEncodingData(h)
       ),
+    });
+  }
+}
+
+/**
+ * An app state key a transaction changed, with its value before and after the
+ * transaction (net over it and its inner transactions).
+ *
+ * A missing `before`: the key did not exist. A missing `after`: the key was
+ * deleted, its local state cleared (CloseOut, ClearState), or its app deleted
+ * (globals only: the boxes of a deleted app stay). A box's value is the whole
+ * box, as `bytes`.
+ */
+export class AppStateChange implements Encodable {
+  private static encodingSchemaValue: Schema | undefined;
+
+  static get encodingSchema(): Schema {
+    if (!this.encodingSchemaValue) {
+      this.encodingSchemaValue = new NamedMapSchema([]);
+      (this.encodingSchemaValue as NamedMapSchema).pushEntries(
+        { key: 'app-id', valueSchema: new Uint64Schema(), omitEmpty: true },
+        {
+          key: 'app-state-type',
+          valueSchema: new StringSchema(),
+          omitEmpty: true,
+        },
+        {
+          key: 'account',
+          valueSchema: new OptionalSchema(new StringSchema()),
+          omitEmpty: true,
+        },
+        { key: 'key', valueSchema: new ByteArraySchema(), omitEmpty: true },
+        {
+          key: 'before',
+          valueSchema: new OptionalSchema(TealValue.encodingSchema),
+          omitEmpty: true,
+        },
+        {
+          key: 'after',
+          valueSchema: new OptionalSchema(TealValue.encodingSchema),
+          omitEmpty: true,
+        }
+      );
+    }
+    return this.encodingSchemaValue;
+  }
+
+  /** The app whose state changed. */
+  public appId: bigint;
+
+  /**
+   * The kind of state: `g` global state, `l` local state, `b` a box. A value
+   * this client does not know is kept as the node sent it.
+   */
+  public appStateType: string;
+
+  /** For a local state change, the account whose local state changed. */
+  public account?: Address;
+
+  /** The global or local state key, or the box name. */
+  public key: Uint8Array;
+
+  /** The value before the transaction; undefined if the key did not exist. */
+  public before?: TealValue;
+
+  /**
+   * The value after the transaction; undefined if the key was deleted, its
+   * local state cleared, or its app deleted.
+   */
+  public after?: TealValue;
+
+  /**
+   * Creates a new `AppStateChange` object.
+   * @param appId - The app whose state changed.
+   * @param appStateType - `g` global state, `l` local state, `b` a box.
+   * @param account - For a local state change, the account.
+   * @param key - The state key or box name (bytes, or base64).
+   * @param before - The value before; undefined if the key did not exist.
+   * @param after - The value after; undefined if the key is gone.
+   */
+  constructor({
+    appId,
+    appStateType,
+    account,
+    key,
+    before,
+    after,
+  }: {
+    appId: number | bigint;
+    appStateType: string;
+    account?: Address | string;
+    key: string | Uint8Array;
+    before?: TealValue;
+    after?: TealValue;
+  }) {
+    this.appId = ensureBigInt(appId);
+    this.appStateType = appStateType;
+    this.account =
+      typeof account === 'string' ? Address.fromString(account) : account;
+    this.key = typeof key === 'string' ? base64ToBytes(key) : key;
+    this.before = before;
+    this.after = after;
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  getEncodingSchema(): Schema {
+    return AppStateChange.encodingSchema;
+  }
+
+  toEncodingData(): Map<string, unknown> {
+    return new Map<string, unknown>([
+      ['app-id', this.appId],
+      ['app-state-type', this.appStateType],
+      [
+        'account',
+        typeof this.account !== 'undefined'
+          ? this.account.toString()
+          : undefined,
+      ],
+      ['key', this.key],
+      [
+        'before',
+        typeof this.before !== 'undefined'
+          ? this.before.toEncodingData()
+          : undefined,
+      ],
+      [
+        'after',
+        typeof this.after !== 'undefined'
+          ? this.after.toEncodingData()
+          : undefined,
+      ],
+    ]);
+  }
+
+  static fromEncodingData(data: unknown): AppStateChange {
+    if (!(data instanceof Map)) {
+      throw new Error(`Invalid decoded AppStateChange: ${data}`);
+    }
+    const value = (v: unknown) =>
+      typeof v !== 'undefined' ? TealValue.fromEncodingData(v) : undefined;
+    return new AppStateChange({
+      appId: data.get('app-id'),
+      appStateType: data.get('app-state-type'),
+      account: data.get('account'),
+      key: data.get('key'),
+      before: value(data.get('before')),
+      after: value(data.get('after')),
+    });
+  }
+}
+
+/**
+ * The app state changes of a transaction of a round, top-level or inner, net
+ * over it and its inner transactions.
+ */
+export class TxnStateChanges implements Encodable {
+  private static encodingSchemaValue: Schema | undefined;
+
+  static get encodingSchema(): Schema {
+    if (!this.encodingSchemaValue) {
+      this.encodingSchemaValue = new NamedMapSchema([]);
+      (this.encodingSchemaValue as NamedMapSchema).pushEntries(
+        {
+          key: 'path',
+          valueSchema: new ArraySchema(new Uint64Schema()),
+          omitEmpty: true,
+        },
+        {
+          key: 'txid',
+          valueSchema: new OptionalSchema(new StringSchema()),
+          omitEmpty: true,
+        },
+        {
+          key: 'changes',
+          valueSchema: new ArraySchema(AppStateChange.encodingSchema),
+          omitEmpty: true,
+        }
+      );
+    }
+    return this.encodingSchemaValue;
+  }
+
+  /**
+   * Where the transaction is: its index in the block's payset, then, for an
+   * inner transaction, its index among its parent's inner transactions at
+   * each level. Inner indexes run on across all of a parent's `itxn_submit`
+   * calls, as in the apply data's inner transactions.
+   */
+  public path: number[];
+
+  /** The transaction ID, for a top-level transaction (`path` of length 1). */
+  public txid?: string;
+
+  /** The keys the transaction changed, in the order it first changed them. */
+  public changes: AppStateChange[];
+
+  /**
+   * Creates a new `TxnStateChanges` object.
+   * @param path - The payset index, then the inner indexes.
+   * @param txid - The transaction ID, for a top-level transaction.
+   * @param changes - The keys the transaction changed.
+   */
+  constructor({
+    path,
+    txid,
+    changes,
+  }: {
+    path: (number | bigint)[];
+    txid?: string;
+    changes: AppStateChange[];
+  }) {
+    this.path = path.map(ensureSafeInteger);
+    this.txid = txid;
+    this.changes = changes;
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  getEncodingSchema(): Schema {
+    return TxnStateChanges.encodingSchema;
+  }
+
+  toEncodingData(): Map<string, unknown> {
+    return new Map<string, unknown>([
+      ['path', this.path],
+      ['txid', this.txid],
+      ['changes', this.changes.map((c) => c.toEncodingData())],
+    ]);
+  }
+
+  static fromEncodingData(data: unknown): TxnStateChanges {
+    if (!(data instanceof Map)) {
+      throw new Error(`Invalid decoded TxnStateChanges: ${data}`);
+    }
+    return new TxnStateChanges({
+      path: data.get('path') ?? [],
+      txid: data.get('txid'),
+      changes: (data.get('changes') ?? []).map((c: unknown) =>
+        AppStateChange.fromEncodingData(c)
+      ),
+    });
+  }
+}
+
+/**
+ * `before`/`after` entries of a change, both optional, and kept when present
+ * even with every field zero.
+ */
+function changeValueEntries(valueSchema: Schema) {
+  return [
+    {
+      key: 'before',
+      valueSchema: new PresentOptionalSchema(valueSchema),
+      omitEmpty: true,
+    },
+    {
+      key: 'after',
+      valueSchema: new PresentOptionalSchema(valueSchema),
+      omitEmpty: true,
+    },
+  ];
+}
+
+/** Decodes an optional model value: undefined (or null) stays undefined. */
+function optionalModel<T>(
+  v: unknown,
+  fromEncodingData: (data: unknown) => T
+): T | undefined {
+  return v === undefined || v === null ? undefined : fromEncodingData(v);
+}
+
+/**
+ * An account's own fields between two groups of a round
+ * ({@link AccountStateChange}): the scalar fields of {@link Account} under the same
+ * names and types, so code that reads an `Account` reads it the same way,
+ * except `rewards`, which is optional here and has no pending rewards.
+ * `Account`'s `round`, `pending-rewards` and `amount-without-pending-rewards`
+ * have no meaning between two groups and are left out, as are its lists
+ * (holdings, local states, created assets and apps), whose changes are in the
+ * group's other lists.
+ */
+export class AccountState implements Encodable {
+  private static encodingSchemaValue: Schema | undefined;
+
+  static get encodingSchema(): Schema {
+    if (!this.encodingSchemaValue) {
+      this.encodingSchemaValue = new NamedMapSchema([]);
+      (this.encodingSchemaValue as NamedMapSchema).pushEntries(
+        { key: 'amount', valueSchema: new Uint64Schema(), omitEmpty: true },
+        {
+          key: 'min-balance',
+          valueSchema: new Uint64Schema(),
+          omitEmpty: true,
+        },
+        { key: 'status', valueSchema: new StringSchema(), omitEmpty: true },
+        {
+          key: 'total-apps-opted-in',
+          valueSchema: new Uint64Schema(),
+          omitEmpty: true,
+        },
+        {
+          key: 'total-assets-opted-in',
+          valueSchema: new Uint64Schema(),
+          omitEmpty: true,
+        },
+        {
+          key: 'total-created-apps',
+          valueSchema: new Uint64Schema(),
+          omitEmpty: true,
+        },
+        {
+          key: 'total-created-assets',
+          valueSchema: new Uint64Schema(),
+          omitEmpty: true,
+        },
+        {
+          key: 'apps-total-extra-pages',
+          valueSchema: new OptionalSchema(new Uint64Schema()),
+          omitEmpty: true,
+        },
+        {
+          key: 'apps-total-schema',
+          valueSchema: new OptionalSchema(
+            ApplicationStateSchema.encodingSchema
+          ),
+          omitEmpty: true,
+        },
+        {
+          key: 'auth-addr',
+          valueSchema: new OptionalSchema(new StringSchema()),
+          omitEmpty: true,
+        },
+        {
+          key: 'incentive-eligible',
+          valueSchema: new OptionalSchema(new BooleanSchema()),
+          omitEmpty: true,
+        },
+        {
+          key: 'last-heartbeat',
+          valueSchema: new OptionalSchema(new Uint64Schema()),
+          omitEmpty: true,
+        },
+        {
+          key: 'last-proposed',
+          valueSchema: new OptionalSchema(new Uint64Schema()),
+          omitEmpty: true,
+        },
+        {
+          key: 'participation',
+          valueSchema: new OptionalSchema(AccountParticipation.encodingSchema),
+          omitEmpty: true,
+        },
+        {
+          key: 'reward-base',
+          valueSchema: new OptionalSchema(new Uint64Schema()),
+          omitEmpty: true,
+        },
+        {
+          key: 'rewards',
+          valueSchema: new OptionalSchema(new Uint64Schema()),
+          omitEmpty: true,
+        },
+        {
+          key: 'total-box-bytes',
+          valueSchema: new OptionalSchema(new Uint64Schema()),
+          omitEmpty: true,
+        },
+        {
+          key: 'total-boxes',
+          valueSchema: new OptionalSchema(new Uint64Schema()),
+          omitEmpty: true,
+        }
+      );
+    }
+    return this.encodingSchemaValue;
+  }
+
+  /** The balance in microAlgos, as recorded: rewards already applied. */
+  public amount: bigint;
+
+  /**
+   * The minimum balance in microAlgos, with the round's consensus params, as
+   * `/v2/accounts` computes it.
+   */
+  public minBalance: bigint;
+
+  /** `Offline`, `Online` or `Not Participating`. */
+  public status: string;
+
+  /** The number of apps the account is opted in to. */
+  public totalAppsOptedIn: number;
+
+  /** The number of assets the account is opted in to. */
+  public totalAssetsOptedIn: number;
+
+  /** The number of apps the account created. */
+  public totalCreatedApps: number;
+
+  /** The number of assets the account created. */
+  public totalCreatedAssets: number;
+
+  /** The extra program pages of the apps the account created. */
+  public appsTotalExtraPages?: number;
+
+  /** The local and global state schemas the account's apps take. */
+  public appsTotalSchema?: ApplicationStateSchema;
+
+  /** The address the account is rekeyed to. */
+  public authAddr?: Address;
+
+  /** Whether the account is eligible for block incentives. */
+  public incentiveEligible?: boolean;
+
+  /** The last round the account sent a heartbeat. */
+  public lastHeartbeat?: number;
+
+  /** The last round the account proposed a block. */
+  public lastProposed?: number;
+
+  /** The account's participation keys, when it registered them. */
+  public participation?: AccountParticipation;
+
+  /** The rewards level the account's rewards were last applied at. */
+  public rewardBase?: bigint;
+
+  /**
+   * The rewards in microAlgos the account has received in all, already in
+   * `amount` (`Account.rewards` without pending rewards).
+   */
+  public rewards?: bigint;
+
+  /** The bytes of the boxes the account's apps hold (names and values). */
+  public totalBoxBytes?: number;
+
+  /** The number of boxes the account's apps hold. */
+  public totalBoxes?: number;
+
+  /**
+   * Creates a new `AccountState` object. The parameters are the fields of the
+   * same name.
+   */
+  constructor({
+    amount,
+    minBalance,
+    status,
+    totalAppsOptedIn,
+    totalAssetsOptedIn,
+    totalCreatedApps,
+    totalCreatedAssets,
+    appsTotalExtraPages,
+    appsTotalSchema,
+    authAddr,
+    incentiveEligible,
+    lastHeartbeat,
+    lastProposed,
+    participation,
+    rewardBase,
+    rewards,
+    totalBoxBytes,
+    totalBoxes,
+  }: {
+    amount: number | bigint;
+    minBalance: number | bigint;
+    status: string;
+    totalAppsOptedIn: number | bigint;
+    totalAssetsOptedIn: number | bigint;
+    totalCreatedApps: number | bigint;
+    totalCreatedAssets: number | bigint;
+    appsTotalExtraPages?: number | bigint;
+    appsTotalSchema?: ApplicationStateSchema;
+    authAddr?: Address | string;
+    incentiveEligible?: boolean;
+    lastHeartbeat?: number | bigint;
+    lastProposed?: number | bigint;
+    participation?: AccountParticipation;
+    rewardBase?: number | bigint;
+    rewards?: number | bigint;
+    totalBoxBytes?: number | bigint;
+    totalBoxes?: number | bigint;
+  }) {
+    const safe = (v?: number | bigint) =>
+      typeof v === 'undefined' ? undefined : ensureSafeInteger(v);
+    this.amount = ensureBigInt(amount);
+    this.minBalance = ensureBigInt(minBalance);
+    this.status = status;
+    this.totalAppsOptedIn = ensureSafeInteger(totalAppsOptedIn);
+    this.totalAssetsOptedIn = ensureSafeInteger(totalAssetsOptedIn);
+    this.totalCreatedApps = ensureSafeInteger(totalCreatedApps);
+    this.totalCreatedAssets = ensureSafeInteger(totalCreatedAssets);
+    this.appsTotalExtraPages = safe(appsTotalExtraPages);
+    this.appsTotalSchema = appsTotalSchema;
+    this.authAddr =
+      typeof authAddr === 'string' ? Address.fromString(authAddr) : authAddr;
+    this.incentiveEligible = incentiveEligible;
+    this.lastHeartbeat = safe(lastHeartbeat);
+    this.lastProposed = safe(lastProposed);
+    this.participation = participation;
+    this.rewardBase =
+      typeof rewardBase === 'undefined' ? undefined : ensureBigInt(rewardBase);
+    this.rewards =
+      typeof rewards === 'undefined' ? undefined : ensureBigInt(rewards);
+    this.totalBoxBytes = safe(totalBoxBytes);
+    this.totalBoxes = safe(totalBoxes);
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  getEncodingSchema(): Schema {
+    return AccountState.encodingSchema;
+  }
+
+  toEncodingData(): Map<string, unknown> {
+    return new Map<string, unknown>([
+      ['amount', this.amount],
+      ['min-balance', this.minBalance],
+      ['status', this.status],
+      ['total-apps-opted-in', this.totalAppsOptedIn],
+      ['total-assets-opted-in', this.totalAssetsOptedIn],
+      ['total-created-apps', this.totalCreatedApps],
+      ['total-created-assets', this.totalCreatedAssets],
+      ['apps-total-extra-pages', this.appsTotalExtraPages],
+      ['apps-total-schema', this.appsTotalSchema?.toEncodingData()],
+      ['auth-addr', this.authAddr?.toString()],
+      ['incentive-eligible', this.incentiveEligible],
+      ['last-heartbeat', this.lastHeartbeat],
+      ['last-proposed', this.lastProposed],
+      ['participation', this.participation?.toEncodingData()],
+      ['reward-base', this.rewardBase],
+      ['rewards', this.rewards],
+      ['total-box-bytes', this.totalBoxBytes],
+      ['total-boxes', this.totalBoxes],
+    ]);
+  }
+
+  static fromEncodingData(data: unknown): AccountState {
+    if (!(data instanceof Map)) {
+      throw new Error(`Invalid decoded AccountState: ${data}`);
+    }
+    return new AccountState({
+      amount: data.get('amount'),
+      minBalance: data.get('min-balance'),
+      status: data.get('status'),
+      totalAppsOptedIn: data.get('total-apps-opted-in'),
+      totalAssetsOptedIn: data.get('total-assets-opted-in'),
+      totalCreatedApps: data.get('total-created-apps'),
+      totalCreatedAssets: data.get('total-created-assets'),
+      appsTotalExtraPages: data.get('apps-total-extra-pages'),
+      appsTotalSchema: optionalModel(
+        data.get('apps-total-schema'),
+        ApplicationStateSchema.fromEncodingData
+      ),
+      authAddr: data.get('auth-addr'),
+      incentiveEligible: data.get('incentive-eligible'),
+      lastHeartbeat: data.get('last-heartbeat'),
+      lastProposed: data.get('last-proposed'),
+      participation: optionalModel(
+        data.get('participation'),
+        AccountParticipation.fromEncodingData
+      ),
+      rewardBase: data.get('reward-base'),
+      rewards: data.get('rewards'),
+      totalBoxBytes: data.get('total-box-bytes'),
+      totalBoxes: data.get('total-boxes'),
+    });
+  }
+}
+
+/**
+ * An account a group changed, with its own fields before and after the group.
+ * A missing `before`: the account did not exist (it was funded by the group).
+ * A missing `after`: the group closed it.
+ */
+export class AccountStateChange implements Encodable {
+  private static encodingSchemaValue: Schema | undefined;
+
+  static get encodingSchema(): Schema {
+    if (!this.encodingSchemaValue) {
+      this.encodingSchemaValue = new NamedMapSchema([]);
+      (this.encodingSchemaValue as NamedMapSchema).pushEntries(
+        { key: 'address', valueSchema: new StringSchema(), omitEmpty: true },
+        ...changeValueEntries(AccountState.encodingSchema)
+      );
+    }
+    return this.encodingSchemaValue;
+  }
+
+  /** The account. */
+  public address: Address;
+
+  /** The account before the group; undefined if it did not exist. */
+  public before?: AccountState;
+
+  /** The account after the group; undefined if the group closed it. */
+  public after?: AccountState;
+
+  /**
+   * Creates a new `AccountStateChange` object.
+   * @param address - The account.
+   * @param before - The account before the group; undefined if new.
+   * @param after - The account after the group; undefined if closed.
+   */
+  constructor({
+    address,
+    before,
+    after,
+  }: {
+    address: Address | string;
+    before?: AccountState;
+    after?: AccountState;
+  }) {
+    this.address =
+      typeof address === 'string' ? Address.fromString(address) : address;
+    this.before = before;
+    this.after = after;
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  getEncodingSchema(): Schema {
+    return AccountStateChange.encodingSchema;
+  }
+
+  toEncodingData(): Map<string, unknown> {
+    return new Map<string, unknown>([
+      ['address', this.address.toString()],
+      ['before', this.before?.toEncodingData()],
+      ['after', this.after?.toEncodingData()],
+    ]);
+  }
+
+  static fromEncodingData(data: unknown): AccountStateChange {
+    if (!(data instanceof Map)) {
+      throw new Error(`Invalid decoded AccountStateChange: ${data}`);
+    }
+    return new AccountStateChange({
+      address: data.get('address'),
+      before: optionalModel(data.get('before'), AccountState.fromEncodingData),
+      after: optionalModel(data.get('after'), AccountState.fromEncodingData),
+    });
+  }
+}
+
+/**
+ * An asset holding a group changed, with the holding before and after the
+ * group. A missing `before`: the group opted the account in. A missing
+ * `after`: the group opted it out.
+ */
+export class AssetHoldingChange implements Encodable {
+  private static encodingSchemaValue: Schema | undefined;
+
+  static get encodingSchema(): Schema {
+    if (!this.encodingSchemaValue) {
+      this.encodingSchemaValue = new NamedMapSchema([]);
+      (this.encodingSchemaValue as NamedMapSchema).pushEntries(
+        { key: 'address', valueSchema: new StringSchema(), omitEmpty: true },
+        { key: 'asset-id', valueSchema: new Uint64Schema(), omitEmpty: true },
+        ...changeValueEntries(AssetHolding.encodingSchema)
+      );
+    }
+    return this.encodingSchemaValue;
+  }
+
+  /** The holder. */
+  public address: Address;
+
+  /** The asset. */
+  public assetId: bigint;
+
+  /** The holding before the group; undefined if not opted in. */
+  public before?: AssetHolding;
+
+  /** The holding after the group; undefined if opted out. */
+  public after?: AssetHolding;
+
+  /**
+   * Creates a new `AssetHoldingChange` object.
+   * @param address - The holder.
+   * @param assetId - The asset.
+   * @param before - The holding before the group; undefined if opted in by it.
+   * @param after - The holding after the group; undefined if opted out by it.
+   */
+  constructor({
+    address,
+    assetId,
+    before,
+    after,
+  }: {
+    address: Address | string;
+    assetId: number | bigint;
+    before?: AssetHolding;
+    after?: AssetHolding;
+  }) {
+    this.address =
+      typeof address === 'string' ? Address.fromString(address) : address;
+    this.assetId = ensureBigInt(assetId);
+    this.before = before;
+    this.after = after;
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  getEncodingSchema(): Schema {
+    return AssetHoldingChange.encodingSchema;
+  }
+
+  toEncodingData(): Map<string, unknown> {
+    return new Map<string, unknown>([
+      ['address', this.address.toString()],
+      ['asset-id', this.assetId],
+      ['before', this.before?.toEncodingData()],
+      ['after', this.after?.toEncodingData()],
+    ]);
+  }
+
+  static fromEncodingData(data: unknown): AssetHoldingChange {
+    if (!(data instanceof Map)) {
+      throw new Error(`Invalid decoded AssetHoldingChange: ${data}`);
+    }
+    return new AssetHoldingChange({
+      address: data.get('address'),
+      assetId: data.get('asset-id'),
+      before: optionalModel(data.get('before'), AssetHolding.fromEncodingData),
+      after: optionalModel(data.get('after'), AssetHolding.fromEncodingData),
+    });
+  }
+}
+
+/**
+ * An asset whose params a group changed, with the params before and after the
+ * group. A missing `before`: the group created the asset. A missing `after`:
+ * the group destroyed it.
+ */
+export class AssetParamsChange implements Encodable {
+  private static encodingSchemaValue: Schema | undefined;
+
+  static get encodingSchema(): Schema {
+    if (!this.encodingSchemaValue) {
+      this.encodingSchemaValue = new NamedMapSchema([]);
+      (this.encodingSchemaValue as NamedMapSchema).pushEntries(
+        { key: 'asset-id', valueSchema: new Uint64Schema(), omitEmpty: true },
+        ...changeValueEntries(AssetParams.encodingSchema)
+      );
+    }
+    return this.encodingSchemaValue;
+  }
+
+  /** The asset. */
+  public assetId: bigint;
+
+  /** The params before the group; undefined if the group created the asset. */
+  public before?: AssetParams;
+
+  /** The params after the group; undefined if the group destroyed it. */
+  public after?: AssetParams;
+
+  /**
+   * Creates a new `AssetParamsChange` object.
+   * @param assetId - The asset.
+   * @param before - The params before the group; undefined if created by it.
+   * @param after - The params after the group; undefined if destroyed by it.
+   */
+  constructor({
+    assetId,
+    before,
+    after,
+  }: {
+    assetId: number | bigint;
+    before?: AssetParams;
+    after?: AssetParams;
+  }) {
+    this.assetId = ensureBigInt(assetId);
+    this.before = before;
+    this.after = after;
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  getEncodingSchema(): Schema {
+    return AssetParamsChange.encodingSchema;
+  }
+
+  toEncodingData(): Map<string, unknown> {
+    return new Map<string, unknown>([
+      ['asset-id', this.assetId],
+      ['before', this.before?.toEncodingData()],
+      ['after', this.after?.toEncodingData()],
+    ]);
+  }
+
+  static fromEncodingData(data: unknown): AssetParamsChange {
+    if (!(data instanceof Map)) {
+      throw new Error(`Invalid decoded AssetParamsChange: ${data}`);
+    }
+    return new AssetParamsChange({
+      assetId: data.get('asset-id'),
+      before: optionalModel(data.get('before'), AssetParams.fromEncodingData),
+      after: optionalModel(data.get('after'), AssetParams.fromEncodingData),
+    });
+  }
+}
+
+/**
+ * An app whose params a group changed, with the params before and after the
+ * group, without `globalState` (global state changes are in the round's
+ * `txns`): listed only when something else changed, such as the programs,
+ * the schemas, the extra pages or the version. A missing `before`: the group
+ * created the app. A missing `after`: the group deleted it.
+ */
+export class AppParamsChange implements Encodable {
+  private static encodingSchemaValue: Schema | undefined;
+
+  static get encodingSchema(): Schema {
+    if (!this.encodingSchemaValue) {
+      this.encodingSchemaValue = new NamedMapSchema([]);
+      (this.encodingSchemaValue as NamedMapSchema).pushEntries(
+        { key: 'app-id', valueSchema: new Uint64Schema(), omitEmpty: true },
+        ...changeValueEntries(ApplicationParams.encodingSchema)
+      );
+    }
+    return this.encodingSchemaValue;
+  }
+
+  /** The app. */
+  public appId: bigint;
+
+  /** The params before the group; undefined if the group created the app. */
+  public before?: ApplicationParams;
+
+  /** The params after the group; undefined if the group deleted it. */
+  public after?: ApplicationParams;
+
+  /**
+   * Creates a new `AppParamsChange` object.
+   * @param appId - The app.
+   * @param before - The params before the group; undefined if created by it.
+   * @param after - The params after the group; undefined if deleted by it.
+   */
+  constructor({
+    appId,
+    before,
+    after,
+  }: {
+    appId: number | bigint;
+    before?: ApplicationParams;
+    after?: ApplicationParams;
+  }) {
+    this.appId = ensureBigInt(appId);
+    this.before = before;
+    this.after = after;
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  getEncodingSchema(): Schema {
+    return AppParamsChange.encodingSchema;
+  }
+
+  toEncodingData(): Map<string, unknown> {
+    return new Map<string, unknown>([
+      ['app-id', this.appId],
+      ['before', this.before?.toEncodingData()],
+      ['after', this.after?.toEncodingData()],
+    ]);
+  }
+
+  static fromEncodingData(data: unknown): AppParamsChange {
+    if (!(data instanceof Map)) {
+      throw new Error(`Invalid decoded AppParamsChange: ${data}`);
+    }
+    return new AppParamsChange({
+      appId: data.get('app-id'),
+      before: optionalModel(
+        data.get('before'),
+        ApplicationParams.fromEncodingData
+      ),
+      after: optionalModel(
+        data.get('after'),
+        ApplicationParams.fromEncodingData
+      ),
+    });
+  }
+}
+
+/**
+ * A local state a group created or removed, before and after the group, as
+ * an {@link ApplicationLocalState} with its `id` and `schema` and without
+ * `keyValue` (the keys are in the round's `txns`). A missing `before`: the
+ * group opted the account in to the app. A missing `after`: the group closed
+ * it out or cleared it.
+ */
+export class LocalStateChange implements Encodable {
+  private static encodingSchemaValue: Schema | undefined;
+
+  static get encodingSchema(): Schema {
+    if (!this.encodingSchemaValue) {
+      this.encodingSchemaValue = new NamedMapSchema([]);
+      (this.encodingSchemaValue as NamedMapSchema).pushEntries(
+        { key: 'address', valueSchema: new StringSchema(), omitEmpty: true },
+        { key: 'app-id', valueSchema: new Uint64Schema(), omitEmpty: true },
+        ...changeValueEntries(ApplicationLocalState.encodingSchema)
+      );
+    }
+    return this.encodingSchemaValue;
+  }
+
+  /** The account. */
+  public address: Address;
+
+  /** The app. */
+  public appId: bigint;
+
+  /** The local state before the group; undefined if not opted in. */
+  public before?: ApplicationLocalState;
+
+  /** The local state after the group; undefined if closed out or cleared. */
+  public after?: ApplicationLocalState;
+
+  /**
+   * Creates a new `LocalStateChange` object.
+   * @param address - The account.
+   * @param appId - The app.
+   * @param before - The local state before the group; undefined if opted in by it.
+   * @param after - The local state after the group; undefined if removed by it.
+   */
+  constructor({
+    address,
+    appId,
+    before,
+    after,
+  }: {
+    address: Address | string;
+    appId: number | bigint;
+    before?: ApplicationLocalState;
+    after?: ApplicationLocalState;
+  }) {
+    this.address =
+      typeof address === 'string' ? Address.fromString(address) : address;
+    this.appId = ensureBigInt(appId);
+    this.before = before;
+    this.after = after;
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  getEncodingSchema(): Schema {
+    return LocalStateChange.encodingSchema;
+  }
+
+  toEncodingData(): Map<string, unknown> {
+    return new Map<string, unknown>([
+      ['address', this.address.toString()],
+      ['app-id', this.appId],
+      ['before', this.before?.toEncodingData()],
+      ['after', this.after?.toEncodingData()],
+    ]);
+  }
+
+  static fromEncodingData(data: unknown): LocalStateChange {
+    if (!(data instanceof Map)) {
+      throw new Error(`Invalid decoded LocalStateChange: ${data}`);
+    }
+    return new LocalStateChange({
+      address: data.get('address'),
+      appId: data.get('app-id'),
+      before: optionalModel(
+        data.get('before'),
+        ApplicationLocalState.fromEncodingData
+      ),
+      after: optionalModel(
+        data.get('after'),
+        ApplicationLocalState.fromEncodingData
+      ),
+    });
+  }
+}
+
+/**
+ * What a top-level group of a round changed, other than app state, with each
+ * value before and after the group: the state right before it in the round,
+ * and right after it. Only values that differ are listed, each list sorted by
+ * address, then id. The group's app state changes are its transactions'
+ * entries in the round's `txns` (`txnsOf`).
+ *
+ * The fee sink is listed in `accounts` like any account whenever the group
+ * paid fees; `withoutFeeSink` drops it.
+ *
+ * Changes the block makes outside its transactions, such as the proposer
+ * payout from the fee sink and the rewards pool's, are in no group.
+ */
+export class GroupStateChanges implements Encodable {
+  private static encodingSchemaValue: Schema | undefined;
+
+  static get encodingSchema(): Schema {
+    if (!this.encodingSchemaValue) {
+      this.encodingSchemaValue = new NamedMapSchema([]);
+      (this.encodingSchemaValue as NamedMapSchema).pushEntries(
+        { key: 'first', valueSchema: new Uint64Schema(), omitEmpty: true },
+        { key: 'count', valueSchema: new Uint64Schema(), omitEmpty: true },
+        {
+          key: 'group-id',
+          valueSchema: new OptionalSchema(new ByteArraySchema()),
+          omitEmpty: true,
+        },
+        {
+          key: 'txids',
+          valueSchema: new ArraySchema(new StringSchema()),
+          omitEmpty: true,
+        },
+        {
+          key: 'accounts',
+          valueSchema: new ArraySchema(AccountStateChange.encodingSchema),
+          omitEmpty: true,
+        },
+        {
+          key: 'holdings',
+          valueSchema: new ArraySchema(AssetHoldingChange.encodingSchema),
+          omitEmpty: true,
+        },
+        {
+          key: 'assets',
+          valueSchema: new ArraySchema(AssetParamsChange.encodingSchema),
+          omitEmpty: true,
+        },
+        {
+          key: 'apps',
+          valueSchema: new ArraySchema(AppParamsChange.encodingSchema),
+          omitEmpty: true,
+        },
+        {
+          key: 'local-states',
+          valueSchema: new ArraySchema(LocalStateChange.encodingSchema),
+          omitEmpty: true,
+        }
+      );
+    }
+    return this.encodingSchemaValue;
+  }
+
+  /**
+   * The payset index of the group's first transaction: `path[0]` of its
+   * transactions in `txns`.
+   */
+  public first: number;
+
+  /**
+   * The number of top-level transactions in the group, at payset indexes
+   * `first` to `first + count - 1`.
+   */
+  public count: number;
+
+  /** The group ID; undefined for a transaction not in a group. */
+  public groupId?: Uint8Array;
+
+  /** The group's top-level transaction IDs, in payset order. */
+  public txids: string[];
+
+  /** The accounts the group changed (`include` `accounts`). */
+  public accounts: AccountStateChange[];
+
+  /** The asset holdings the group changed (`include` `assets`). */
+  public holdings: AssetHoldingChange[];
+
+  /** The asset params the group changed (`include` `assets`). */
+  public assets: AssetParamsChange[];
+
+  /** The app params the group changed (`include` `apps`). */
+  public apps: AppParamsChange[];
+
+  /** The local states the group created or removed (`include` `apps`). */
+  public localStates: LocalStateChange[];
+
+  /**
+   * Creates a new `GroupStateChanges` object. The parameters are the fields of the
+   * same name; the lists default to empty.
+   */
+  constructor({
+    first,
+    count,
+    groupId,
+    txids,
+    accounts = [],
+    holdings = [],
+    assets = [],
+    apps = [],
+    localStates = [],
+  }: {
+    first: number | bigint;
+    count: number | bigint;
+    groupId?: string | Uint8Array;
+    txids: string[];
+    accounts?: AccountStateChange[];
+    holdings?: AssetHoldingChange[];
+    assets?: AssetParamsChange[];
+    apps?: AppParamsChange[];
+    localStates?: LocalStateChange[];
+  }) {
+    this.first = ensureSafeInteger(first);
+    this.count = ensureSafeInteger(count);
+    this.groupId =
+      typeof groupId === 'string' ? base64ToBytes(groupId) : groupId;
+    this.txids = txids;
+    this.accounts = accounts;
+    this.holdings = holdings;
+    this.assets = assets;
+    this.apps = apps;
+    this.localStates = localStates;
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  getEncodingSchema(): Schema {
+    return GroupStateChanges.encodingSchema;
+  }
+
+  toEncodingData(): Map<string, unknown> {
+    return new Map<string, unknown>([
+      ['first', this.first],
+      ['count', this.count],
+      ['group-id', this.groupId],
+      ['txids', this.txids],
+      ['accounts', this.accounts.map((c) => c.toEncodingData())],
+      ['holdings', this.holdings.map((c) => c.toEncodingData())],
+      ['assets', this.assets.map((c) => c.toEncodingData())],
+      ['apps', this.apps.map((c) => c.toEncodingData())],
+      ['local-states', this.localStates.map((c) => c.toEncodingData())],
+    ]);
+  }
+
+  static fromEncodingData(data: unknown): GroupStateChanges {
+    if (!(data instanceof Map)) {
+      throw new Error(`Invalid decoded GroupStateChanges: ${data}`);
+    }
+    const list = <T>(key: string, from: (d: unknown) => T): T[] =>
+      (data.get(key) ?? []).map((d: unknown) => from(d));
+    return new GroupStateChanges({
+      first: data.get('first') ?? 0,
+      count: data.get('count') ?? 0,
+      groupId: data.get('group-id'),
+      txids: data.get('txids') ?? [],
+      accounts: list('accounts', AccountStateChange.fromEncodingData),
+      holdings: list('holdings', AssetHoldingChange.fromEncodingData),
+      assets: list('assets', AssetParamsChange.fromEncodingData),
+      apps: list('apps', AppParamsChange.fromEncodingData),
+      localStates: list('local-states', LocalStateChange.fromEncodingData),
+    });
+  }
+}
+
+/**
+ * A signed integer that fits a JavaScript number (Go's `int`), such as
+ * {@link ProgramBudget.budgetAfter}, which is negative for a clear state
+ * program that ran out of budget. {@link Uint64Schema} refuses negatives.
+ */
+class SafeIntegerSchema extends Uint64Schema {
+  // eslint-disable-next-line class-methods-use-this
+  public prepareMsgpack(data: unknown): MsgpackEncodingData {
+    return ensureSafeInteger(data);
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  public fromPreparedMsgpack(
+    encoded: MsgpackEncodingData,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    _rawStringProvider: MsgpackRawStringProvider
+  ): bigint {
+    return BigInt(ensureSafeInteger(encoded));
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  public prepareJSON(data: unknown): JSONEncodingData {
+    return ensureSafeInteger(data);
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  public fromPreparedJSON(encoded: JSONEncodingData): bigint {
+    return BigInt(ensureSafeInteger(encoded));
+  }
+}
+
+/**
+ * What a program run is: `approval` an app's approval program, `clear` its
+ * clear state program, `logic-sig` a logic sig. A value this client does not
+ * know is kept as the node sent it.
+ */
+export type ProgramKind = 'approval' | 'clear' | 'logic-sig';
+
+/**
+ * The opcode budget of one program run (`include(['budget'])`): an app's
+ * approval or clear state program, top-level or inner, or a logic sig. The
+ * programs of a transaction's inner transactions are entries of their own.
+ */
+export class ProgramBudget implements Encodable {
+  private static encodingSchemaValue: Schema | undefined;
+
+  static get encodingSchema(): Schema {
+    if (!this.encodingSchemaValue) {
+      this.encodingSchemaValue = new NamedMapSchema([]);
+      (this.encodingSchemaValue as NamedMapSchema).pushEntries(
+        {
+          key: 'path',
+          valueSchema: new ArraySchema(new Uint64Schema()),
+          omitEmpty: false,
+        },
+        {
+          key: 'txid',
+          valueSchema: new OptionalSchema(new StringSchema()),
+          omitEmpty: true,
+        },
+        { key: 'kind', valueSchema: new StringSchema(), omitEmpty: false },
+        {
+          key: 'app-id',
+          valueSchema: new OptionalSchema(new Uint64Schema()),
+          omitEmpty: true,
+        },
+        { key: 'cost', valueSchema: new Uint64Schema(), omitEmpty: false },
+        {
+          key: 'budget-before',
+          valueSchema: new SafeIntegerSchema(),
+          omitEmpty: false,
+        },
+        {
+          key: 'budget-after',
+          valueSchema: new SafeIntegerSchema(),
+          omitEmpty: false,
+        },
+        {
+          key: 'failed',
+          valueSchema: new OptionalSchema(new BooleanSchema()),
+          omitEmpty: true,
+        }
+      );
+    }
+    return this.encodingSchemaValue;
+  }
+
+  /**
+   * The transaction that ran the program: its index in the block's payset,
+   * then its inner indexes, as {@link TxnStateChanges.path}.
+   */
+  public path: number[];
+
+  /** The transaction ID, for a top-level transaction. */
+  public txid?: string;
+
+  /** `approval`, `clear` or `logic-sig`. */
+  public kind: ProgramKind | string;
+
+  /** For an app program, the app; for an app create, the new app. */
+  public appId?: bigint;
+
+  /** The opcode budget the program spent, without its inner transactions'. */
+  public cost: number;
+
+  /**
+   * The opcode budget the program could still spend when it began: the
+   * group's pool where budgets are pooled (apps', or logic sigs'), with what
+   * an inner app call adds for itself; the program's own budget otherwise,
+   * and at most that for a clear state program.
+   */
+  public budgetBefore: number;
+
+  /**
+   * The opcode budget the program could still spend when it ended. An inner
+   * app call adds to the pool while its caller runs, so `budgetBefore`
+   * minus `budgetAfter` can be less than `cost`. Negative for a clear state
+   * program that ran out of budget.
+   */
+  public budgetAfter: number;
+
+  /**
+   * The program rejected or failed. In a block only a clear state program
+   * can (or one inside it): the block keeps the call, without what the
+   * program did.
+   */
+  public failed?: boolean;
+
+  /**
+   * Creates a new `ProgramBudget` object.
+   * @param path - The payset index, then the inner indexes.
+   * @param txid - The transaction ID, for a top-level transaction.
+   * @param kind - `approval`, `clear` or `logic-sig`.
+   * @param appId - The app, for an app program.
+   * @param cost - The opcode budget the program spent.
+   * @param budgetBefore - The budget it could spend when it began.
+   * @param budgetAfter - The budget it could spend when it ended.
+   * @param failed - The program rejected or failed.
+   */
+  constructor({
+    path,
+    txid,
+    kind,
+    appId,
+    cost,
+    budgetBefore,
+    budgetAfter,
+    failed,
+  }: {
+    path: (number | bigint)[];
+    txid?: string;
+    kind: ProgramKind | string;
+    appId?: number | bigint;
+    cost: number | bigint;
+    budgetBefore: number | bigint;
+    budgetAfter: number | bigint;
+    failed?: boolean;
+  }) {
+    this.path = path.map(ensureSafeInteger);
+    this.txid = txid;
+    this.kind = kind;
+    this.appId = typeof appId === 'undefined' ? undefined : ensureBigInt(appId);
+    this.cost = ensureSafeInteger(cost);
+    this.budgetBefore = ensureSafeInteger(budgetBefore);
+    this.budgetAfter = ensureSafeInteger(budgetAfter);
+    this.failed = failed;
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  getEncodingSchema(): Schema {
+    return ProgramBudget.encodingSchema;
+  }
+
+  toEncodingData(): Map<string, unknown> {
+    return new Map<string, unknown>([
+      ['path', this.path],
+      ['txid', this.txid],
+      ['kind', this.kind],
+      ['app-id', this.appId],
+      ['cost', this.cost],
+      ['budget-before', this.budgetBefore],
+      ['budget-after', this.budgetAfter],
+      ['failed', this.failed],
+    ]);
+  }
+
+  static fromEncodingData(data: unknown): ProgramBudget {
+    if (!(data instanceof Map)) {
+      throw new Error(`Invalid decoded ProgramBudget: ${data}`);
+    }
+    return new ProgramBudget({
+      path: data.get('path') ?? [],
+      txid: data.get('txid'),
+      kind: data.get('kind'),
+      appId: data.get('app-id'),
+      cost: data.get('cost') ?? 0,
+      budgetBefore: data.get('budget-before') ?? 0,
+      budgetAfter: data.get('budget-after') ?? 0,
+      failed: data.get('failed'),
+    });
+  }
+}
+
+/**
+ * An app state key a transaction read (`include(['reads'])`), with what it
+ * read the first time: `value` for global and local state when the key
+ * existed, `length` for a box. A key the transaction wrote before it read it
+ * shows the value it wrote. Only the read opcodes count (`app_global_get(_ex)`,
+ * `app_local_get(_ex)`, `box_get`, `box_extract`, `box_len`).
+ */
+export class AppStateRead implements Encodable {
+  private static encodingSchemaValue: Schema | undefined;
+
+  static get encodingSchema(): Schema {
+    if (!this.encodingSchemaValue) {
+      this.encodingSchemaValue = new NamedMapSchema([]);
+      (this.encodingSchemaValue as NamedMapSchema).pushEntries(
+        { key: 'app-id', valueSchema: new Uint64Schema(), omitEmpty: false },
+        {
+          key: 'app-state-type',
+          valueSchema: new StringSchema(),
+          omitEmpty: false,
+        },
+        {
+          key: 'account',
+          valueSchema: new OptionalSchema(new StringSchema()),
+          omitEmpty: true,
+        },
+        { key: 'key', valueSchema: new ByteArraySchema(), omitEmpty: false },
+        { key: 'exists', valueSchema: new BooleanSchema(), omitEmpty: false },
+        {
+          key: 'value',
+          valueSchema: new PresentOptionalSchema(TealValue.encodingSchema),
+          omitEmpty: true,
+        },
+        {
+          key: 'length',
+          valueSchema: new OptionalSchema(new Uint64Schema()),
+          omitEmpty: true,
+        }
+      );
+    }
+    return this.encodingSchemaValue;
+  }
+
+  /** The app whose state was read. */
+  public appId: bigint;
+
+  /**
+   * The kind of state: `g` global state, `l` local state, `b` a box. A value
+   * this client does not know is kept as the node sent it.
+   */
+  public appStateType: string;
+
+  /** For local state, the account whose local state was read. */
+  public account?: Address;
+
+  /** The global or local state key, or the box name. */
+  public key: Uint8Array;
+
+  /** The key existed (for a box, the box) when it was read. */
+  public exists: boolean;
+
+  /** For global and local state, the value read; undefined if none. */
+  public value?: TealValue;
+
+  /**
+   * For a box, its length in bytes: 0 for an empty box and for one that did
+   * not exist, which `exists` tells apart (the node leaves a 0 length out).
+   * The value is not given. Undefined for global and local state.
+   */
+  public length?: number;
+
+  /**
+   * Creates a new `AppStateRead` object.
+   * @param appId - The app whose state was read.
+   * @param appStateType - `g` global state, `l` local state, `b` a box.
+   * @param account - For local state, the account.
+   * @param key - The state key or box name (bytes, or base64).
+   * @param exists - The key existed when it was read.
+   * @param value - For global and local state, the value read.
+   * @param length - For a box, its length.
+   */
+  constructor({
+    appId,
+    appStateType,
+    account,
+    key,
+    exists,
+    value,
+    length,
+  }: {
+    appId: number | bigint;
+    appStateType: string;
+    account?: Address | string;
+    key: string | Uint8Array;
+    exists: boolean;
+    value?: TealValue;
+    length?: number | bigint;
+  }) {
+    this.appId = ensureBigInt(appId);
+    this.appStateType = appStateType;
+    this.account =
+      typeof account === 'string' ? Address.fromString(account) : account;
+    this.key = typeof key === 'string' ? base64ToBytes(key) : key;
+    this.exists = exists;
+    this.value = value;
+    this.length =
+      typeof length === 'undefined' ? undefined : ensureSafeInteger(length);
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  getEncodingSchema(): Schema {
+    return AppStateRead.encodingSchema;
+  }
+
+  toEncodingData(): Map<string, unknown> {
+    return new Map<string, unknown>([
+      ['app-id', this.appId],
+      ['app-state-type', this.appStateType],
+      ['account', this.account?.toString()],
+      ['key', this.key],
+      ['exists', this.exists],
+      ['value', this.value?.toEncodingData()],
+      // The node leaves a 0 length out.
+      ['length', this.length === 0 ? undefined : this.length],
+    ]);
+  }
+
+  static fromEncodingData(data: unknown): AppStateRead {
+    if (!(data instanceof Map)) {
+      throw new Error(`Invalid decoded AppStateRead: ${data}`);
+    }
+    const appStateType = data.get('app-state-type');
+    return new AppStateRead({
+      appId: data.get('app-id'),
+      appStateType,
+      account: data.get('account'),
+      key: data.get('key'),
+      exists: data.get('exists') ?? false,
+      value: optionalModel(data.get('value'), (v) =>
+        TealValue.fromEncodingData(v)
+      ),
+      // The node leaves a 0 length out; a box always has one.
+      length: data.get('length') ?? (appStateType === 'b' ? 0 : undefined),
+    });
+  }
+}
+
+/**
+ * The app state keys a transaction read (`include(['reads'])`), top-level or
+ * inner. Its inner transactions' reads are entries of their own.
+ */
+export class TxnStateReads implements Encodable {
+  private static encodingSchemaValue: Schema | undefined;
+
+  static get encodingSchema(): Schema {
+    if (!this.encodingSchemaValue) {
+      this.encodingSchemaValue = new NamedMapSchema([]);
+      (this.encodingSchemaValue as NamedMapSchema).pushEntries(
+        {
+          key: 'path',
+          valueSchema: new ArraySchema(new Uint64Schema()),
+          omitEmpty: false,
+        },
+        {
+          key: 'txid',
+          valueSchema: new OptionalSchema(new StringSchema()),
+          omitEmpty: true,
+        },
+        {
+          key: 'reads',
+          valueSchema: new ArraySchema(AppStateRead.encodingSchema),
+          omitEmpty: false,
+        }
+      );
+    }
+    return this.encodingSchemaValue;
+  }
+
+  /**
+   * The transaction: its index in the block's payset, then its inner
+   * indexes, as {@link TxnStateChanges.path}.
+   */
+  public path: number[];
+
+  /** The transaction ID, for a top-level transaction. */
+  public txid?: string;
+
+  /** The keys it read, each once, in the order it first read them. */
+  public reads: AppStateRead[];
+
+  /**
+   * Creates a new `TxnStateReads` object.
+   * @param path - The payset index, then the inner indexes.
+   * @param txid - The transaction ID, for a top-level transaction.
+   * @param reads - The keys it read.
+   */
+  constructor({
+    path,
+    txid,
+    reads,
+  }: {
+    path: (number | bigint)[];
+    txid?: string;
+    reads: AppStateRead[];
+  }) {
+    this.path = path.map(ensureSafeInteger);
+    this.txid = txid;
+    this.reads = reads;
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  getEncodingSchema(): Schema {
+    return TxnStateReads.encodingSchema;
+  }
+
+  toEncodingData(): Map<string, unknown> {
+    return new Map<string, unknown>([
+      ['path', this.path],
+      ['txid', this.txid],
+      ['reads', this.reads.map((r) => r.toEncodingData())],
+    ]);
+  }
+
+  static fromEncodingData(data: unknown): TxnStateReads {
+    if (!(data instanceof Map)) {
+      throw new Error(`Invalid decoded TxnStateReads: ${data}`);
+    }
+    return new TxnStateReads({
+      path: data.get('path') ?? [],
+      txid: data.get('txid'),
+      reads: (data.get('reads') ?? []).map((r: unknown) =>
+        AppStateRead.fromEncodingData(r)
+      ),
+    });
+  }
+}
+
+/**
+ * The execution trace of a top-level transaction (`include(['trace'])`), as
+ * simulate gives it with stack, scratch and state changes (each state change
+ * with its `appId`). Empty for a transaction that ran no program.
+ */
+export class TxnExecTrace implements Encodable {
+  private static encodingSchemaValue: Schema | undefined;
+
+  static get encodingSchema(): Schema {
+    if (!this.encodingSchemaValue) {
+      this.encodingSchemaValue = new NamedMapSchema([]);
+      (this.encodingSchemaValue as NamedMapSchema).pushEntries(
+        { key: 'txid', valueSchema: new StringSchema(), omitEmpty: false },
+        {
+          key: 'exec-trace',
+          valueSchema: SimulationTransactionExecTrace.encodingSchema,
+          omitEmpty: false,
+        }
+      );
+    }
+    return this.encodingSchemaValue;
+  }
+
+  /** The transaction ID. */
+  public txid: string;
+
+  /**
+   * The trace. Its program hashes (`approvalProgramHash`,
+   * `clearStateProgramHash`, `logicSigHash`) are those of the answer's
+   * `programs`; `programLine` maps a trace's `pc` to its line.
+   */
+  public execTrace: SimulationTransactionExecTrace;
+
+  /**
+   * Creates a new `TxnExecTrace` object.
+   * @param txid - The transaction ID.
+   * @param execTrace - The execution trace.
+   */
+  constructor({
+    txid,
+    execTrace,
+  }: {
+    txid: string;
+    execTrace: SimulationTransactionExecTrace;
+  }) {
+    this.txid = txid;
+    this.execTrace = execTrace;
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  getEncodingSchema(): Schema {
+    return TxnExecTrace.encodingSchema;
+  }
+
+  toEncodingData(): Map<string, unknown> {
+    return new Map<string, unknown>([
+      ['txid', this.txid],
+      ['exec-trace', this.execTrace.toEncodingData()],
+    ]);
+  }
+
+  static fromEncodingData(data: unknown): TxnExecTrace {
+    if (!(data instanceof Map)) {
+      throw new Error(`Invalid decoded TxnExecTrace: ${data}`);
+    }
+    return new TxnExecTrace({
+      txid: data.get('txid'),
+      execTrace: SimulationTransactionExecTrace.fromEncodingData(
+        data.get('exec-trace') ?? new Map()
+      ),
+    });
+  }
+}
+
+/** A line of a program's disassembly. */
+export class DisassemblyLine implements Encodable {
+  private static encodingSchemaValue: Schema | undefined;
+
+  static get encodingSchema(): Schema {
+    if (!this.encodingSchemaValue) {
+      this.encodingSchemaValue = new NamedMapSchema([]);
+      (this.encodingSchemaValue as NamedMapSchema).pushEntries(
+        {
+          key: 'pc',
+          valueSchema: new OptionalSchema(new Uint64Schema()),
+          omitEmpty: true,
+        },
+        { key: 'text', valueSchema: new StringSchema(), omitEmpty: false }
+      );
+    }
+    return this.encodingSchemaValue;
+  }
+
+  /**
+   * The program counter of the line's opcode, as a trace's `pc`; undefined
+   * for a line without one, such as `#pragma version` or a label (pc 0 is
+   * the version byte, never an opcode).
+   */
+  public pc?: number;
+
+  /** The line. */
+  public text: string;
+
+  /**
+   * Creates a new `DisassemblyLine` object.
+   * @param pc - The program counter of the line's opcode.
+   * @param text - The line.
+   */
+  constructor({ pc, text }: { pc?: number | bigint; text: string }) {
+    this.pc = typeof pc === 'undefined' ? undefined : ensureSafeInteger(pc);
+    this.text = text;
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  getEncodingSchema(): Schema {
+    return DisassemblyLine.encodingSchema;
+  }
+
+  toEncodingData(): Map<string, unknown> {
+    return new Map<string, unknown>([
+      ['pc', this.pc],
+      ['text', this.text],
+    ]);
+  }
+
+  static fromEncodingData(data: unknown): DisassemblyLine {
+    if (!(data instanceof Map)) {
+      throw new Error(`Invalid decoded DisassemblyLine: ${data}`);
+    }
+    return new DisassemblyLine({
+      pc: data.get('pc'),
+      text: data.get('text') ?? '',
+    });
+  }
+}
+
+/**
+ * The disassembly of a program a trace ran (`include(['trace'])`), line by
+ * line.
+ */
+export class ProgramDisassembly implements Encodable {
+  private static encodingSchemaValue: Schema | undefined;
+
+  static get encodingSchema(): Schema {
+    if (!this.encodingSchemaValue) {
+      this.encodingSchemaValue = new NamedMapSchema([]);
+      (this.encodingSchemaValue as NamedMapSchema).pushEntries(
+        { key: 'hash', valueSchema: new ByteArraySchema(), omitEmpty: false },
+        {
+          key: 'lines',
+          valueSchema: new ArraySchema(DisassemblyLine.encodingSchema),
+          omitEmpty: false,
+        }
+      );
+    }
+    return this.encodingSchemaValue;
+  }
+
+  /**
+   * The program's hash, as the traces' `approvalProgramHash`,
+   * `clearStateProgramHash` and `logicSigHash` give it.
+   */
+  public hash: Uint8Array;
+
+  /** The lines of the disassembly. */
+  public lines: DisassemblyLine[];
+
+  /**
+   * Creates a new `ProgramDisassembly` object.
+   * @param hash - The program's hash (bytes, or base64).
+   * @param lines - The lines of the disassembly.
+   */
+  constructor({
+    hash,
+    lines,
+  }: {
+    hash: string | Uint8Array;
+    lines: DisassemblyLine[];
+  }) {
+    this.hash = typeof hash === 'string' ? base64ToBytes(hash) : hash;
+    this.lines = lines;
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  getEncodingSchema(): Schema {
+    return ProgramDisassembly.encodingSchema;
+  }
+
+  toEncodingData(): Map<string, unknown> {
+    return new Map<string, unknown>([
+      ['hash', this.hash],
+      ['lines', this.lines.map((l) => l.toEncodingData())],
+    ]);
+  }
+
+  static fromEncodingData(data: unknown): ProgramDisassembly {
+    if (!(data instanceof Map)) {
+      throw new Error(`Invalid decoded ProgramDisassembly: ${data}`);
+    }
+    return new ProgramDisassembly({
+      hash: data.get('hash'),
+      lines: (data.get('lines') ?? []).map((l: unknown) =>
+        DisassemblyLine.fromEncodingData(l)
+      ),
+    });
+  }
+}
+
+/**
+ * The app state changes of each transaction of a round
+ * (`GET /v2/deltas/{round}/txn/state-changes`), and, when asked for with
+ * `include()` or `full()`, everything else each group changed, and with
+ * `include()` or `trace()`, the opcode budget of each program run, the app
+ * state each transaction read, and the execution traces of a group.
+ */
+export class TxnStateChangesResponse implements Encodable {
+  private static encodingSchemaValue: Schema | undefined;
+
+  static get encodingSchema(): Schema {
+    if (!this.encodingSchemaValue) {
+      this.encodingSchemaValue = new NamedMapSchema([]);
+      (this.encodingSchemaValue as NamedMapSchema).pushEntries(
+        { key: 'round', valueSchema: new Uint64Schema(), omitEmpty: true },
+        {
+          key: 'txns',
+          valueSchema: new ArraySchema(TxnStateChanges.encodingSchema),
+          omitEmpty: true,
+        },
+        {
+          key: 'groups',
+          valueSchema: new PresentOptionalSchema(
+            new ArraySchema(GroupStateChanges.encodingSchema)
+          ),
+          omitEmpty: true,
+        },
+        {
+          key: 'fee-sink',
+          valueSchema: new OptionalSchema(new StringSchema()),
+          omitEmpty: true,
+        },
+        {
+          key: 'budget',
+          valueSchema: new PresentOptionalSchema(
+            new ArraySchema(ProgramBudget.encodingSchema)
+          ),
+          omitEmpty: true,
+        },
+        {
+          key: 'reads',
+          valueSchema: new PresentOptionalSchema(
+            new ArraySchema(TxnStateReads.encodingSchema)
+          ),
+          omitEmpty: true,
+        },
+        {
+          key: 'traces',
+          valueSchema: new PresentOptionalSchema(
+            new ArraySchema(TxnExecTrace.encodingSchema)
+          ),
+          omitEmpty: true,
+        },
+        {
+          key: 'programs',
+          valueSchema: new PresentOptionalSchema(
+            new ArraySchema(ProgramDisassembly.encodingSchema)
+          ),
+          omitEmpty: true,
+        }
+      );
+    }
+    return this.encodingSchemaValue;
+  }
+
+  /** The round. */
+  public round: bigint;
+
+  /**
+   * The transactions that changed app state, top-level and inner, in
+   * execution order (a parent before its inner transactions). A transaction
+   * that changed nothing, or nothing the filters kept, is left out.
+   */
+  public txns: TxnStateChanges[];
+
+  /**
+   * With `include()` or `full()`: one entry per top-level group of the round
+   * (a transaction not in a group is a group of one), in block order, with
+   * what it changed other than app state. `txids()` and `txid()` narrow it
+   * to the groups of those transactions; `app()` does not narrow it.
+   * Undefined without `include()`.
+   */
+  public groups?: GroupStateChanges[];
+
+  /**
+   * With `include()` or `full()`: the round's fee sink, which is in the
+   * `accounts` of every group that paid fees
+   * (`withoutFeeSink(group, response.feeSink)` drops it).
+   */
+  public feeSink?: Address;
+
+  /**
+   * With `include(['budget'])`: each program run of the transactions asked
+   * for (all of the round's without `txid()` or `txids()`), top-level and
+   * inner, in the order they began; a group's logic sigs first, as the node
+   * checks them before it evaluates the group. `budgetOf` finds a
+   * transaction's. Undefined without `budget`.
+   */
+  public budget?: ProgramBudget[];
+
+  /**
+   * With `include(['reads'])`: each transaction asked for that read app
+   * state, top-level and inner, in the order it first read. Undefined
+   * without `reads`.
+   */
+  public reads?: TxnStateReads[];
+
+  /**
+   * With `trace()`: the execution trace of each top-level transaction of the
+   * group of the one transaction asked for, in group order. Undefined
+   * without `trace`.
+   */
+  public traces?: TxnExecTrace[];
+
+  /**
+   * With `trace()`: the disassembly of each program the traces ran
+   * (`programLine` maps a trace's `pc` to its line). Undefined without
+   * `trace`.
+   */
+  public programs?: ProgramDisassembly[];
+
+  /**
+   * Creates a new `TxnStateChangesResponse` object.
+   * @param round - The round.
+   * @param txns - The transactions that changed app state, in execution order.
+   * @param groups - What each group changed other than app state.
+   * @param feeSink - The round's fee sink.
+   * @param budget - The opcode budget of each program run.
+   * @param reads - The app state each transaction read.
+   * @param traces - The execution traces of a group.
+   * @param programs - The disassembly of the programs the traces ran.
+   */
+  constructor({
+    round,
+    txns,
+    groups,
+    feeSink,
+    budget,
+    reads,
+    traces,
+    programs,
+  }: {
+    round: number | bigint;
+    txns: TxnStateChanges[];
+    groups?: GroupStateChanges[];
+    feeSink?: Address | string;
+    budget?: ProgramBudget[];
+    reads?: TxnStateReads[];
+    traces?: TxnExecTrace[];
+    programs?: ProgramDisassembly[];
+  }) {
+    this.round = ensureBigInt(round);
+    this.txns = txns;
+    this.groups = groups;
+    this.feeSink =
+      typeof feeSink === 'string' ? Address.fromString(feeSink) : feeSink;
+    this.budget = budget;
+    this.reads = reads;
+    this.traces = traces;
+    this.programs = programs;
+  }
+
+  // eslint-disable-next-line class-methods-use-this
+  getEncodingSchema(): Schema {
+    return TxnStateChangesResponse.encodingSchema;
+  }
+
+  toEncodingData(): Map<string, unknown> {
+    return new Map<string, unknown>([
+      ['round', this.round],
+      ['txns', this.txns.map((t) => t.toEncodingData())],
+      ['groups', this.groups?.map((g) => g.toEncodingData())],
+      ['fee-sink', this.feeSink?.toString()],
+      ['budget', this.budget?.map((b) => b.toEncodingData())],
+      ['reads', this.reads?.map((r) => r.toEncodingData())],
+      ['traces', this.traces?.map((t) => t.toEncodingData())],
+      ['programs', this.programs?.map((p) => p.toEncodingData())],
+    ]);
+  }
+
+  static fromEncodingData(data: unknown): TxnStateChangesResponse {
+    if (!(data instanceof Map)) {
+      throw new Error(`Invalid decoded TxnStateChangesResponse: ${data}`);
+    }
+    const groups = data.get('groups');
+    const list = <T>(key: string, decode: (d: unknown) => T) =>
+      optionalModel(data.get(key), (l) => (l as unknown[]).map(decode));
+    return new TxnStateChangesResponse({
+      round: data.get('round'),
+      txns: (data.get('txns') ?? []).map((t: unknown) =>
+        TxnStateChanges.fromEncodingData(t)
+      ),
+      groups: optionalModel(groups, (gs) =>
+        (gs as unknown[]).map((g) => GroupStateChanges.fromEncodingData(g))
+      ),
+      feeSink: data.get('fee-sink'),
+      budget: list('budget', (b) => ProgramBudget.fromEncodingData(b)),
+      reads: list('reads', (r) => TxnStateReads.fromEncodingData(r)),
+      traces: list('traces', (t) => TxnExecTrace.fromEncodingData(t)),
+      programs: list('programs', (p) => ProgramDisassembly.fromEncodingData(p)),
     });
   }
 }

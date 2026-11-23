@@ -250,6 +250,11 @@ describe('Retry policy', () => {
         ['post', '/v2/query'],
         ['post', '/v2/transactions/simulate'],
         ['get', '/v2/deltas/123'],
+        ['get', '/v2/deltas/123/txn/state-changes'],
+        [
+          'get',
+          '/v2/deltas/123/txn/state-changes?format=msgpack&include=trace',
+        ],
         ['get', '/v2/applications/1/boxes/versions'],
         ['get', '/v2/assets/31566704/holders'],
       ] as const) {
@@ -263,6 +268,8 @@ describe('Retry policy', () => {
         retryDecision(httpError(504), ctx(1, 'get', '/v2/status')).reason,
         'server-error'
       );
+      // Other deltas routes are not re-evaluated under the time limit
+      assert.ok(!isTimeLimitedRequest('get', '/v2/deltas/txn/group/ABC'));
       // algod's own version endpoint is no listing
       assert.ok(!isTimeLimitedRequest('get', '/versions'));
       assert.strictEqual(

@@ -708,7 +708,7 @@ A failed request is decided in this order:
 | 7   | `Retry-After` above `maxRetryAfterMs` (30 s)                                                         | give up (`retry-after-too-long`)                                               |
 | 8   | otherwise                                                                                            | retry: `rate-limited` (429), `node-busy` (busy 503), `server-error`, `network` |
 
-The requests under the node's time limit are `POST /v2/query`, `POST /v2/transactions/simulate`, `GET /v2/deltas/{round}`, and `GET` of a `/v2/…/versions` or `/v2/…/holders` listing (not algod's own `GET /versions`): a retry would repeat all the work and run into the limit again.
+The requests under the node's time limit are `POST /v2/query`, `POST /v2/transactions/simulate`, `GET /v2/deltas/{round}` and `GET /v2/deltas/{round}/txn/state-changes`, and `GET` of a `/v2/…/versions` or `/v2/…/holders` listing (not algod's own `GET /versions`): a retry would repeat all the work and run into the limit again.
 
 A transaction submit (`POST /v2/transactions` and `/v2/transactions/async`) is retried only when the node surely did not take it: a 429, a busy 503, or a connection refused or never made (`ECONNREFUSED`, `ENOTFOUND`, `EAI_AGAIN`, `ENETUNREACH`, `EHOSTUNREACH`, `UND_ERR_CONNECT_TIMEOUT`). After a lost answer (a reset connection, a 502, a browser's failed fetch), a retry would get "transaction already in ledger" instead of the transaction ID: check for the transaction instead.
 

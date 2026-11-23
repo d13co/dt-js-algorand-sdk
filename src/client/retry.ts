@@ -192,7 +192,8 @@ function trimPath(path: string) {
 /**
  * Whether a request runs under the node's time limit, so a 504 means it ran
  * too long and a retry would do the same: `POST /v2/query`,
- * `POST /v2/transactions/simulate`, `GET /v2/deltas/{round}`, and `GET` of a
+ * `POST /v2/transactions/simulate`, `GET /v2/deltas/{round}` and
+ * `GET /v2/deltas/{round}/txn/state-changes`, and `GET` of a
  * `/v2/.../versions` or `/v2/.../holders` listing (not algod's own
  * `GET /versions`). Split or narrow it instead.
  */
@@ -205,7 +206,9 @@ export function isTimeLimitedRequest(
     return p === '/v2/query' || p === '/v2/transactions/simulate';
   }
   if (method === 'get') {
-    return /^\/v2\/.+\/(versions|holders)$|^\/v2\/deltas\/\d+$/.test(p);
+    return /^\/v2\/.+\/(versions|holders)$|^\/v2\/deltas\/\d+(\/txn\/state-changes)?$/.test(
+      p
+    );
   }
   return false;
 }
